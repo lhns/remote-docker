@@ -30,13 +30,16 @@ type faultStore struct {
 	content map[string]string // path -> body
 	mtime   time.Time
 
-	changesFn func() error
-	pullFn    func(ctx context.Context, paths []string, deliver func(path string) error) error
-	applyFn   func(entries []Entry) error
-	skipPaths map[string]bool // share-relative, no leading slash
+	changesFn  func() error
+	pullFn     func(ctx context.Context, paths []string, deliver func(path string) error) error
+	applyFn    func(entries []Entry) error
+	presentFn  func(paths []string) ([]string, error)
+	skipPaths  map[string]bool // share-relative, no leading slash
+	unreadable map[string]bool // with a leading slash: named, never sent
 
 	applied []Entry
 	pulled  [][]string
+	asked   []string // what Present was asked
 }
 
 func (f *faultStore) Apply(_ context.Context, _, _ string, entries []Entry) ([]string, error) {
@@ -86,7 +89,11 @@ func (f *faultStore) Pull(ctx context.Context, _ string, paths []string, into fu
 		f.mu.Lock()
 		body, ok := f.content[p]
 		at := f.mtime
+		bad := f.unreadable[p]
 		f.mu.Unlock()
+		if bad {
+			return into(File{Path: p, Unreadable: "input/output error"})
+		}
 		if !ok {
 			return nil
 		}

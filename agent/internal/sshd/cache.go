@@ -184,11 +184,18 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Caches: caches}, nil
 
 	case cache.OpPull:
-		pulled, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths)
+		pulled, skipped, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths, req.Carry)
 		if err != nil {
 			return refused(err), nil
 		}
-		return cache.Reply{Bytes: int64(len(pulled))}, pulled
+		return cache.Reply{Bytes: int64(len(pulled)), Skipped: skipped}, pulled
+
+	case cache.OpPresent:
+		here, err := s.cfg.Unions.Present(ctx, name, account.Client(), req.Export, req.Paths)
+		if err != nil {
+			return refused(err), nil
+		}
+		return cache.Reply{Present: here}, nil
 	}
 
 	// Validate has already refused every op this agent does not know, so

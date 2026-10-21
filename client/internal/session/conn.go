@@ -278,6 +278,11 @@ func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChann
 		return nil, l.cacheErr
 	}
 
+	// The dead one is closed: left open it holds an SSH channel and the
+	// agent's handler goroutine for the life of the connection.
+	if l.cacheChan != nil {
+		_ = l.cacheChan.Close()
+	}
 	c, err := openCache(ctx, l.ssh)
 	if err != nil {
 		if l.cacheChan == nil {

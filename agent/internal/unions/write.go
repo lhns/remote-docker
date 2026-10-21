@@ -94,18 +94,13 @@ func extractWith(root string, body io.Reader, skip bool, landed func(name string
 		if err != nil {
 			return skipped, fmt.Errorf("unions: reading a batch: %w", err)
 		}
-		target, werr := within(header.Name)
-		existed := false
-		if werr == nil {
-			_, lerr := r.Lstat(target)
-			existed = lerr == nil
-		}
-		info, err := writeEntry(r, header, tr)
+		created := false
+		info, err := writeEntry(r, header, tr, &created)
 		if err != nil {
 			if !skip {
 				return nil, err
 			}
-			if werr == nil && !existed && header.Typeflag == tar.TypeReg {
+			if target, werr := within(header.Name); werr == nil && created {
 				_ = r.Remove(target)
 			}
 			skipped = append(skipped, "/"+strings.TrimPrefix(header.Name, "/"))
@@ -124,7 +119,7 @@ func extractWith(root string, body io.Reader, skip bool, landed func(name string
 // is skipped rather than refused: the client does not send them, and a batch
 // that failed because of one would leave the cache half applied for a file
 // nothing can use anyway.
-func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, error) {
+func writeEntry(r *os.Root, header *tar.Header, body io.Reader, created *bool) (os.FileInfo, error) {
 	target, err := within(header.Name)
 	if err != nil {
 		return nil, err
@@ -156,7 +151,18 @@ func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, er
 		// Not a temporary renamed over the target: fuse-overlayfs forgets that
 		// a renamed-in file hides one in the lower, so a later `rm` of it
 		// shows the lower's file again (test/union-probe.sh section 6d).
-		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE, header.FileInfo().Mode().Perm())
+		//
+		// Created exclusively when it is not there, so the entry knows whether
+		// the file is its own: only a file this entry created is ever removed
+		// after a failed write. A rename of a temporary would give the same
+		// guarantee and is the thing the paragraph above rules out. A file that
+		// appeared since (the container made it) is opened as an existing one.
+		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, header.FileInfo().Mode().Perm())
+		if err == nil {
+			*created = true
+		} else if errors.Is(err, os.ErrExist) {
+			f, err = r.OpenFile(target, os.O_WRONLY|os.O_CREATE, header.FileInfo().Mode().Perm())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}

@@ -68,7 +68,7 @@ func TestPullDoesNotReadThroughASymlinkOutOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := pull(root, []string{"/evil/secret"})
+	out, _, err := pull(root, []string{"/evil/secret"}, false)
 	if err != nil {
 		return
 	}
@@ -111,7 +111,7 @@ func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
 		t.Errorf("landed = %v, want [/pkg/lib.go]", landed)
 	}
 
-	out, err := pull(root, []string{"/pkg/lib.go"})
+	out, _, err := pull(root, []string{"/pkg/lib.go"}, false)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}

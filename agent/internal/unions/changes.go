@@ -2,6 +2,8 @@ package unions
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/core/cache"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // What the container changed, read out of the cache layer (ADR 0044).
@@ -176,38 +179,105 @@ func markerChange(name string, info fs.FileInfo) (cache.Change, bool) {
 	}
 }
 
-// Pull streams the named paths out of the cache layer as a tar.
-func (m *Manager) Pull(account, client, export string, paths []string) ([]byte, error) {
+// Pull streams the named paths out of the cache layer as a tar. With carry, a
+// path it cannot name or a file it cannot read is left out, named in the
+// returned list and logged, where without it the whole request fails as it
+// always did: one bad file must not starve every file asked for beside it.
+func (m *Manager) Pull(account, client, export string, paths []string, carry bool) ([]byte, []string, error) {
 	_, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pull(upper, paths)
+	tarball, skipped, err := pull(upper, paths, carry)
+	if len(skipped) > 0 {
+		logx.Or(m.Log).Warn("files a container wrote cannot be read to carry them back; they are left out",
+			"export", export, "files", len(skipped), "first", skipped[0].Name, "err", skipped[0].Err)
+	}
+	return tarball, names(skipped), err
 }
 
 // pull is the named paths under upper as a tar. A file that has gone since it
 // was reported is skipped, which is ordinary: the container is still running.
-func pull(upper string, paths []string) ([]byte, error) {
+func pull(upper string, paths []string, carry bool) ([]byte, []cache.Unreadable, error) {
 	r, err := os.OpenRoot(upper)
 	if err != nil {
-		return nil, fmt.Errorf("unions: opening the cache layer: %w", err)
+		return nil, nil, fmt.Errorf("unions: opening the cache layer: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
+	var skipped []cache.Unreadable
 	files := make([]cache.TarFile, 0, len(paths))
 	for _, p := range paths {
 		name, err := within(p)
 		if err != nil {
-			return nil, err
+			if !carry {
+				return nil, nil, err
+			}
+			skipped = append(skipped, cache.Unreadable{Name: p, Err: err})
+			continue
 		}
 		files = append(files, cache.TarFile{Name: name, Path: name})
 	}
 
 	var buf bytes.Buffer
-	if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
+	if !carry {
+		if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
+			return nil, nil, err
+		}
+		return buf.Bytes(), nil, nil
+	}
+	unreadable, err := cache.WriteTarNaming(r.Open, files, &buf)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, u := range unreadable {
+		skipped = append(skipped, cache.Unreadable{Name: "/" + u.Name, Err: u.Err})
+	}
+	return buf.Bytes(), skipped, nil
+}
+
+// names are the share paths of what a pull left out.
+func names(skipped []cache.Unreadable) []string {
+	out := make([]string, 0, len(skipped))
+	for _, s := range skipped {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// Present answers which of the paths exist in the merged view of a share, by
+// lstat and never following a link. The merged view is what a container sees:
+// a file a client wrote through the union is there although the cache layer
+// listing hides it, and a file the container deleted is not.
+func (m *Manager) Present(ctx context.Context, account, client, export string, paths []string) ([]string, error) {
+	_, root, err := m.mergedRoot(ctx, account, client, export)
+	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	return present(root, paths)
+}
+
+func present(root string, paths []string) ([]string, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("unions: opening the share: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	var out []string
+	for _, p := range paths {
+		name, err := within(p)
+		if err != nil {
+			// Cannot be asked about, so it is not claimed absent.
+			out = append(out, p)
+			continue
+		}
+		if _, err := r.Lstat(name); err == nil || !errors.Is(err, os.ErrNotExist) {
+			// Present, or an error that is not "absent": keep.
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.

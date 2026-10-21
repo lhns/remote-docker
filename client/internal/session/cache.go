@@ -331,6 +331,7 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 			Op:     cache.OpPull,
 			Export: export,
 			Paths:  batch,
+			Carry:  c.carry,
 		}, nil)
 		if err != nil {
 			return err
@@ -338,8 +339,36 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 		if err := untar(bytes.NewReader(reply.Payload), into); err != nil {
 			return err
 		}
+		// What the workspace could not read is named rather than failing the
+		// chunk, and handed on so write-back sets it aside until it changes.
+		for _, p := range reply.Skipped {
+			if err := into(dircache.File{Path: p, Unreadable: "the workspace could not read it; its log says why"}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// errNoPresent is a workspace that cannot say which paths exist, which the
+// caller reads as "keep everything".
+var errNoPresent = errors.New("the workspace cannot say which paths exist")
+
+// Present answers which of the paths exist in the merged view of a share, the
+// one a container sees. An agent without Carry cannot answer.
+func (c *cacheChannel) Present(ctx context.Context, export string, paths []string) ([]string, error) {
+	if !c.carry {
+		return nil, errNoPresent
+	}
+	var here []string
+	for _, batch := range chunkPaths(paths) {
+		reply, err := c.do(ctx, cache.Request{Op: cache.OpPresent, Export: export, Paths: batch, Carry: true}, nil)
+		if err != nil {
+			return nil, err
+		}
+		here = append(here, reply.Present...)
+	}
+	return here, nil
 }
 
 // untar hands over each regular file; nothing else is safe to carry back.

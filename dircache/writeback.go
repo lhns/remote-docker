@@ -94,14 +94,57 @@ func (c *Cache) budget() time.Duration {
 }
 
 // land writes one file into the share.
-func (c *Cache) land(r *os.Root, f File) error {
+//
+// guard is asked immediately before the file replaces its target, and a false
+// answer leaves the target untouched (errChangedHere).
+func (c *Cache) land(r *os.Root, f File, guard func() bool) error {
 	if c.writeFile != nil {
+		if guard != nil && !guard() {
+			return errChangedHere
+		}
 		return c.writeFile(r, f)
 	}
 	if err := caseClash(r, relPath(f.Path)); err != nil {
 		return err
 	}
-	return writeUnder(r, f)
+	return writeUnderGuarded(r, f, guard)
+}
+
+// errChangedHere says a path changed on this machine since write-back decided
+// about it, so it was not touched.
+var errChangedHere = errors.New("changed here since write-back looked at it")
+
+// confirmedAbsent asks the consumer which of the paths a replaced directory
+// implies it deleted are really gone from its view, and returns those. Anything
+// present, any error, and a store that cannot say all mean keep: the absence of
+// a path from the changes proves nothing, because what this machine wrote into
+// the directory is hidden from them.
+func (c *Cache) confirmedAbsent(ctx context.Context, store Store, share string, candidates []string) []string {
+	if len(candidates) == 0 {
+		return nil
+	}
+	pr, ok := store.(Presenter)
+	if !ok {
+		return nil
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.budget())
+	defer cancel()
+	here, err := pr.Present(callCtx, share, candidates)
+	if err != nil {
+		c.quiet(ctx, "asking which paths a container still has", "share", share, "err", err)
+		return nil
+	}
+	present := make(map[string]bool, len(here))
+	for _, p := range here {
+		present[p] = true
+	}
+	var gone []string
+	for _, p := range candidates {
+		if !present[p] {
+			gone = append(gone, p)
+		}
+	}
+	return gone
 }
 
 // writeBackShare collects one share's changes and applies them here. It reports
@@ -146,15 +189,18 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 		return false
 	}
 	if err != nil {
-		c.stall(ctx, share, root, "asking what a container changed", err, "", -1)
+		c.stall(ctx, share, root, "asking what a container changed", err, "", -1, false)
 		return false
 	}
 
 	// What was given up on, and what the union reserves for itself, never
-	// reaches decide.
+	// reaches decide. reported keeps them: a path set aside is still listed, and
+	// is not a deletion a replaced directory implies.
+	reported := changes
 	changes = c.shares.unskipped(share, changes)
 	changes = c.dropMarkers(ctx, share, root, changes)
 	if len(changes) == 0 {
+		c.shares.wbForgetSaid(share, nil)
 		c.recovered(ctx, share, root)
 		return false
 	}
@@ -163,14 +209,17 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	// included, so a link in the share cannot lead a write or a delete out.
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		c.stall(ctx, share, root, "opening the share to write back", err, "", -1)
+		c.stall(ctx, share, root, "opening the share to write back", err, "", -1, false)
 		return false
 	}
 	defer func() { _ = r.Close() }()
 
 	manifest := c.shares.baselines(share)
 	changes = c.dropClashes(ctx, share, root, r, manifest, changes)
-	changes = expandReplaced(manifest, changes)
+	for _, p := range c.confirmedAbsent(ctx, store, share, replacedDeletions(manifest, reported)) {
+		changes = append(changes, Change{Path: p, Deleted: true})
+	}
+	c.shares.wbForgetSaid(share, changes)
 	actions := decide(manifest, recorded, changes, localAtRoot(r), c.skew(), state.Cached)
 	actions = append(actions, decideLinks(manifest, changes, linkAtRoot(r))...)
 	if len(actions) == 0 {
@@ -179,9 +228,11 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	}
 
 	for _, conflict := range conflicts(actions) {
-		c.log().Warn("a file changed in both places",
-			"path", strings.TrimPrefix(conflict.Path, "/"),
-			"kind", conflict.kind, "outcome", conflict.Why)
+		if c.shares.wbConflictNew(share, conflict.Path, conflict.Why) {
+			c.log().Warn("a file changed in both places",
+				"path", strings.TrimPrefix(conflict.Path, "/"),
+				"kind", conflict.kind, "outcome", conflict.Why)
+		}
 	}
 
 	pass := &writePass{
@@ -215,6 +266,19 @@ type writePass struct {
 	soft      int
 	softFirst string
 	softErr   error
+
+	// aborted is a pass ended by a full disk, already said.
+	aborted bool
+
+	// fetchErr is a pull that failed for a chunk, which the pass goes past.
+	fetchErr   error
+	fetchFirst string
+	chunkFails int
+
+	// tried is every path this pass asked for, and wrote the ones that landed,
+	// for ranking next time (wbstate.go).
+	tried map[string]bool
+	wrote map[string]bool
 }
 
 // run carries one pass out and reports whether another should follow at once.
@@ -228,21 +292,37 @@ func (p *writePass) run(store Store, actions []action) bool {
 		p.link(a)
 	}
 
-	paths := writes(actions)
+	// Those that have failed least go first, so files that never land cannot
+	// take every slot of the pass and starve the ones behind them.
+	paths := p.c.shares.wbRanked(p.share, writes(actions))
 	more := false
 	if len(paths) > writeBackRoundFiles {
 		paths, more = paths[:writeBackRoundFiles], true
 	}
+	p.tried, p.wrote = make(map[string]bool, len(paths)), map[string]bool{}
+	for _, path := range paths {
+		p.tried[path] = true
+	}
+	defer func() { p.c.shares.wbTry(p.share, p.tried, p.wrote) }()
 
 	for chunk := range slices.Chunk(paths, pullChunk) {
 		if !p.pull(store, chunk) {
-			return false
+			break
 		}
 	}
 
-	if p.soft > 0 {
+	// A pass that landed something backs off only the shortest wait whatever
+	// else failed: one file that never lands must not slow every other to once
+	// a minute.
+	switch {
+	case p.aborted:
+		return false
+	case p.fetchErr != nil:
+		p.c.stall(p.ctx, p.share, p.root, "fetching what a container wrote", p.fetchErr, p.fetchFirst, p.soft, p.landed > 0)
+		return false
+	case p.soft > 0:
 		p.c.stall(p.ctx, p.share, p.root, "writing back "+strconv.Itoa(p.soft)+" file(s) that could not be written yet",
-			p.softErr, p.softFirst, p.soft)
+			p.softErr, p.softFirst, p.soft, p.landed > 0)
 		return false
 	}
 	p.c.recovered(p.ctx, p.share, p.root)
@@ -251,6 +331,10 @@ func (p *writePass) run(store Store, actions []action) bool {
 
 // remove deletes a file the consumer deleted.
 func (p *writePass) remove(path string) {
+	if !p.stillAsSeen(p.action[path]) {
+		p.changedHere(path)
+		return
+	}
 	err := p.r.Remove(relPath(path))
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		p.commit([]action{p.action[path]}, nil, []string{path})
@@ -262,6 +346,11 @@ func (p *writePass) remove(path string) {
 
 // link makes a link the consumer made.
 func (p *writePass) link(a action) {
+	if now := linkAtRoot(p.r)(a.Path); now.Exists != a.LinkSeen.Exists || now.IsLink != a.LinkSeen.IsLink ||
+		now.Target != a.LinkSeen.Target || !now.ModTime.Equal(a.LinkSeen.ModTime) {
+		p.changedHere(a.Path)
+		return
+	}
 	mk := landLink
 	if p.c.makeLink != nil {
 		mk = p.c.makeLink
@@ -284,9 +373,18 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 	)
 	ctx, cancel := context.WithTimeout(p.ctx, p.c.budget())
 	err := store.Pull(ctx, p.share, chunk, func(f File) error {
-		werr := p.c.land(p.r, f)
+		if f.Unreadable != "" {
+			p.c.skipped(p.ctx, p.share, p.change[f.Path], Skipped{Why: f.Unreadable})
+			return nil
+		}
+		act := p.action[f.Path]
+		werr := p.c.land(p.r, f, func() bool { return p.stillAsSeen(act) })
 		if werr == nil {
 			wrote = append(wrote, f.Path)
+			return nil
+		}
+		if errors.Is(werr, errChangedHere) {
+			p.changedHere(f.Path)
 			return nil
 		}
 		if classifyWrite(werr) == faultSpace {
@@ -306,16 +404,53 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 	}
 	p.commit(acts, wrote, nil)
 	p.landed += len(wrote)
+	for _, path := range wrote {
+		p.wrote[path] = true
+	}
 
 	switch {
 	case abort != nil:
-		p.c.stall(p.ctx, p.share, p.root, "writing back what a container wrote", abort, first, len(chunk)-len(wrote))
+		p.aborted = true
+		p.c.stall(p.ctx, p.share, p.root, "writing back what a container wrote", abort, first, len(chunk)-len(wrote), false)
 		return false
 	case err != nil:
-		p.c.stall(p.ctx, p.share, p.root, "fetching what a container wrote", err, chunk[0], len(chunk)-len(wrote))
-		return false
+		// This chunk is lost for this pass, and the next is tried: one chunk the
+		// agent cannot serve must not starve every file behind it. A run of them,
+		// or a pass that is being cancelled, is a store that is down.
+		if p.fetchErr == nil {
+			p.fetchErr, p.fetchFirst = err, chunk[0]
+		}
+		p.soft += len(chunk) - len(wrote)
+		p.chunkFails++
+		return p.chunkFails < 3 && p.ctx.Err() == nil
 	}
+	p.chunkFails = 0
 	return true
+}
+
+// stillAsSeen reports whether this machine still has at the path what decide
+// saw. A pass can run for minutes, so each path is looked at again immediately
+// before it is touched.
+func (p *writePass) stillAsSeen(a action) bool {
+	rel := relPath(a.Path)
+	if !a.Seen.Here {
+		// Nothing was there; anything now, a dangling link included, is the
+		// user's and not ours to replace.
+		_, err := p.r.Lstat(rel)
+		return errors.Is(err, os.ErrNotExist)
+	}
+	info, err := p.r.Stat(rel)
+	return a.Seen.same(seenOf(info, err == nil))
+}
+
+// changedHere leaves a path alone because it changed on this machine since write-back
+// decided about it. It is looked at again next round, by decide, with the new state; it
+// is not a failure, and is said once.
+func (p *writePass) changedHere(path string) {
+	if p.c.shares.wbConflictNew(p.share, path, "changed here while write-back was running") {
+		p.c.log().Warn("a file changed here while write-back was running; it was left as it is and is looked at again",
+			"path", strings.TrimPrefix(path, "/"))
+	}
 }
 
 // failed sorts a failed write or delete: a path this machine can never hold is
@@ -352,10 +487,10 @@ func (p *writePass) commit(acts []action, added, removed []string) {
 
 // stall says a round could not finish, and when the next try is. Said once, when
 // the share stalls; the share is asked again after the backoff whatever else
-// happens.
-func (c *Cache) stall(ctx context.Context, share, root, what string, err error, first string, pending int) {
+// happens. A round that made progress waits only the shortest backoff.
+func (c *Cache) stall(ctx context.Context, share, root, what string, err error, first string, pending int, progress bool) {
 	reason := what + ": " + err.Error()
-	newly, next := c.shares.wbFail(share, c.clock(), reason, first, pending)
+	newly, next := c.shares.wbFail(share, c.clock(), reason, first, pending, progress)
 	if !newly || ctx.Err() != nil || (c.Ctx != nil && c.Ctx.Err() != nil) {
 		return
 	}
@@ -529,7 +664,11 @@ func landLink(r *os.Root, rel, target string) error {
 //
 // The store names the path and is not this machine's to trust with one; os.Root
 // refuses "..", and a symlink or junction pointing outside the share.
-func writeUnder(r *os.Root, file File) error {
+func writeUnder(r *os.Root, file File) error { return writeUnderGuarded(r, file, nil) }
+
+// writeUnderGuarded is writeUnder that asks guard just before the rename, so a
+// file that changed here while it was being written is not replaced.
+func writeUnderGuarded(r *os.Root, file File, guard func() bool) error {
 	rel := relPath(file.Path)
 	if err := r.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return err
@@ -571,6 +710,9 @@ func writeUnder(r *os.Root, file File) error {
 	// shown, and what the next round compares against.
 	if err == nil && !file.ModTime.IsZero() {
 		_ = r.Chtimes(tmp, time.Time{}, file.ModTime)
+	}
+	if err == nil && guard != nil && !guard() {
+		err = errChangedHere
 	}
 	if err == nil {
 		err = r.Rename(tmp, rel)

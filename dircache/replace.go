@@ -7,6 +7,7 @@ package dircache
 
 import (
 	"path"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,6 +32,17 @@ import (
 // cache has been written over it, so its absence from the changes says nothing
 // about it, and deleting it here would delete the consumer's work.
 func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
+	for _, p := range replacedDeletions(manifest, changes) {
+		changes = append(changes, Change{Path: p, Deleted: true})
+	}
+	return changes
+}
+
+// replacedDeletions are the paths expandReplaced would delete, for a caller that
+// has to confirm each against the consumer's view first. changes must be every
+// change the consumer reported, before anything was set aside: a path set aside
+// is still listed, and not a deletion.
+func replacedDeletions(manifest map[string]Baseline, changes []Change) []string {
 	hidden := map[string]bool{}
 	listed := map[string]bool{}
 	for _, ch := range changes {
@@ -45,21 +57,22 @@ func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
 		}
 	}
 	if len(hidden) == 0 {
-		return changes
+		return nil
 	}
 
-	out := changes
+	var out []string
 	for p, b := range manifest {
 		if listed[p] || b.Consumer != 0 {
 			continue
 		}
 		for dir := path.Dir(p); dir != "/" && dir != "."; dir = path.Dir(dir) {
 			if hidden[dir] {
-				out = append(out, Change{Path: p, Deleted: true})
+				out = append(out, p)
 				break
 			}
 		}
 	}
+	slices.Sort(out)
 	return out
 }
 
@@ -99,11 +112,11 @@ func decideLinks(manifest map[string]Baseline, changes []Change, local linkAt) [
 		here := local(ch.Path)
 		switch {
 		case !here.Exists:
-			actions = append(actions, action{Path: ch.Path, kind: kindLink, Link: ch.Link})
+			actions = append(actions, action{Path: ch.Path, kind: kindLink, Link: ch.Link, LinkSeen: here})
 		case here.IsLink && here.Target == ch.Link:
 			// Already agreed.
 		case here.IsLink && manifest[ch.Path] == linkBaseline(here.Target, here.ModTime) && !here.ModTime.IsZero():
-			actions = append(actions, action{Path: ch.Path, kind: kindLink, Link: ch.Link})
+			actions = append(actions, action{Path: ch.Path, kind: kindLink, Link: ch.Link, LinkSeen: here})
 		case here.IsLink:
 			actions = append(actions, action{
 				Path: ch.Path, kind: kindConflict,

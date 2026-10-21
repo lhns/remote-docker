@@ -15,6 +15,7 @@ import (
 type scripted struct {
 	reader  *strings.Reader
 	written []byte
+	closed  bool
 }
 
 func newScripted(reply string) *scripted { return &scripted{reader: strings.NewReader(reply)} }
@@ -24,7 +25,7 @@ func (s *scripted) Write(p []byte) (int, error) {
 	s.written = append(s.written, p...)
 	return len(p), nil
 }
-func (s *scripted) Close() error { return nil }
+func (s *scripted) Close() error { s.closed = true; return nil }
 
 func channelOver(s *scripted) *cacheChannel {
 	return newCacheChannel(s, bufio.NewReaderSize(s, cache.MaxFrame))
@@ -98,5 +99,23 @@ func TestApplyReturnsWhatTheWorkspaceSkipped(t *testing.T) {
 	}
 	if !strings.Contains(string(stream.written), `"y":true`) {
 		t.Errorf("the apply %s did not ask the workspace to skip", stream.written)
+	}
+}
+
+// A dead channel that is replaced is closed: left open it holds an SSH channel
+// and the agent's handler for the life of the connection.
+func TestReplacingADeadCacheChannelClosesIt(t *testing.T) {
+	client := startWorkspace(t, func(string) (string, bool) { return helloFor(t), true })
+	old := newScripted("")
+	dead := channelOver(old)
+	dead.dead.Store(true)
+	live := &liveConn{ssh: client, cacheChan: dead}
+
+	fresh, err := (&Session{}).ensureCacheChan(t.Context(), live)
+	if err != nil || fresh == dead {
+		t.Fatalf("ensureCacheChan = %v, %v; want a new channel", fresh, err)
+	}
+	if !old.closed {
+		t.Error("the dead channel was replaced and left open")
 	}
 }

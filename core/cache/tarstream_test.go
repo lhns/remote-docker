@@ -3,6 +3,7 @@ package cache
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -118,5 +119,44 @@ func TestTarFilesFrom(t *testing.T) {
 	}
 	if want := filepath.Join("/srv/project", "a.go"); files[0].Path != want {
 		t.Errorf("path = %q, want %q", files[0].Path, want)
+	}
+}
+
+// Under Carry a file that cannot be read is named and left out, and the rest of
+// the archive is whole; one that has gone is left out without a word.
+func TestWriteTarNamingNamesAnUnreadableFileAndKeepsTheRest(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"good", "bad"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	broken := errors.New("input/output error")
+	open := func(p string) (*os.File, error) {
+		if filepath.Base(p) == "bad" {
+			return nil, broken
+		}
+		return os.Open(p)
+	}
+
+	var buf bytes.Buffer
+	unreadable, err := WriteTarNaming(open, TarFilesFrom(root, []string{"/bad", "/gone", "/good"}), &buf)
+	if err != nil {
+		t.Fatalf("WriteTarNaming: %v", err)
+	}
+	if len(unreadable) != 1 || unreadable[0].Name != "bad" || !errors.Is(unreadable[0].Err, broken) {
+		t.Errorf("unreadable = %+v, want only bad, with its error", unreadable)
+	}
+	tr := tar.NewReader(&buf)
+	header, err := tr.Next()
+	if err != nil || header.Name != "good" {
+		t.Fatalf("first entry = %v, %v; want good", header, err)
+	}
+	body, _ := io.ReadAll(tr)
+	if string(body) != "good" {
+		t.Errorf("good holds %q", body)
+	}
+	if _, err := tr.Next(); err != io.EOF {
+		t.Errorf("the archive holds more than good: %v", err)
 	}
 }

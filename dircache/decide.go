@@ -108,6 +108,33 @@ type action struct {
 	// Consumer is the consumer's modification time of the version a write
 	// carries back (Baseline.Consumer).
 	Consumer int64
+
+	// Seen is this machine's state of the path when it was decided, and
+	// LinkSeen the same for a link. A pass can run for minutes, so each is
+	// checked again immediately before the path is touched, and a path that
+	// changed here since is left alone.
+	Seen     seenState
+	LinkSeen linkState
+}
+
+// seenState is what this machine had at a path: whether it existed, and its
+// size and modification time.
+type seenState struct {
+	Here bool
+	Size int64
+	Mod  time.Time
+}
+
+func seenOf(info fs.FileInfo, here bool) seenState {
+	if !here || info == nil {
+		return seenState{}
+	}
+	return seenState{Here: true, Size: info.Size(), Mod: info.ModTime()}
+}
+
+// same reports whether now is what was seen.
+func (s seenState) same(now seenState) bool {
+	return s.Here == now.Here && s.Size == now.Size && s.Mod.Equal(now.Mod)
 }
 
 // localAt is what this machine knows about a path: its current state, or nothing
@@ -141,6 +168,7 @@ func decide(
 	}
 
 	var actions []action
+	seen := make(map[string]seenState, len(changes))
 	for _, change := range changes {
 		// A replaced directory and a link are not files to compare: the first
 		// is expanded into deletions before this (expandReplaced) and the
@@ -150,6 +178,7 @@ func decide(
 		}
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
+		seen[change.Path] = seenOf(info, here)
 
 		// What the fill itself put there, which sits in the same layer as the
 		// consumer's writes (ADR 0044); without this every round asks for the
@@ -210,6 +239,9 @@ func decide(
 			Path: change.Path, kind: kindConflict, Wins: wins, Consumer: change.ModTime,
 			Why: conflictReason(wins),
 		})
+	}
+	for i := range actions {
+		actions[i].Seen = seen[actions[i].Path]
 	}
 	return actions
 }

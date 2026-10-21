@@ -68,6 +68,13 @@ const (
 	// OpPull asks for the bytes of named paths out of the cache layer.
 	OpPull Op = "pull"
 
+	// OpPresent asks which of the named paths exist in the MERGED view of the
+	// share: what a container sees, the cache over the live export. Answered
+	// with lstat, never following a link. Under Hello.Carry. The client asks it
+	// before deleting anything a directory's removal or replacement implies, and
+	// keeps whatever is present or cannot be answered.
+	OpPresent Op = "present"
+
 	// OpMounted asks which cache volumes this account has a union on. A union
 	// is bound by PATH, so the daemon calls its volume unused and only the
 	// workspace can answer for the collector (ADR 0044).
@@ -173,10 +180,13 @@ type Reply struct {
 	// the life of the session.
 	Unknown bool `json:"unknown,omitempty"`
 
-	// Skipped answers an OpApply that asked for Carry: the paths of entries
-	// that could not be written and were left out, where the rest of the batch
-	// landed. Spelled as a share path.
+	// Skipped answers an OpApply or an OpPull that asked for Carry: the paths of
+	// entries that could not be written (or read) and were left out, where the
+	// rest of the batch went. Spelled as a share path.
 	Skipped []string `json:"k,omitempty"`
+
+	// Present answers OpPresent: the subset of the paths that exist.
+	Present []string `json:"x,omitempty"`
 
 	// Bytes is the length of the tar after this reply, answering OpPull.
 	Bytes int64 `json:"n,omitempty"`
@@ -271,7 +281,7 @@ func (r Request) Validate() error {
 			}
 		}
 	case OpChanges:
-	case OpPull:
+	case OpPull, OpPresent:
 		if len(r.Paths) == 0 {
 			return fmt.Errorf("workspace: cache pull for %s names no paths", r.Export)
 		}

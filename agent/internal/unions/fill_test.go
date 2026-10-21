@@ -63,7 +63,7 @@ func TestLandingNeverEmptiesTheTarget(t *testing.T) {
 
 	spy := &sizeSpy{Reader: strings.NewReader(old), path: filepath.Join(root, "index")}
 	header := &tar.Header{Name: "index", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(old))}
-	if _, err := writeEntry(r, header, spy); err != nil {
+	if _, err := writeEntry(r, header, spy, new(bool)); err != nil {
 		t.Fatal(err)
 	}
 	if spy.seen != int64(len(old)) {
