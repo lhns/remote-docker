@@ -28,6 +28,11 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 		return nil, err
 	}
 
+	return changesIn(l, upper, export)
+}
+
+// changesIn walks one share's cache layer.
+func changesIn(l *live, upper, export string) ([]cache.Change, error) {
 	// Asked before the walk, because WalkDir reports a root it cannot read
 	// through the same callback as any other entry -- so an upper that is not
 	// there at all comes back as no changes and no error, which is
@@ -38,7 +43,7 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 	}
 
 	var out []cache.Change
-	err = filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == upper {
 			return nil //nolint:nilerr // an unreadable entry is one this pass does not report
 		}

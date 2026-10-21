@@ -309,6 +309,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # A container writes into a Linux layer, where `bad:name` is a valid name
+      # and NTFS refuses it (ERROR_INVALID_NAME). Write-back must name that one
+      # file and carry on, not stop at it for good (ADR 0044).
+      - name: write-back skips a name NTFS refuses and carries on
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          New-Item -ItemType Directory wb | Out-Null
+          .\client\rd.exe run -d --name wbprobe -v "${PWD}\wb:/w:read=cached,write=back" alpine:3 sleep 600
+          if ($LASTEXITCODE -ne 0) { throw "could not start the write-back container" }
+
+          # The share is complete once status says it is cached.
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            $status = (.\client\rd.exe remote status) -join "`n"
+            if ($status -match 'cached') { break }
+            Start-Sleep -Seconds 3
+          } while ((Get-Date) -lt $deadline)
+
+          .\client\rd.exe exec wbprobe sh -c 'echo x >/w/bad:name; echo y >/w/good'
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path wb\good) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+          if (-not (Test-Path wb\good)) { throw "good never arrived behind a name NTFS refuses" }
+          if ((Get-Content wb\good -Raw).Trim() -ne 'y') { throw "good arrived with the wrong content" }
+
+          $status = (.\client\rd.exe remote status) -join "`n"
+          $status
+          if ($status -notmatch 'bad:name') { throw "status does not name the file that cannot be written back" }
+
+          .\client\rd.exe exec wbprobe sh -c 'echo z >/w/later'
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path wb\later) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+          if (-not (Test-Path wb\later)) { throw "a file made after the refused name never arrived" }
+          .\client\rd.exe rm -f wbprobe
+
       # A distribution left behind is a running Linux system nothing names.
       - name: rm takes the machine with it
         shell: pwsh

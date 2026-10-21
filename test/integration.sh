@@ -2637,6 +2637,125 @@ else
 fi
 
 echo
+echo "== 15g. write-back is not stopped by what a container makes (ADR 0044) =="
+# Every case here was a way write-back stopped for good, or put something in the
+# user's tree that the container never wrote. Each asserts that the work the
+# container does AFTER the trouble still arrives, since a stalled round and a
+# slow one look alike until something later fails to come.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    # A directory the container replaced: the files in it and the deletions of
+    # the old ones both come back, and no overlay marker is ever written here.
+    REPLDIR="$WORK/wb-replace"
+    mkdir -p "$REPLDIR/tools"
+    echo old >"$REPLDIR/tools/old"
+    if dockert run -d --name itest-wb-replace -v "$REPLDIR:/w:read=cached,write=back" \
+        alpine:3 sleep 900 >"$WORK/wb-replace-run.log" 2>&1; then
+        wait_output "$REPLDIR: .*, cached\$" 30 "$WORK/remote-docker" remote status >/dev/null
+        if dockert exec itest-wb-replace sh -c 'cd /w && rm -rf tools && mkdir tools && echo x >tools/new' >/dev/null 2>&1; then
+            if seen=$(wait_for_content "$REPLDIR/tools/new" "x" 40); then
+                ok "a file made in a directory the container replaced arrives"
+            else
+                bad "tools/new never arrived: [$seen]"
+                share_diagnostics
+            fi
+            gone=false
+            for _ in $(seq 1 40); do
+                [ ! -e "$REPLDIR/tools/old" ] && gone=true && break
+                sleep 1
+            done
+            if [ "$gone" = true ]; then
+                ok "a file inside a replaced directory is gone here too"
+            else
+                bad "tools/old is still here after the container replaced the directory"
+                share_diagnostics
+            fi
+            markers=$(find "$REPLDIR" -name '.wh.*')
+            if [ -z "$markers" ]; then
+                ok "no overlay marker was written into the tree"
+            else
+                bad "overlay markers in the user's tree: [$markers]"
+            fi
+        else
+            bad "the container could not replace its directory"
+        fi
+    else
+        bad "the replace container would not start"
+        sed 's/^/        /' "$WORK/wb-replace-run.log"
+    fi
+    docker rm -f itest-wb-replace >/dev/null 2>&1
+
+    # A full disk. The share sits on a 2 MiB tmpfs and the container writes 4;
+    # once there is room the file arrives, and so does one written after.
+    FULLDIR="$WORK/wb-full"
+    mkdir -p "$FULLDIR"
+    if sudo mount -t tmpfs -o "size=2m,uid=$(id -u),gid=$(id -g)" tmpfs "$FULLDIR" 2>"$WORK/wb-full.err"; then
+        echo seed >"$FULLDIR/seed"
+        if dockert run -d --name itest-wb-full -v "$FULLDIR:/w:read=cached,write=back" \
+            alpine:3 sleep 900 >"$WORK/wb-full-run.log" 2>&1; then
+            wait_output "$FULLDIR: .*, cached\$" 30 "$WORK/remote-docker" remote status >/dev/null
+            dockert exec itest-wb-full sh -c 'dd if=/dev/zero of=/w/big bs=1M count=4 2>/dev/null' >/dev/null 2>&1
+            # Long enough for several rounds to meet the full disk.
+            sleep 20
+            sudo mount -o remount,size=8m "$FULLDIR"
+            arrived=false
+            for _ in $(seq 1 30); do
+                [ "$(stat -c %s "$FULLDIR/big" 2>/dev/null)" = 4194304 ] && arrived=true && break
+                sleep 1
+            done
+            if [ "$arrived" = true ]; then
+                ok "a file that met a full disk arrives once there is room"
+            else
+                bad "big is [$(stat -c %s "$FULLDIR/big" 2>&1)] bytes 30s after the disk had room"
+                share_diagnostics
+            fi
+            dockert exec itest-wb-full sh -c 'echo later >/w/later' >/dev/null 2>&1
+            if seen=$(wait_for_content "$FULLDIR/later" "later" 30); then
+                ok "a file made after the disk was full arrives too"
+            else
+                bad "a file made after the disk recovered never arrived: [$seen]"
+                share_diagnostics
+            fi
+        else
+            bad "the full-disk container would not start"
+            sed 's/^/        /' "$WORK/wb-full-run.log"
+        fi
+        docker rm -f itest-wb-full >/dev/null 2>&1
+        sudo umount -l "$FULLDIR" 2>/dev/null
+    else
+        info "could not mount a tmpfs for the full-disk case: $(cat "$WORK/wb-full.err")"
+    fi
+
+    # A burst: a build's worth of small files in one go, all of which arrive.
+    BURSTDIR="$WORK/wb-burst"
+    mkdir -p "$BURSTDIR"
+    echo seed >"$BURSTDIR/seed"
+    if dockert run -d --name itest-wb-burst -v "$BURSTDIR:/w:read=cached,write=back" \
+        alpine:3 sleep 900 >"$WORK/wb-burst-run.log" 2>&1; then
+        wait_output "$BURSTDIR: .*, cached\$" 30 "$WORK/remote-docker" remote status >/dev/null
+        dockert exec itest-wb-burst sh -c \
+            'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done' >/dev/null 2>&1
+        have=0
+        for _ in $(seq 1 90); do
+            have=$(find "$BURSTDIR/burst" -type f 2>/dev/null | wc -l | tr -d ' ')
+            [ "$have" = 5000 ] && break
+            sleep 2
+        done
+        if [ "$have" = 5000 ]; then
+            ok "5,000 files made in one burst all arrive"
+        else
+            bad "$have of 5000 files arrived in 180s"
+            share_diagnostics
+        fi
+    else
+        bad "the burst container would not start"
+        sed 's/^/        /' "$WORK/wb-burst-run.log"
+    fi
+    docker rm -f itest-wb-burst >/dev/null 2>&1
+else
+    bad "no client is running, so write-back could not be tested"
+fi
+
+echo
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session detached,
 # stopped by asking rather than signalling, and reclaiming itself when idle.
@@ -2967,6 +3086,77 @@ else
     bad "could not start a session for the idle test"
 fi
 
+
+echo
+echo "== 16b. write-back resumes after a client restart, and while nobody asks anything =="
+# A restarted client registers a restored share for NFS and must attach it to the
+# cache as well, with what the fill sent, or a file the container MODIFIES never
+# comes back (ADR 0027, ADR 0044). The second half leaves the session alone for
+# three minutes with a container writing, so a connection released for being
+# idle cannot end write-back while the container still runs. No docker command
+# runs during that wait: each one would reopen what it is checking.
+RESTDIR="$WORK/wb-restart"
+mkdir -p "$RESTDIR"
+echo "before" >"$RESTDIR/modified.txt"
+if REMOTE_DOCKER_PREFETCH=eager REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start >"$WORK/wb-start.log" 2>&1; then
+    if dockert run -d --name itest-wb-restart -v "$RESTDIR:/w:read=cached,write=back" \
+        alpine:3 sleep 900 >"$WORK/wb-restart-run.log" 2>&1; then
+        if wait_output "$RESTDIR: .*, cached\$" 60 "$WORK/remote-docker" remote status; then
+            ok "the fill completed before the restart"
+        else
+            bad "the share never reported a complete cache: [$LAST_OUTPUT]"
+        fi
+        if REMOTE_DOCKER_PREFETCH=eager REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote restart -f >"$WORK/wb-restart.log" 2>&1; then
+            dockert exec itest-wb-restart sh -c 'echo after >/w/modified.txt && echo made-after >/w/new.txt' >/dev/null 2>&1
+            if seen=$(wait_for_content "$RESTDIR/modified.txt" "after" 40); then
+                ok "a file the fill sent and the container modified arrives after a client restart"
+            else
+                bad "modified.txt is [$seen] 40s after the container changed it behind a restarted client"
+                share_diagnostics
+            fi
+            if seen=$(wait_for_content "$RESTDIR/new.txt" "made-after" 40); then
+                ok "a file the container made arrives after a client restart"
+            else
+                bad "new.txt is [$seen] 40s after the container made it behind a restarted client"
+                share_diagnostics
+            fi
+        else
+            bad "remote restart failed: $(cat "$WORK/wb-restart.log")"
+        fi
+    else
+        bad "the restart container would not start"
+        sed 's/^/        /' "$WORK/wb-restart-run.log"
+    fi
+    docker rm -f itest-wb-restart >/dev/null 2>&1
+
+    IDLEDIR="$WORK/wb-idle"
+    mkdir -p "$IDLEDIR"
+    echo seed >"$IDLEDIR/seed"
+    if dockert run -d --name itest-wb-idle -v "$IDLEDIR:/w:read=cached,write=back" alpine:3 sh -c \
+        'i=0; while [ $i -lt 18 ]; do i=$((i+1)); echo $i >/w/idle-$i; sleep 10; done; sleep 900' \
+        >"$WORK/wb-idle-run.log" 2>&1; then
+        have=0
+        for _ in $(seq 1 46); do
+            sleep 5
+            have=$(find "$IDLEDIR" -name 'idle-*' -type f 2>/dev/null | wc -l | tr -d ' ')
+            [ "$have" = 18 ] && break
+        done
+        if [ "$have" = 18 ]; then
+            ok "a file every 10s for three minutes with no client command all arrive"
+        else
+            bad "$have of 18 files arrived while the session sat idle"
+            "$WORK/remote-docker" remote status 2>&1 | sed 's/^/        /'
+            share_diagnostics
+        fi
+    else
+        bad "the idle container would not start"
+        sed 's/^/        /' "$WORK/wb-idle-run.log"
+    fi
+    docker rm -f itest-wb-idle >/dev/null 2>&1
+else
+    bad "could not start a session for the write-back restart test: $(cat "$WORK/wb-start.log")"
+fi
+"$WORK/remote-docker" remote stop -f >/dev/null 2>&1
 
 echo
 echo "== 17. the workspace lifecycle, and the docker context that follows it =="

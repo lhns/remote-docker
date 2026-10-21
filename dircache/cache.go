@@ -115,6 +115,12 @@ type Cache struct {
 
 	// recording keeps saves of the record in the order they were made.
 	recording sync.Mutex
+
+	// roundBudget and writeFile are seams for tests: how long a write-back
+	// round may take, and how one file lands here. Zero and nil mean
+	// writeBackTimeout and writeUnder.
+	roundBudget time.Duration
+	writeFile   func(r *os.Root, f File) error
 }
 
 // ShareOptions is what the caller decided about a share, in this module's

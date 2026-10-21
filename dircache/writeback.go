@@ -80,7 +80,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, writeBackTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.budget())
 	defer cancel()
 
 	// Before the changes: a reconcile landing after them would take a deleted
@@ -125,7 +125,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	}
 
 	if paths := writes(actions); len(paths) > 0 {
-		err := store.Pull(ctx, share, paths, func(f File) error { return writeUnder(r, f) })
+		err := store.Pull(ctx, share, paths, func(f File) error { return c.land(r, f) })
 		if err != nil {
 			c.quiet(ctx, "writing back what a consumer wrote", "share", share, "err", err)
 			return
@@ -146,6 +146,22 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	// here must be able to take it out.
 	c.editRecord(share, writes(actions), true)
 	c.unrecord(share, deletes(actions))
+}
+
+// budget is how long one round may take.
+func (c *Cache) budget() time.Duration {
+	if c.roundBudget > 0 {
+		return c.roundBudget
+	}
+	return writeBackTimeout
+}
+
+// land writes one file into the share.
+func (c *Cache) land(r *os.Root, f File) error {
+	if c.writeFile != nil {
+		return c.writeFile(r, f)
+	}
+	return writeUnder(r, f)
 }
 
 func (c *Cache) skew() time.Duration {
