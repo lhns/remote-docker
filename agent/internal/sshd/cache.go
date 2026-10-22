@@ -26,8 +26,8 @@ const releaseTimeout = 30 * time.Second
 // dropping what the client deleted, and handing back what the container wrote
 // (ADR 0044).
 //
-// There is no release request: the channel closing releases the account's
-// unions that no container is bound to (unions.Manager.ReleaseAccount).
+// There is no release request: the machine's last channel closing releases its
+// unions that no container is bound to (unions.Manager.Open).
 //
 // Runs as root, since it mounts inside a daemon's namespace, so every request
 // is re-validated here (cache.Request.Validate, which both sides call).
@@ -61,6 +61,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	}
 
 	name := account.Name()
+	end := s.cfg.Unions.Open(name, account.Client())
 	defer func() {
 		// A context of its own, NOT the session's: that one is already
 		// cancelled by the time this runs, and releasing asks the daemon which
@@ -68,7 +69,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		// "keep" as it must, and the workspace would never release one at all.
 		ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 		defer cancel()
-		s.cfg.Unions.Release(ctx, name, account.Client())
+		end(ctx)
 	}()
 
 	reader := bufio.NewReaderSize(session, cache.MaxFrame)

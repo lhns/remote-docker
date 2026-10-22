@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +55,21 @@ type cacheChannel struct {
 	// mutex so that waiting for it honours the caller's context.
 	turn chan struct{}
 	r    *bufio.Reader
+
+	// reprepare gives the workspace back a union it still serves and has no
+	// record of (Session.reprepare). Nil leaves an unknown share unknown.
+	reprepare func(ctx context.Context, export string) error
+
+	// flights single-flights reprepare per share, so the write-back and the
+	// fill meeting one restart ask once.
+	flightMu sync.Mutex
+	flights  map[string]*flight
+}
+
+// flight is one reprepare in progress, which a second caller waits for.
+type flight struct {
+	done chan struct{}
+	err  error
 }
 
 func newCacheChannel(stream io.ReadWriteCloser, r *bufio.Reader) *cacheChannel {
@@ -303,7 +320,9 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 // Changes asks what the container did to a share, converting the wire type to
 // dircache's field for field (ADR 0021).
 func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.Change, error) {
-	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export, Carry: c.carry}, nil)
+	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+		return c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export, Carry: c.carry}, nil)
+	})
 	if reply.Unknown {
 		return nil, dircache.ErrShareGone
 	}
@@ -327,12 +346,14 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.C
 // Pull fetches the named paths in chunks, calling into once per file.
 func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(dircache.File) error) error {
 	for _, batch := range chunkPaths(paths) {
-		reply, err := c.do(ctx, cache.Request{
-			Op:     cache.OpPull,
-			Export: export,
-			Paths:  batch,
-			Carry:  c.carry,
-		}, nil)
+		reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+			return c.do(ctx, cache.Request{
+				Op:     cache.OpPull,
+				Export: export,
+				Paths:  batch,
+				Carry:  c.carry,
+			}, nil)
+		})
 		if err != nil {
 			return err
 		}
@@ -362,13 +383,112 @@ func (c *cacheChannel) Present(ctx context.Context, export string, paths []strin
 	}
 	var here []string
 	for _, batch := range chunkPaths(paths) {
-		reply, err := c.do(ctx, cache.Request{Op: cache.OpPresent, Export: export, Paths: batch, Carry: true}, nil)
+		reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+			return c.do(ctx, cache.Request{Op: cache.OpPresent, Export: export, Paths: batch, Carry: true}, nil)
+		})
 		if err != nil {
 			return nil, err
 		}
 		here = append(here, reply.Present...)
 	}
 	return here, nil
+}
+
+// forShare runs one request about a share, and runs it once more if the
+// workspace answered that it holds no union for the share and preparing it
+// again worked. An agent restarted under a running container has no record of
+// the union that container still binds (ADR 0044). If the union cannot be given
+// back, the first answer stands; if asking failed on the way, that error is
+// returned for the caller to retry.
+func (c *cacheChannel) forShare(ctx context.Context, export string, op func() (cache.Reply, error)) (cache.Reply, error) {
+	reply, err := op()
+	if !reply.Unknown || c.reprepare == nil {
+		return reply, err
+	}
+	if rerr := c.prepareAgain(ctx, export); rerr != nil {
+		if errors.Is(rerr, errNoUnion) {
+			return reply, err
+		}
+		return cache.Reply{}, rerr
+	}
+	return op()
+}
+
+// prepareAgain is reprepare, once per share at a time: a second caller waits
+// for the first one's answer rather than asking again.
+func (c *cacheChannel) prepareAgain(ctx context.Context, export string) error {
+	c.flightMu.Lock()
+	if f, ok := c.flights[export]; ok {
+		c.flightMu.Unlock()
+		select {
+		case <-f.done:
+			return f.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f := &flight{done: make(chan struct{})}
+	if c.flights == nil {
+		c.flights = map[string]*flight{}
+	}
+	c.flights[export] = f
+	c.flightMu.Unlock()
+
+	f.err = c.reprepare(ctx, export)
+
+	c.flightMu.Lock()
+	delete(c.flights, export)
+	c.flightMu.Unlock()
+	close(f.done)
+	return f.err
+}
+
+// errNoUnion is a share the workspace has no union for and none to give back,
+// typically one released because no container held it. The caller stops
+// asking about it.
+var errNoUnion = errors.New("the workspace serves no union for this share")
+
+// reprepare gives the workspace back a union it still has mounted and has no
+// record of, by preparing the share as the mount did. The agent ADOPTS a union
+// that is serving rather than mounting over it (ADR 0044).
+//
+// Only for a union the workspace's FILESYSTEM still has mounted (OpMounted):
+// one released because nothing held it is gone, and preparing it again would
+// mount a union for nobody, to be released and prepared again on every
+// connection.
+func (s *Session) reprepare(ctx context.Context, l *liveConn, c *cacheChannel, export string) error {
+	share, _, ok := s.registry.Lookup(export)
+	if !ok || !share.Mode.Union() {
+		return errNoUnion
+	}
+	volume, err := workspace.CacheVolumeForExport(l.clientID, export)
+	if err != nil {
+		return errNoUnion
+	}
+	names, err := c.Mounted(ctx)
+	if errors.Is(err, errRefused) {
+		return fmt.Errorf("%w: %w", errNoUnion, err)
+	}
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(names, volume) {
+		return errNoUnion
+	}
+	// What the mount itself would have refused (rewrite.Rewriter.union).
+	owner := share.Words().Owner
+	if !c.owner && owner.Set && owner != (workspace.Owner{Set: true}) {
+		return errNoUnion
+	}
+	if _, err := c.Prepare(ctx, export, volume, l.info.NFSPort, share.Mode, owner); err != nil {
+		if errors.Is(err, errRefused) {
+			return fmt.Errorf("%w: %w", errNoUnion, err)
+		}
+		return err
+	}
+	s.log().Info("prepared again a union the workspace had lost track of; its container still binds it",
+		"path", share.LocalPath, "export", export)
+	return nil
 }
 
 // untar hands over each regular file; nothing else is safe to carry back.
@@ -441,13 +561,15 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 	if err != nil {
 		return nil, err
 	}
-	reply, err := c.do(ctx, cache.Request{
-		Op:     cache.OpApply,
-		Export: export,
-		Bytes:  int64(len(body)),
-		Codec:  c.codec,
-		Carry:  c.carry,
-	}, bytes.NewReader(body))
+	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+		return c.do(ctx, cache.Request{
+			Op:     cache.OpApply,
+			Export: export,
+			Bytes:  int64(len(body)),
+			Codec:  c.codec,
+			Carry:  c.carry,
+		}, bytes.NewReader(body))
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -458,11 +580,13 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 // cap needs.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
 	for _, batch := range chunkPaths(paths) {
-		if _, err := c.do(ctx, cache.Request{
-			Op:     cache.OpDrop,
-			Export: export,
-			Paths:  batch,
-		}, nil); err != nil {
+		if _, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+			return c.do(ctx, cache.Request{
+				Op:     cache.OpDrop,
+				Export: export,
+				Paths:  batch,
+			}, nil)
+		}); err != nil {
 			return err
 		}
 	}
