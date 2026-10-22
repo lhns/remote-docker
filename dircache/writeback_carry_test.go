@@ -353,7 +353,7 @@ func TestTheBackoffDoublesToItsCeiling(t *testing.T) {
 
 	var waits []time.Duration
 	for range 8 {
-		_, next := c.shares.wbFail(wbShare, now, "x", "", 0, false)
+		_, next := c.shares.wb.fail(wbShare, now, "x", "", 0, false)
 		waits = append(waits, next.Sub(now))
 	}
 	want := []time.Duration{5, 10, 20, 40, 60, 60, 60, 60}
@@ -363,17 +363,17 @@ func TestTheBackoffDoublesToItsCeiling(t *testing.T) {
 		}
 	}
 
-	c.shares.wbOK(wbShare)
-	if _, next := c.shares.wbFail(wbShare, now, "x", "", 0, false); next.Sub(now) != writeBackBackoffMin {
+	c.shares.wb.ok(wbShare)
+	if _, next := c.shares.wb.fail(wbShare, now, "x", "", 0, false); next.Sub(now) != writeBackBackoffMin {
 		t.Errorf("after a success the wait is %v, want it reset to %v", next.Sub(now), writeBackBackoffMin)
 	}
 
 	// A round that landed something and still failed waits only the floor, so
 	// one file that never lands cannot slow every other to once a minute.
 	for range 5 {
-		c.shares.wbFail(wbShare, now, "x", "", 0, false)
+		c.shares.wb.fail(wbShare, now, "x", "", 0, false)
 	}
-	if _, next := c.shares.wbFail(wbShare, now, "x", "", 0, true); next.Sub(now) != writeBackBackoffMin {
+	if _, next := c.shares.wb.fail(wbShare, now, "x", "", 0, true); next.Sub(now) != writeBackBackoffMin {
 		t.Errorf("after a round with progress the wait is %v, want %v", next.Sub(now), writeBackBackoffMin)
 	}
 }
