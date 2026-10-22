@@ -172,7 +172,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 		// collects them.
 		return false
 	}
-	if !c.shares.wbReady(share, c.clock()) {
+	if !c.shares.wb.ready(share, c.clock()) {
 		return false
 	}
 
@@ -202,10 +202,10 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	// reaches decide. reported keeps them: a path set aside is still listed, and
 	// is not a deletion a replaced directory implies.
 	reported := changes
-	changes = c.shares.unskipped(share, changes)
+	changes = c.shares.wb.unskipped(share, changes)
 	changes = c.dropMarkers(ctx, share, changes)
 	if len(changes) == 0 {
-		c.shares.wbForget(share, reported)
+		c.shares.wb.forget(share, reported)
 		c.recovered(ctx, share, root)
 		return false
 	}
@@ -224,7 +224,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	for _, p := range c.confirmedAbsent(ctx, store, share, replacedDeletions(manifest, reported)) {
 		changes = append(changes, Change{Path: p, Deleted: true})
 	}
-	c.shares.wbForget(share, reported, changes)
+	c.shares.wb.forget(share, reported, changes)
 	actions := decide(manifest, recorded, changes, localAtRoot(r), c.skew(), state.Cached)
 	actions = append(actions, decideLinks(manifest, changes, linkAtRoot(r))...)
 	if len(actions) == 0 {
@@ -233,7 +233,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	}
 
 	for _, conflict := range ofKind(actions, kindConflict) {
-		if c.shares.wbConflictNew(share, conflict.Path, conflict.Why) {
+		if c.shares.wb.conflictNew(share, conflict.Path, conflict.Why) {
 			c.log().Warn("a file changed in both places",
 				"path", strings.TrimPrefix(conflict.Path, "/"),
 				"kind", conflict.kind, "outcome", conflict.Why)
@@ -299,7 +299,7 @@ func (p *writePass) run(store Store, actions []action) bool {
 
 	// Those that have failed least go first, so files that never land cannot
 	// take every slot of the pass and starve the ones behind them.
-	paths := p.c.shares.wbRanked(p.share, writes(actions))
+	paths := p.c.shares.wb.ranked(p.share, writes(actions))
 	more := false
 	if len(paths) > writeBackRoundFiles {
 		paths, more = paths[:writeBackRoundFiles], true
@@ -308,7 +308,7 @@ func (p *writePass) run(store Store, actions []action) bool {
 	for _, path := range paths {
 		p.tried[path] = true
 	}
-	defer func() { p.c.shares.wbTry(p.share, p.tried, p.wrote) }()
+	defer func() { p.c.shares.wb.try(p.share, p.tried, p.wrote) }()
 
 	for chunk := range slices.Chunk(paths, pullChunk) {
 		if !p.pull(store, chunk) {
@@ -458,7 +458,7 @@ func (p *writePass) stillAsSeen(a action) bool {
 // decided about it. It is looked at again next round, by decide, with the new state; it
 // is not a failure, and is said once.
 func (p *writePass) changedHere(path string) {
-	if p.c.shares.wbConflictNew(p.share, path, "changed here while write-back was running") {
+	if p.c.shares.wb.conflictNew(p.share, path, "changed here while write-back was running") {
 		p.c.log().Warn("a file changed here while write-back was running; it was left as it is and is looked at again",
 			"path", strings.TrimPrefix(path, "/"))
 	}
@@ -496,7 +496,7 @@ func (p *writePass) commit(acts []action, added, removed []string) {
 	f.rebase(p.share, p.root, acts)
 	f.editRecord(p.share, added, true)
 	f.editRecord(p.share, removed, false)
-	f.wbLanded(p.share, added, removed)
+	f.wb.landed(p.share, added, removed)
 	p.c.saveRecord(p.share)
 }
 
@@ -505,7 +505,7 @@ func (p *writePass) commit(acts []action, added, removed []string) {
 // happens. A round that made progress waits only the shortest backoff.
 func (c *Cache) stall(ctx context.Context, share, root, what string, err error, first string, pending int, progress bool) {
 	reason := what + ": " + err.Error()
-	newly, next := c.shares.wbFail(share, c.clock(), reason, first, pending, progress)
+	newly, next := c.shares.wb.fail(share, c.clock(), reason, first, pending, progress)
 	if !newly || ctx.Err() != nil || (c.Ctx != nil && c.Ctx.Err() != nil) {
 		return
 	}
@@ -521,7 +521,7 @@ func (c *Cache) stall(ctx context.Context, share, root, what string, err error, 
 
 // recovered says write-back is moving again, if it had stopped.
 func (c *Cache) recovered(ctx context.Context, share, root string) {
-	if again, since := c.shares.wbOK(share); again && ctx.Err() == nil {
+	if again, since := c.shares.wb.ok(share); again && ctx.Err() == nil {
 		c.log().Info("write-back is moving again", "share", root,
 			"stalled for", c.clock().Sub(since).Round(time.Second))
 	}
@@ -529,7 +529,7 @@ func (c *Cache) recovered(ctx context.Context, share, root string) {
 
 // skipped gives up on a path until it changes, naming it once.
 func (c *Cache) skipped(ctx context.Context, share string, ch Change, sk Skipped) {
-	if !c.shares.wbSkip(share, ch, sk) || ctx.Err() != nil {
+	if !c.shares.wb.skip(share, ch, sk) || ctx.Err() != nil {
 		return
 	}
 	c.log().Warn("a file cannot be carried back to this machine and is left until it changes",

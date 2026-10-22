@@ -383,7 +383,7 @@ func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entr
 			out = append(out, e)
 			continue
 		}
-		if c.shares.wbConflictNew(share, p, "changed in the container and here before write-back carried it") {
+		if c.shares.wb.conflictNew(share, p, "changed in the container and here before write-back carried it") {
 			c.log().Warn("a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept",
 				"path", strings.TrimPrefix(e.Path, "/"))
 		}
@@ -484,10 +484,6 @@ type shareState struct {
 
 	// opts is what the share was attached with.
 	opts ShareOptions
-
-	// wb is what write-back remembers between rounds, and fill what the
-	// fill's retry does; wbstate.go and prefetch.go keep them under shares.mu.
-	wb wbState
 }
 
 // Report is what one share has cached, for a status command.
@@ -548,6 +544,10 @@ type shares struct {
 	// recorded is what Record holds for each share: every path any batch sent,
 	// this run or an earlier one, less what has been dropped since.
 	recorded map[string]map[string]bool
+
+	// wb is what write-back remembers between rounds, under its own lock
+	// (wbstate.go).
+	wb writeBacks
 }
 
 // ephemeral reports whether a share never carries writes back.
@@ -572,6 +572,7 @@ func (f *shares) set(share, root string, s *shareState, filled map[string]Baseli
 	f.roots[share] = root
 	f.manifests[share] = map[string]Baseline{}
 	f.recorded[share] = map[string]bool{}
+	f.wb.reset(share)
 	for p, b := range filled {
 		p = slashed(p)
 		f.recorded[share][p] = true
@@ -674,6 +675,7 @@ func (f *shares) forget(share string) {
 	delete(f.roots, share)
 	delete(f.manifests, share)
 	delete(f.recorded, share)
+	f.wb.drop(share)
 	if p, ok := f.prefetch[share]; ok {
 		delete(f.prefetch, share)
 		if p.pol() == PolicyTree {
@@ -801,9 +803,9 @@ func (f *shares) reports() []Report {
 	defer f.mu.Unlock()
 
 	out := make([]Report, 0, len(f.state))
-	for _, state := range f.state {
+	for share, state := range f.state {
 		r := state.Report
-		r.WriteBack = state.wbReport()
+		r.WriteBack = f.wb.report(share)
 		r.Ephemeral = state.opts.Ephemeral
 		out = append(out, r)
 	}
