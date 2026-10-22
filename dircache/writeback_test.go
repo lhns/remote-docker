@@ -32,7 +32,7 @@ func TestWriteUnderRefusesAPathThatLeavesTheShare(t *testing.T) {
 		"/a/../../escaped",
 		"/a/b/../../../escaped",
 	} {
-		err := writeUnder(openRoot(t, root), File{Path: name, Mode: 0o644, Body: strings.NewReader("x")})
+		err := writeUnder(openRoot(t, root), File{Path: name, Mode: 0o644, Body: strings.NewReader("x")}, nil)
 		if err == nil {
 			t.Errorf("writeUnder(%q) = %v, want a refusal", name, err)
 		}
@@ -62,7 +62,7 @@ func TestWriteUnderRefusesASiblingOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := writeUnder(openRoot(t, root), File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")})
+	err := writeUnder(openRoot(t, root), File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")}, nil)
 	if err == nil {
 		t.Fatalf("writeUnder into a sibling = %v, want a refusal", err)
 	}
@@ -78,7 +78,7 @@ func TestWriteUnderKeepsTheModificationTime(t *testing.T) {
 	err := writeUnder(openRoot(t, root), File{
 		Path: "/pkg/deep/lib.go", ModTime: wrote, Mode: 0o644,
 		Body: strings.NewReader("package deep\n"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
@@ -107,10 +107,10 @@ func TestWriteUnderKeepsAnExistingFilesPermissions(t *testing.T) {
 	}
 	r := openRoot(t, root)
 
-	if err := writeUnder(r, File{Path: "/secret.env", Mode: 0o644, Body: strings.NewReader("new\n")}); err != nil {
+	if err := writeUnder(r, File{Path: "/secret.env", Mode: 0o644, Body: strings.NewReader("new\n")}, nil); err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
-	if err := writeUnder(r, File{Path: "/new.sh", Mode: 0o700, Body: strings.NewReader("#!/bin/sh\n")}); err != nil {
+	if err := writeUnder(r, File{Path: "/new.sh", Mode: 0o700, Body: strings.NewReader("#!/bin/sh\n")}, nil); err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
 

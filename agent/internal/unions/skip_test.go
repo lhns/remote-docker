@@ -36,9 +36,9 @@ func TestAnEntryTheShareCannotTakeIsSkippedOnlyWhenAsked(t *testing.T) {
 
 	root := t.TempDir()
 	var landed []string
-	skipped, err := extractWith(root, batchOf(t, names...), true, func(name string, _ os.FileInfo) { landed = append(landed, name) })
+	skipped, err := extract(root, batchOf(t, names...), true, func(name string, _ os.FileInfo) { landed = append(landed, name) })
 	if err != nil {
-		t.Fatalf("extractWith: %v", err)
+		t.Fatalf("extract: %v", err)
 	}
 	if !slices.Equal(skipped, []string{"/../escape"}) {
 		t.Errorf("skipped = %v, want the one entry that could not be written", skipped)
@@ -53,7 +53,7 @@ func TestAnEntryTheShareCannotTakeIsSkippedOnlyWhenAsked(t *testing.T) {
 	}
 
 	root = t.TempDir()
-	if _, err := extractWith(root, batchOf(t, names...), false, func(string, os.FileInfo) {}); err == nil {
+	if _, err := extract(root, batchOf(t, names...), false, func(string, os.FileInfo) {}); err == nil {
 		t.Error("without Carry, an entry the share cannot take did not fail the batch")
 	}
 }
@@ -77,7 +77,7 @@ func TestASkippedWriteRemovesOnlyWhatItCreated(t *testing.T) {
 		}
 		_, _ = cut.WriteString("xx")
 
-		skipped, _ := extractWith(root, &cut, true, func(string, os.FileInfo) {})
+		skipped, _ := extract(root, &cut, true, func(string, os.FileInfo) {})
 		if !slices.Equal(skipped, []string{"/" + name}) {
 			t.Fatalf("%s: skipped = %v, want it named", name, skipped)
 		}

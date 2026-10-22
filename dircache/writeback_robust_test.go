@@ -1,8 +1,7 @@
 package dircache
 
 // Write-back must never stop for good, and nothing the consumer made may be
-// lost or mangled on the way back (ADR 0044). One test per way it was seen or
-// suspected to stop; each says which.
+// lost or mangled on the way back (ADR 0044). One test per way it could stop.
 
 import (
 	"bytes"
@@ -10,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -194,7 +192,7 @@ func exists(root, rel string) bool {
 	return err == nil
 }
 
-// H8. A pull that runs out of budget half way must keep what it landed: the
+// A pull that runs out of budget half way must keep what it landed: the
 // manifest and the record move per file. Left where they were, the files that
 // did land are neither compared against nor taken out of the cache when
 // deleted here, and a burst bigger than the budget is retried whole for ever.
@@ -220,7 +218,7 @@ func TestWriteBackKeepsWhatLandedWhenAPullRunsOutOfBudget(t *testing.T) {
 		return nil
 	}
 	c, _, clk := wbCache(t, store, root)
-	c.roundBudget = 50 * time.Millisecond
+	c.callBudget = 50 * time.Millisecond
 
 	rounds(t, c, clk, 1)
 
@@ -247,7 +245,7 @@ func TestWriteBackKeepsWhatLandedWhenAPullRunsOutOfBudget(t *testing.T) {
 	}
 }
 
-// H9. One file this machine cannot hold (a name NTFS refuses, with EINVAL as
+// One file this machine cannot hold (a name NTFS refuses, with EINVAL as
 // the portable stand-in) must not stop the rest, and is named once, not every
 // round for ever.
 func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
@@ -264,7 +262,7 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 			attempts++
 			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
-		return writeUnder(r, f)
+		return writeUnder(r, f, nil)
 	}
 
 	rounds(t, c, clk, 5)
@@ -288,7 +286,7 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 	}
 }
 
-// H4. A full disk is transient: the backlog lands once there is room, and a
+// A full disk is transient: the backlog lands once there is room, and a
 // file made after that lands too.
 func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 	root := t.TempDir()
@@ -302,7 +300,7 @@ func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 		if full {
 			return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 		}
-		return writeUnder(r, f)
+		return writeUnder(r, f, nil)
 	}
 
 	rounds(t, c, clk, 4)
@@ -321,7 +319,7 @@ func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 	}
 }
 
-// H2. A fill batch that fails once must be retried, never final: with the fill
+// A fill batch that fails once must be retried, never final: with the fill
 // stuck, the share is never complete and write-back never runs.
 func TestAFailedFillBatchIsRetriedAndWriteBackFollows(t *testing.T) {
 	root := t.TempDir()
@@ -356,29 +354,7 @@ func TestAFailedFillBatchIsRetriedAndWriteBackFollows(t *testing.T) {
 	}
 }
 
-// memRecord is a Record that survives a Cache, as the file does a process.
-type memRecord struct {
-	mu sync.Mutex
-	m  map[string]map[string]Baseline
-}
-
-func (r *memRecord) Filled(share string) (map[string]Baseline, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p, ok := r.m[share]
-	return maps.Clone(p), ok
-}
-
-func (r *memRecord) Record(share string, filled map[string]Baseline) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.m == nil {
-		r.m = map[string]map[string]Baseline{}
-	}
-	r.m[share] = maps.Clone(filled)
-}
-
-// H6. After a client restart a file the fill sent and the consumer then
+// After a client restart a file the fill sent and the consumer then
 // modified must still come back. Only paths survive the restart, so every path
 // counts as one the fill never sent, and a modified file is mistaken for one
 // this machine may have created.
@@ -388,7 +364,7 @@ func TestAModifiedFileIsWrittenBackAfterARestart(t *testing.T) {
 	if err := os.WriteFile(local, []byte("before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rec := &memRecord{}
+	rec := &fakeRecord{}
 
 	first := &Cache{Store: func() (Store, bool) { return &faultStore{}, true }, Record: rec, Ctx: t.Context()}
 	t.Cleanup(first.Stop)
@@ -466,7 +442,7 @@ func TestWriteBackEventuallyLandsEverythingWhateverFailedFirst(t *testing.T) {
 				if faulty && rng.IntN(4) == 0 {
 					return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 				}
-				return writeUnder(r, f)
+				return writeUnder(r, f, nil)
 			}
 
 			rounds(t, c, clk, 15)

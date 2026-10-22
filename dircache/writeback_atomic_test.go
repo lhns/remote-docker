@@ -20,7 +20,7 @@ func TestWriteUnderFailedBodyLeavesTheTargetAlone(t *testing.T) {
 	}
 
 	body := io.MultiReader(strings.NewReader("half of the n"), iotest.ErrReader(errors.New("link dropped")))
-	err := writeUnder(openRoot(t, root), File{Path: "/main.go", Mode: 0o644, Body: body})
+	err := writeUnder(openRoot(t, root), File{Path: "/main.go", Mode: 0o644, Body: body}, nil)
 	if err == nil {
 		t.Fatal("a body that failed was reported as written")
 	}
@@ -39,7 +39,7 @@ func TestWriteUnderRefusedRenameLeavesNoTemporary(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "main.go", "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := writeUnder(openRoot(t, root), File{Path: "/main.go", Mode: 0o644, Body: strings.NewReader("x")})
+	err := writeUnder(openRoot(t, root), File{Path: "/main.go", Mode: 0o644, Body: strings.NewReader("x")}, nil)
 	if err == nil {
 		t.Fatal("replacing a directory with a file was reported as written")
 	}

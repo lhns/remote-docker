@@ -314,11 +314,7 @@ func (c *Cache) batchFailed(p *prefetch, batch []Entry, demand bool, err error) 
 	}
 	p.mu.Lock()
 	p.tree.Unstore(batch)
-	delay := base
-	for i := 0; i < p.failures && delay < fillBackoffMax; i++ {
-		delay *= 2
-	}
-	delay = min(delay, fillBackoffMax)
+	delay := backoff(base, fillBackoffMax, p.failures)
 	first := p.failures == 0
 	p.failures++
 	p.retryAt = time.Now().Add(delay)

@@ -634,9 +634,9 @@ shows each share as ok, or stalled with the reason, how many changes wait and
 when it tries next:
 
 ```
-write-back  /home/me/project: ok
-write-back  /home/me/other: stalled since 12:30:00, writing back what a container wrote: no space left on device; 7 change(s) pending; first: dist/app.js; next try 12:31:00
-write-back    /home/me/other: 1 file(s) this machine cannot hold are left until they change: bad?name
+write-back  /home/alice/project: ok
+write-back  /home/alice/other: stalled since 12:30:00, writing back what a container wrote: no space left on device; 7 change(s) pending; first: dist/app.js; next try 12:31:00
+write-back    /home/alice/other: 1 file(s) this machine cannot hold are left until they change: bad?name
 ```
 
 A directory the container removes or replaces is removed or replaced here for
@@ -668,7 +668,7 @@ lower them on a metered link, and see which you are getting with
 `remote status`:
 
 ```
-cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, 181.0MB sent, cached in part; the rest is read live
+cache  /home/alice/project: 12043 of 47112 files, 180.2MB of 2.1GB, 181.0MB sent, cached in part; the rest is read live
 ```
 
 The workspace's own image carries `fuse-overlayfs`; stock `docker:dind` does

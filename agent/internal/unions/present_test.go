@@ -74,7 +74,7 @@ func TestOnlyAFileTheEntryCreatedIsRemovedAfterAFailedWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 		cut.WriteString("xx")
-		_, _ = extractWith(root, &cut, true, func(string, os.FileInfo) {})
+		_, _ = extract(root, &cut, true, func(string, os.FileInfo) {})
 	}
 	if _, err := os.Stat(filepath.Join(root, "theirs")); err != nil {
 		t.Errorf("a file the entry did not create was removed: %v", err)

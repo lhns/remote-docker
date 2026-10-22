@@ -345,18 +345,8 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.C
 
 // Pull fetches the named paths in chunks, calling into once per file.
 func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(dircache.File) error) error {
-	for _, batch := range chunkPaths(paths) {
-		reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
-			return c.do(ctx, cache.Request{
-				Op:     cache.OpPull,
-				Export: export,
-				Paths:  batch,
-				Carry:  c.carry,
-			}, nil)
-		})
-		if err != nil {
-			return err
-		}
+	req := cache.Request{Op: cache.OpPull, Export: export, Carry: c.carry}
+	return c.perChunk(ctx, req, paths, func(reply cache.Reply) error {
 		if err := untar(bytes.NewReader(reply.Payload), into); err != nil {
 			return err
 		}
@@ -367,31 +357,42 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 				return err
 			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
-
-// errNoPresent is a workspace that cannot say which paths exist, which the
-// caller reads as "keep everything", silently.
-var errNoPresent = dircache.ErrCannotPresent
 
 // Present answers which of the paths exist in the merged view of a share, the
 // one a container sees. An agent without Carry cannot answer.
 func (c *cacheChannel) Present(ctx context.Context, export string, paths []string) ([]string, error) {
 	if !c.carry {
-		return nil, errNoPresent
+		return nil, dircache.ErrCannotPresent
 	}
 	var here []string
-	for _, batch := range chunkPaths(paths) {
-		reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
-			return c.do(ctx, cache.Request{Op: cache.OpPresent, Export: export, Paths: batch, Carry: true}, nil)
-		})
-		if err != nil {
-			return nil, err
-		}
+	req := cache.Request{Op: cache.OpPresent, Export: export, Carry: true}
+	err := c.perChunk(ctx, req, paths, func(reply cache.Reply) error {
 		here = append(here, reply.Present...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return here, nil
+}
+
+// perChunk sends req once for each chunk of paths that fits a frame, through
+// forShare, and hands each reply to each.
+func (c *cacheChannel) perChunk(ctx context.Context, req cache.Request, paths []string, each func(cache.Reply) error) error {
+	for _, batch := range chunkPaths(paths) {
+		req.Paths = batch
+		reply, err := c.forShare(ctx, req.Export, func() (cache.Reply, error) { return c.do(ctx, req, nil) })
+		if err != nil {
+			return err
+		}
+		if err := each(reply); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // forShare runs one request about a share, and runs it once more if the
@@ -579,18 +580,8 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 // Drop removes paths from a share's cache, in as many requests as the frame
 // cap needs.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
-	for _, batch := range chunkPaths(paths) {
-		if _, err := c.forShare(ctx, export, func() (cache.Reply, error) {
-			return c.do(ctx, cache.Request{
-				Op:     cache.OpDrop,
-				Export: export,
-				Paths:  batch,
-			}, nil)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	req := cache.Request{Op: cache.OpDrop, Export: export}
+	return c.perChunk(ctx, req, paths, func(cache.Reply) error { return nil })
 }
 
 // Close ends the channel, which releases every union this session prepared.

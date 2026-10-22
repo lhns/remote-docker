@@ -45,6 +45,12 @@ type Baseline struct {
 	Consumer int64
 }
 
+// sameFile reports whether two baselines describe the same file on this
+// machine: same size, same modification time.
+func (b Baseline) sameFile(o Baseline) bool {
+	return b.Size == o.Size && b.ModTime.Equal(o.ModTime)
+}
+
 // carries reports whether a change is exactly the version this baseline stands
 // for: a copy of the fill's, or one already carried back.
 func (b Baseline) carries(c Change) bool {
@@ -279,11 +285,12 @@ func deletes(actions []action) []string {
 	return out
 }
 
-// conflicts are what a person is told about, whichever way each resolved.
-func conflicts(actions []action) []action {
+// ofKind are the actions of one kind: the conflicts a person is told about,
+// whichever way each resolved, or the links to make.
+func ofKind(actions []action, k kind) []action {
 	var out []action
 	for _, a := range actions {
-		if a.kind == kindConflict {
+		if a.kind == k {
 			out = append(out, a)
 		}
 	}

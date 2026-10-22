@@ -40,7 +40,7 @@ func TestApplyDoesNotWriteThroughASymlinkOutOfTheShare(t *testing.T) {
 	_, _ = tw.Write(body)
 	_ = tw.Close()
 
-	err := extract(root, &batch, func(string, os.FileInfo) {})
+	_, err := extract(root, &batch, false, func(string, os.FileInfo) {})
 	if _, statErr := os.Stat(filepath.Join(outside, "pwned")); statErr == nil {
 		t.Fatal("a fill followed a symlink and wrote outside the share")
 	}
@@ -99,7 +99,7 @@ func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
 	_ = tw.Close()
 
 	var landed []string
-	if err := extract(root, &batch, func(name string, info os.FileInfo) {
+	if _, err := extract(root, &batch, false, func(name string, info os.FileInfo) {
 		landed = append(landed, name)
 		if !info.ModTime().Equal(at) {
 			t.Errorf("%s landed at %v, want %v", name, info.ModTime(), at)

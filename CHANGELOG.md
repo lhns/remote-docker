@@ -23,26 +23,26 @@ software.
   say) never reached your disk. Now it waits and tries again, carries on with
   everything else, and `remote status` says why it is waiting, how many changes
   are left and which files it gave up on.
-- **A directory a container removes or replaces is removed or replaced on your
-  machine too**, for the files the cache was filled with; before, the old files
-  stayed. A file is deleted only once the container is confirmed not to have
-  it, and **write-back never overwrites or deletes a file you changed while it
-  was running**: it says so once and looks again. **Links a container makes arrive as links**, as they do on the share
-  itself. On Windows an account without Developer Mode cannot create one: the
-  link is listed in `remote status` and the files around it still arrive.
+- **A directory a container removes or replaces is now removed or replaced on
+  your machine too**, for the files the cache was filled with. Before, the old
+  files stayed.
+- **Write-back never overwrites or deletes a file you changed while it was
+  running.** It says so once and looks again.
+- **Links a container makes arrive as links**, as they do on the share itself.
+  On Windows an account without Developer Mode cannot create one: the link is
+  listed in `remote status` and the files around it still arrive.
 - **`write=back` resumes by itself after the workspace agent restarts** under a
   running container (a VM workspace). Before, the container's writes stopped
   reaching your machine until another container used the same directory.
 - **A container started right after a reconnect no longer risks an empty
   directory** where a `write=back` mount should be: the end of the old
   connection could take away the cache the new one had just set up for it.
-- **Files named `.wh.something` are no longer written into your directory.** They
-  were overlay bookkeeping, and one of them made the workspace refuse every
-  later update of the cache. If your shared directory already has files such as
-  `.wh..wh..opq`, they are leftovers and safe to delete; the client says so.
-- **A file two names apart only in case, on a filesystem that ignores case** (such
-  as `LICENSE` and `license` on Windows), no longer vanishes or overwrites the other. It is
-  named in `remote status` and left.
+- **Files named `.wh.something` are no longer written into your directory.**
+  Existing ones, such as `.wh..wh..opq`, are leftovers and safe to delete; the
+  client says so.
+- **Two files whose names differ only in case, on a filesystem that ignores
+  case** (such as `LICENSE` and `license` on Windows), no longer make one vanish
+  or overwrite the other. The second is named in `remote status` and left.
 
 ### Upgrading
 

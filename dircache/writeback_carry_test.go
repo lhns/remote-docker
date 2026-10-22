@@ -167,7 +167,7 @@ func TestLandLinkKeepsTheTargetVerbatim(t *testing.T) {
 	}
 
 	// And a write through the link it made still goes nowhere.
-	err := writeUnder(r, File{Path: "/bin/tool/escaped", Mode: 0o644, Body: strings.NewReader("x")})
+	err := writeUnder(r, File{Path: "/bin/tool/escaped", Mode: 0o644, Body: strings.NewReader("x")}, nil)
 	if err == nil {
 		t.Error("a write through a link out of the share succeeded")
 	}
@@ -252,7 +252,7 @@ func TestALinkThisAccountMayNotMakeIsSkippedAndNamed(t *testing.T) {
 		t.Error("something stands in for the link")
 	}
 	skipped := c.Reports()[0].WriteBack.Skipped
-	if len(skipped) != 1 || skipped[0].Path != "/bin/tool" || !skipped[0].Link {
+	if len(skipped) != 1 || skipped[0].Path != "/bin/tool" || skipped[0].Kind != SkipLink {
 		t.Errorf("status names %+v, want the one link", skipped)
 	}
 	if n := strings.Count(logs.String(), "bin/tool"); n < 1 {
@@ -274,7 +274,7 @@ func TestASkippedFileIsTriedAgainWhenItChanges(t *testing.T) {
 		if refuse {
 			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
-		return writeUnder(r, f)
+		return writeUnder(r, f, nil)
 	}
 	rounds(t, c, clk, 3)
 	if attempts != 1 {
@@ -424,7 +424,7 @@ func TestACaseCollisionIsNeverLandedOverTheOtherFile(t *testing.T) {
 			t.Errorf("LICENSE holds %q, want it untouched by a file that differs only in case", got)
 		}
 		sk := c.Reports()[0].WriteBack.Skipped
-		if len(sk) != 1 || !sk[0].Clash {
+		if len(sk) != 1 || sk[0].Kind != SkipClash {
 			t.Errorf("status names %+v, want the one collision", sk)
 		}
 		return
@@ -446,7 +446,7 @@ func TestAFillSkipsWhatTheFarEndCouldNotWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rec := &memRecord{}
+	rec := &fakeRecord{}
 	store := &faultStore{skipPaths: map[string]bool{"b.go": true}}
 	c := &Cache{Store: func() (Store, bool) { return store, true }, Record: rec, Ctx: t.Context()}
 	t.Cleanup(c.Stop)

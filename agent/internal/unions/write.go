@@ -55,7 +55,7 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 	}
 	defer done()
 
-	return extractWith(root, decoded, carry, func(name string, info os.FileInfo) {
+	return extract(root, decoded, carry, func(name string, info os.FileInfo) {
 		l.noteApplied(name, info.Size(), info.ModTime())
 	})
 }
@@ -65,19 +65,14 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 // keeping coarser timestamps than the tar would otherwise match nothing, and
 // every filled file would read as a container write for the rest of the
 // session.
-func extract(root string, body io.Reader, landed func(name string, info os.FileInfo)) error {
-	_, err := extractWith(root, body, false, landed)
-	return err
-}
-
-// extractWith is extract that, when skip is set, leaves out an entry it cannot
-// write and returns its path instead of failing. A file this entry CREATED and
-// could not finish is removed, so a container is not served it short. One that
-// was already there is left: the root is the merged mount, so a removal would
-// be a whiteout, which hides the live file instead of falling through to it. The
-// tar reader steps past what is unread of the entry, so the batch stays in
-// frame.
-func extractWith(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
+//
+// With skip, an entry it cannot write is left out and its path returned instead
+// of failing the batch. A file this entry CREATED and could not finish is
+// removed, so a container is not served it short. One that was already there is
+// left: the root is the merged mount, so a removal would be a whiteout, which
+// hides the live file instead of falling through to it. The tar reader steps
+// past what is unread of the entry, so the batch stays in frame.
+func extract(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, fmt.Errorf("unions: opening the share: %w", err)

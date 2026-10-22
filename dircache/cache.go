@@ -153,7 +153,7 @@ type Cache struct {
 	// how one file and one link land here, the clock write-back backs off by,
 	// and the first wait after a failed fill batch. Zero and nil mean
 	// writeBackTimeout, writeUnder, landLink, time.Now and fillBackoffMin.
-	roundBudget time.Duration
+	callBudget  time.Duration
 	writeFile   func(r *os.Root, f File) error
 	makeLink    func(r *os.Root, rel, target string) error
 	now         func() time.Time
@@ -701,7 +701,7 @@ func (f *shares) noteSent(share, root string, entries []Entry) {
 			// A file carried back from the consumer and then sent again
 			// unchanged (the watcher sees the landing as a local change) is
 			// still the consumer's.
-			if old, had := manifest["/"+e.Path]; had && old.Consumer != 0 && old.Size == b.Size && old.ModTime.Equal(b.ModTime) {
+			if old, had := manifest["/"+e.Path]; had && old.Consumer != 0 && old.sameFile(b) {
 				b.Consumer = old.Consumer
 			}
 			manifest["/"+e.Path] = b
@@ -727,7 +727,7 @@ func (f *shares) alreadyHeld(share, root string, entries []Entry) []string {
 	var held []string
 	for p, b := range manifest {
 		rel := strings.TrimPrefix(p, "/")
-		if now, ok := baselineOf(root, rel); ok && now.Size == b.Size && now.ModTime.Equal(b.ModTime) {
+		if now, ok := baselineOf(root, rel); ok && now.sameFile(b) {
 			held = append(held, rel)
 		}
 	}

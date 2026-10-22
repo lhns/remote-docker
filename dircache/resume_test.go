@@ -20,7 +20,7 @@ func TestAResumedFillDoesNotResendWhatTheCacheHolds(t *testing.T) {
 	edited, _ := baselineOf(root, "edited.go")
 	edited.Size++ // as it was sent, before it changed here
 
-	rec := &memRecord{m: map[string]map[string]Baseline{wbShare: {
+	rec := &fakeRecord{filled: map[string]map[string]Baseline{wbShare: {
 		"/held.go":   held,
 		"/edited.go": edited,
 	}}}
