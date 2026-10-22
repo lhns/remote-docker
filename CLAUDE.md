@@ -1742,7 +1742,11 @@ its pure planning function was.
   because it is only reachable where dockerd outlives the agent (ADR 0025): in a
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
-  the section skips and says so.
+  the section skips and says so. Shared-daemon mode only, since stock dind has
+  no fuse-overlayfs: with a daemon per account, `OpMounted` reads that daemon's
+  namespace only once the restarted agent has adopted it (`Lookup`, never
+  `Ensure`), so write-back resuming there rests on the connect's warm-up
+  adopting it before the first write-back round, which nothing asserts.
 - **`remote set`, and listing or removing tokens.** Unit tested only: `remote
   set` against a config file, and `token ls` and `token rm` on both ends
   (`agent/internal/sshd/manage_test.go` over a real SSH connection,
