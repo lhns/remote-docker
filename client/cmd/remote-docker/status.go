@@ -116,6 +116,9 @@ func reportStatus(out io.Writer, f facts) {
 	for _, cache := range f.local.Caches {
 		row(out, "cache", cache)
 	}
+	for _, line := range f.local.WriteBack {
+		row(out, "write-back", line)
+	}
 
 	// Which builds are in play.
 	_, _ = fmt.Fprintln(out)

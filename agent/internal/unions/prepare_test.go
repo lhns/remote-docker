@@ -224,7 +224,8 @@ func TestApplyGivesUpOnAWedgedUnion(t *testing.T) {
 
 	answered := make(chan error, 1)
 	go func() {
-		answered <- m.Apply(context.Background(), "alice", thisClient, warmExport, cache.CodecNone, strings.NewReader(""))
+		_, err := m.Apply(context.Background(), "alice", thisClient, warmExport, cache.CodecNone, false, strings.NewReader(""))
+		answered <- err
 	}()
 
 	select {

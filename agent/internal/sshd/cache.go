@@ -52,6 +52,8 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		Codecs:  cache.Codecs(),
 		// A prepare's owner is applied to the union's root (ADR 0046).
 		Owner: true,
+		// Opaque directories, links and skipped entries (ADR 0044).
+		Carry: true,
 	}
 	if err := enc.Encode(cache.Reply{Hello: hello}); err != nil {
 		_ = session.Exit(1)
@@ -141,11 +143,17 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Merged: merged}, nil
 
 	case cache.OpApply:
-		err := s.cfg.Unions.Apply(ctx, name, account.Client(), req.Export, req.Codec, io.LimitReader(body, req.Bytes))
+		payload := io.LimitReader(body, req.Bytes)
+		skipped, err := s.cfg.Unions.Apply(ctx, name, account.Client(), req.Export, req.Codec, req.Carry, payload)
+		// Whatever the extraction did not read, whether it failed half way or a
+		// decoder stopped before the end: the next request follows the payload
+		// on the same stream, and read out of the middle of a tar it is garbage
+		// that fails every later request on the channel, for every share.
+		_, _ = io.Copy(io.Discard, payload)
 		if err != nil {
 			return refused(err), nil
 		}
-		return cache.Reply{}, nil
+		return cache.Reply{Skipped: skipped}, nil
 
 	case cache.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, account.Client(), req.Export, req.Paths); err != nil {
@@ -154,7 +162,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
-		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export)
+		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export, req.Carry)
 		if err != nil {
 			return refused(err), nil
 		}
@@ -176,11 +184,18 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Caches: caches}, nil
 
 	case cache.OpPull:
-		pulled, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths)
+		pulled, skipped, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths, req.Carry)
 		if err != nil {
 			return refused(err), nil
 		}
-		return cache.Reply{Bytes: int64(len(pulled))}, pulled
+		return cache.Reply{Bytes: int64(len(pulled)), Skipped: skipped}, pulled
+
+	case cache.OpPresent:
+		here, err := s.cfg.Unions.Present(ctx, name, account.Client(), req.Export, req.Paths)
+		if err != nil {
+			return refused(err), nil
+		}
+		return cache.Reply{Present: here}, nil
 	}
 
 	// Validate has already refused every op this agent does not know, so

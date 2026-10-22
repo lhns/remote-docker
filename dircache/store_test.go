@@ -26,14 +26,14 @@ type fakeStore struct {
 	files map[string]File
 }
 
-func (f *fakeStore) Apply(_ context.Context, _, _ string, entries []Entry) error {
+func (f *fakeStore) Apply(_ context.Context, _, _ string, entries []Entry) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.applyErr != nil {
-		return f.applyErr
+		return nil, f.applyErr
 	}
 	f.applied = append(f.applied, entries...)
-	return nil
+	return nil, nil
 }
 
 func (f *fakeStore) Drop(_ context.Context, _ string, paths []string) error {

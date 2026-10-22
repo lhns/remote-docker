@@ -182,9 +182,10 @@ type liveConn struct {
 	notifyTried bool
 	shut        bool
 
-	// cacheChan is opened on first use and only once, so a workspace too old
-	// for it is not asked per container. cacheErr says why there is none.
-	cacheOnce sync.Once
+	// cacheChan is opened on first use and again when it dies, and a workspace
+	// too old for it is asked once, not per container: cacheErr says why there
+	// is none. cacheMu is held across an open, so callers share one.
+	cacheMu   sync.Mutex
 	cacheChan *cacheChannel
 	cacheErr  error
 

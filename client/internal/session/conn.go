@@ -122,6 +122,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		// Idle until a share has a complete cache (ADR 0044).
 		live.wg.Go(func() { s.cache.WriteBack(liveCtx) })
+		live.wg.Go(func() { s.reattachUnions(liveCtx, live) })
 
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
@@ -256,14 +257,41 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 	})
 }
 
-// ensureCacheChan opens the cache channel once per connection, keeping the
-// error. Lazily, not at connect: a session with only write=through mounts must
-// never ask, so it stays silent against an older workspace.
+// ensureCacheChan is the connection's cache channel, opened on first use and
+// again whenever the one it holds has died (cacheChannel.usable). Lazily, not at
+// connect: a session with only write=through mounts must never ask, so it stays
+// silent against an older workspace.
+//
+// A workspace that never answered the first time is remembered, so one too old
+// for the channel is not asked per container. A channel that worked and then
+// died is a different case: a timeout closes it and the agent may end it, and
+// keeping the corpse for the life of the connection stopped write-back and every
+// fill for as long as a running container held the connection open.
 func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChannel, error) {
-	l.cacheOnce.Do(func() {
-		l.cacheChan, l.cacheErr = openCache(ctx, l.ssh)
-	})
-	return l.cacheChan, l.cacheErr
+	l.cacheMu.Lock()
+	defer l.cacheMu.Unlock()
+
+	if l.cacheChan != nil && l.cacheChan.usable() {
+		return l.cacheChan, nil
+	}
+	if l.cacheChan == nil && l.cacheErr != nil {
+		return nil, l.cacheErr
+	}
+
+	// The dead one is closed: left open it holds an SSH channel and the
+	// agent's handler goroutine for the life of the connection.
+	if l.cacheChan != nil {
+		_ = l.cacheChan.Close()
+	}
+	c, err := openCache(ctx, l.ssh)
+	if err != nil {
+		if l.cacheChan == nil {
+			l.cacheErr = err
+		}
+		return nil, err
+	}
+	l.cacheChan, l.cacheErr = c, nil
+	return c, nil
 }
 
 func (s *Session) shareCacheFor(ctx context.Context, l *liveConn) (rewrite.Cache, error) {

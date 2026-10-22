@@ -652,6 +652,48 @@ else
 fi
 
 
+echo
+echo "== 13. what fuse-overlayfs writes into the cache layer for a deletion =="
+# Write-back reads the layer and has to tell a deletion and a replaced directory
+# from a file the container made (ADR 0044). The kernel overlay records them as
+# a character device 0:0 and an xattr; fuse-overlayfs is documented to use its
+# own marks, and an agent that knows only the kernel's reports the others as the
+# container's files. RECORDED here and not asserted: what the runner prints is
+# the answer, and a change in it should be read rather than turn this red.
+if command -v fuse-overlayfs >/dev/null 2>&1; then
+    WH=$WORK/wh
+    mkdir -p "$WH/lower/tools" "$WH/lower/dir" "$WH/upper" "$WH/work" "$WH/merged"
+    echo old >"$WH/lower/tools/old"
+    echo gone >"$WH/lower/dir/victim"
+    echo kept >"$WH/lower/dir/kept"
+    if sudo fuse-overlayfs -o "lowerdir=$WH/lower,upperdir=$WH/upper,workdir=$WH/work" \
+        "$WH/merged" 2>"$WORK/wh.err"; then
+        # A replaced directory and a deleted file, through the union.
+        sudo sh -c "cd $WH/merged && rm -rf tools && mkdir tools && echo x >tools/new && rm dir/victim"
+        sudo umount "$WH/merged" 2>/dev/null
+
+        report "fuse-overlayfs version" sh -c "fuse-overlayfs --version 2>&1 | head -2"
+        report "the layer, with file types and device numbers" \
+            sudo find "$WH/upper" -printf '%y %m %p rdev=%D size=%s\n'
+        report "character devices in the layer (the kernel's whiteout)" \
+            sudo find "$WH/upper" -type c -ls
+        report "names starting .wh. in the layer (fuse-overlayfs's own marker files)" \
+            sudo find "$WH/upper" -name '.wh.*' -ls
+        report "extended attributes in the layer" \
+            sudo sh -c "command -v getfattr >/dev/null || apt-get install -y -qq attr >/dev/null 2>&1; getfattr -R -d -m - $WH/upper 2>&1"
+        if [ -n "$(sudo find "$WH/upper" -name '.wh.*')" ]; then
+            info "RECORDED: fuse-overlayfs writes .wh. marker files on this runner"
+        else
+            info "RECORDED: fuse-overlayfs writes no .wh. marker files on this runner (device or xattr instead)"
+        fi
+    else
+        info "fuse-overlayfs would not mount for section 13: $(cat "$WORK/wh.err")"
+    fi
+    sudo umount "$WH/merged" 2>/dev/null
+else
+    info "fuse-overlayfs is not available; section 13 is unanswered"
+fi
+
 echo "The answers above decide the design, not the pass count: section 4 says"
 echo "whether a mounted cache can be filled at all, and section 5 says whether"
 echo "hot reload survives it."

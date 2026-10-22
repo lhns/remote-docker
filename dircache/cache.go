@@ -22,7 +22,11 @@ type Store interface {
 	// Apply puts one batch of files, read from root on this machine, into a
 	// share's cache. The Store reads them: it owns the encoding, and the
 	// length it has to declare depends on it.
-	Apply(ctx context.Context, share, root string, entries []Entry) error
+	//
+	// It names the paths of entries the far end could not write and left out,
+	// where the rest of the batch landed. Those are not in the cache, and a
+	// Store whose far end fails the whole batch instead returns none.
+	Apply(ctx context.Context, share, root string, entries []Entry) (skipped []string, err error)
 
 	// Drop removes paths from a share's cache. Any number: a Store that has a
 	// request size to respect splits internally.
@@ -38,6 +42,19 @@ type Store interface {
 	Pull(ctx context.Context, share string, paths []string, into func(File) error) error
 }
 
+// Presenter is a Store that can also say which paths exist in the consumer's
+// merged view of a share (what a container sees, the cache over the live export).
+// Write-back asks it before deleting anything a removed or replaced directory
+// implies; a Store without it, or whose answer fails, deletes nothing that way.
+type Presenter interface {
+	Present(ctx context.Context, share string, paths []string) ([]string, error)
+}
+
+// ErrCannotPresent is a Presenter whose far end cannot answer at all, such as an
+// older consumer. Nothing is deleted on a directory's say-so, and nothing is
+// said about it every round.
+var ErrCannotPresent = errors.New("dircache: the store cannot say which paths exist")
+
 // File is one file coming back out of a cache.
 type File struct {
 	// Path is share-relative with a leading slash, as every path here is.
@@ -49,21 +66,31 @@ type File struct {
 
 	Mode fs.FileMode
 	Body io.Reader
+
+	// Unreadable, with no Body, is a path the store could not read and names
+	// instead of failing the files beside it: why, as a person reads it.
+	Unreadable string
 }
 
 // ErrShareGone is a Store saying it holds no cache for a share.
 var ErrShareGone = errors.New("dircache: the store has no cache for this share")
 
-// Record is every path this machine put in a cache, surviving this process.
+// Record is every path this machine put in a cache, and what each looked like
+// when it went, surviving this process.
 //
-// The only thing that can tell a file deleted while nothing was running from a
-// file the consumer created: a fill only ever writes, so it has no way to
-// notice what is GONE. Saved for every batch, whatever sent it: one that lands
-// unrecorded is a deletion nothing can reconcile. Optional; without one,
-// nothing is ever removed from a cache.
+// The paths are the only thing that can tell a file deleted while nothing was
+// running from a file the consumer created: a fill only ever writes, so it has
+// no way to notice what is GONE. Saved for every batch, whatever sent it: one
+// that lands unrecorded is a deletion nothing can reconcile.
+//
+// The baselines are what write-back compares both sides against, so after a
+// restart a file the consumer modified is still told from one this machine made
+// (ADR 0027, ADR 0044). A path with a zero Baseline was recorded before its
+// batch landed and has none. Optional; without one, nothing is ever removed
+// from a cache and a restarted share carries back only files it never held.
 type Record interface {
-	Filled(share string) ([]string, bool)
-	Record(share string, paths []string)
+	Filled(share string) (map[string]Baseline, bool)
+	Record(share string, filled map[string]Baseline)
 }
 
 // Cache prefetches, invalidates and writes back the caches of the shares it is
@@ -115,6 +142,30 @@ type Cache struct {
 
 	// recording keeps saves of the record in the order they were made.
 	recording sync.Mutex
+
+	// changed is what the consumer was last asked it had changed, per share, for
+	// a few seconds (consumerChanged). One entry per share id this process has
+	// filled, so it is left when a share is forgotten.
+	changedMu sync.Mutex
+	changed   map[string]changedAnswer
+
+	// The rest are seams for tests: how long one call to the store may take,
+	// how one file and one link land here, the clock write-back backs off by,
+	// and the first wait after a failed fill batch. Zero and nil mean
+	// writeBackTimeout, writeUnder, landLink, time.Now and fillBackoffMin.
+	roundBudget time.Duration
+	writeFile   func(r *os.Root, f File) error
+	makeLink    func(r *os.Root, rel, target string) error
+	now         func() time.Time
+	fillBackoff time.Duration
+}
+
+// clock is the time write-back backs off by.
+func (c *Cache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 // ShareOptions is what the caller decided about a share, in this module's
@@ -147,7 +198,7 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 		return
 	}
 	state := &shareState{opts: opts}
-	var filled []string
+	var filled map[string]Baseline
 	if c.Record != nil {
 		filled, _ = c.Record.Filled(share)
 	}
@@ -209,6 +260,20 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 		return nil
 	}
 
+	// Never over a version the consumer has not carried back. A resumed fill
+	// re-sends a file changed here while nothing ran, and if the consumer changed
+	// it too, sending would overwrite the consumer's version and reset the
+	// baseline, so the both-changed rule would never run. If the consumer cannot
+	// be asked the batch fails and is retried, since sending blind is the loss.
+	if sendable, err := c.withoutConsumerChanges(share, store, entries); err != nil {
+		return err
+	} else if len(sendable) != len(entries) {
+		entries = sendable
+		if len(entries) == 0 {
+			return nil
+		}
+	}
+
 	var bytes int64
 	for _, e := range entries {
 		bytes += e.Size
@@ -225,16 +290,105 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	ctx, cancel := context.WithTimeout(c.Ctx, batchTimeout)
 	defer cancel()
 	started := time.Now()
-	if err := store.Apply(ctx, share, root, entries); err != nil {
+	skipped, err := store.Apply(ctx, share, root, entries)
+	if err != nil {
 		return err
 	}
 	c.observeBandwidth(bytes, time.Since(started))
 
+	// What the far end left out is not in the cache, so it is neither recorded
+	// nor compared against: a file the consumer later makes there is the
+	// consumer's, and not the fill's.
+	landed := entries
+	if len(skipped) > 0 {
+		landed = withoutSkipped(entries, skipped)
+		c.unrecord(share, skipped)
+		c.log().Warn("the workspace could not take some files into a share's cache; they are read live",
+			"share", share, "files", len(skipped), "first", strings.TrimPrefix(skipped[0], "/"))
+	}
+
 	c.shares.mu.Lock()
-	state.Sent += len(entries)
+	state.Sent += len(landed)
 	c.shares.mu.Unlock()
-	c.shares.noteSent(share, root, entries)
+	c.shares.noteSent(share, root, landed)
+	c.saveRecord(share)
 	return nil
+}
+
+// changedAnswer is one answer to what the consumer changed.
+type changedAnswer struct {
+	at      time.Time
+	changes map[string]Change
+}
+
+// consumerChangedTTL is how long an answer is reused: a resumed fill sends
+// batches back to back, and each answer is a walk of the consumer's layer.
+const consumerChangedTTL = 2 * time.Second
+
+// consumerChanged is what the consumer reports, by path.
+func (c *Cache) consumerChanged(share string, store Store) (map[string]Change, error) {
+	c.changedMu.Lock()
+	cached, ok := c.changed[share]
+	c.changedMu.Unlock()
+	if ok && c.clock().Sub(cached.at) < consumerChangedTTL {
+		return cached.changes, nil
+	}
+	ctx, cancel := context.WithTimeout(c.Ctx, c.budget())
+	defer cancel()
+	changes, err := store.Changes(ctx, share)
+	if err != nil {
+		return nil, err
+	}
+	byPath := make(map[string]Change, len(changes))
+	for _, ch := range changes {
+		byPath[ch.Path] = ch
+	}
+	c.changedMu.Lock()
+	if c.changed == nil {
+		c.changed = map[string]changedAnswer{}
+	}
+	c.changed[share] = changedAnswer{at: c.clock(), changes: byPath}
+	c.changedMu.Unlock()
+	return byPath, nil
+}
+
+// withoutConsumerChanges is entries less the paths the consumer changed and
+// write-back has not carried back, each said once as a conflict.
+//
+// Only a path the cache already holds can be one: a batch of paths never sent
+// asks nothing, so a first fill does not walk the consumer's layer per batch.
+// A change that is the fill's own copy (the agent cannot always tell, after it
+// restarts) is not the consumer's, and is judged by the baseline as decide does.
+//
+// Never for an ephemeral share: nothing is carried back from one, so there is no
+// rule to protect, and the edit here is the version the container should get.
+func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entry) ([]Entry, error) {
+	if c.shares.ephemeral(share) {
+		return entries, nil
+	}
+	sent := c.shares.sentOf(share, entries)
+	if len(sent) == 0 {
+		return entries, nil
+	}
+	changed, err := c.consumerChanged(share, store)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		p := slashed(e.Path)
+		ch, listed := changed[p]
+		base, held := sent[p]
+		if !held || !listed || (!ch.Deleted && ch.Link == "" && base.carries(ch)) {
+			out = append(out, e)
+			continue
+		}
+		if c.shares.wbConflictNew(share, p, "changed in the container and here before write-back carried it") {
+			c.log().Warn("a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept",
+				"path", strings.TrimPrefix(e.Path, "/"))
+		}
+	}
+	return out, nil
 }
 
 // record saves a batch's paths BEFORE it is applied: a batch cut off midway may
@@ -255,9 +409,20 @@ func (c *Cache) unrecord(share string, paths []string) { c.editRecord(share, pat
 func (c *Cache) editRecord(share string, paths []string, add bool) {
 	c.recording.Lock()
 	defer c.recording.Unlock()
-	if all, changed := c.shares.editRecord(share, paths, add); changed && c.Record != nil {
-		c.Record.Record(share, all)
+	if changed := c.shares.editRecord(share, paths, add); changed && c.Record != nil {
+		c.Record.Record(share, c.shares.snapshot(share))
 	}
+}
+
+// saveRecord saves a share's record as it stands, for a change to the
+// baselines alone.
+func (c *Cache) saveRecord(share string) {
+	if c.Record == nil {
+		return
+	}
+	c.recording.Lock()
+	defer c.recording.Unlock()
+	c.Record.Record(share, c.shares.snapshot(share))
 }
 
 // batchTimeout bounds one send: up to batchBytes over whatever link the store
@@ -319,6 +484,10 @@ type shareState struct {
 
 	// opts is what the share was attached with.
 	opts ShareOptions
+
+	// wb is what write-back remembers between rounds, and fill what the
+	// fill's retry does; wbstate.go and prefetch.go keep them under shares.mu.
+	wb wbState
 }
 
 // Report is what one share has cached, for a status command.
@@ -339,6 +508,16 @@ type Report struct {
 	// Done says the prefetch has finished, and Err why it stopped if it did.
 	Done bool
 	Err  error
+
+	// FillErr is why the last batch failed while the fill is being retried,
+	// and FillRetry when it will be. Both are zero once a batch goes through.
+	FillErr   error
+	FillRetry time.Time
+
+	// WriteBack is the state of carrying the consumer's writes back, and
+	// Ephemeral says there is none: the share discards what the consumer writes.
+	WriteBack WriteBackReport
+	Ephemeral bool
 }
 
 // shares is what this cache knows about each share it holds.
@@ -364,7 +543,7 @@ type shares struct {
 	// baseline write-back compares both sides against, which is what lets it
 	// decide almost every case without comparing two machines' clocks (ADR
 	// 0044).
-	manifests map[string]map[string]baseline
+	manifests map[string]map[string]Baseline
 
 	// recorded is what Record holds for each share: every path any batch sent,
 	// this run or an earlier one, less what has been dropped since.
@@ -379,33 +558,38 @@ func (f *shares) ephemeral(share string) bool {
 	return ok && s.opts.Ephemeral
 }
 
-func (f *shares) set(share, root string, s *shareState, filled []string) {
+func (f *shares) set(share, root string, s *shareState, filled map[string]Baseline) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state == nil {
 		f.state = map[string]*shareState{}
 		f.roots = map[string]string{}
-		f.manifests = map[string]map[string]baseline{}
+		f.manifests = map[string]map[string]Baseline{}
 		f.recorded = map[string]map[string]bool{}
 	}
 	s.Local = root
 	f.state[share] = s
 	f.roots[share] = root
-	f.manifests[share] = map[string]baseline{}
+	f.manifests[share] = map[string]Baseline{}
 	f.recorded[share] = map[string]bool{}
-	for _, p := range filled {
-		f.recorded[share][slashed(p)] = true
+	for p, b := range filled {
+		p = slashed(p)
+		f.recorded[share][p] = true
+		if !b.ModTime.IsZero() {
+			f.manifests[share][p] = b
+		}
 	}
 }
 
-// editRecord adds paths to a share's record, or removes them, and returns the
-// whole record and whether it changed.
-func (f *shares) editRecord(share string, paths []string, add bool) ([]string, bool) {
+// editRecord adds paths to a share's record, or removes them, and reports
+// whether it changed. A path taken out loses its baseline too: it is not in the
+// cache any more, so there is nothing to compare.
+func (f *shares) editRecord(share string, paths []string, add bool) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	recorded, ok := f.recorded[share]
 	if !ok {
-		return nil, false
+		return false
 	}
 	changed := false
 	for _, p := range paths {
@@ -416,10 +600,22 @@ func (f *shares) editRecord(share string, paths []string, add bool) ([]string, b
 				recorded[p] = true
 			} else {
 				delete(recorded, p)
+				delete(f.manifests[share], p)
 			}
 		}
 	}
-	return keys(recorded), changed
+	return changed
+}
+
+// snapshot is a share's record with the baselines it has, for saving.
+func (f *shares) snapshot(share string) map[string]Baseline {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]Baseline, len(f.recorded[share]))
+	for p := range f.recorded[share] {
+		out[p] = f.manifests[share][p]
+	}
+	return out
 }
 
 // recordedPaths is a share's record.
@@ -502,27 +698,63 @@ func (f *shares) noteSent(share, root string, entries []Entry) {
 	}
 	for _, e := range entries {
 		if b, ok := baselineOf(root, e.Path); ok {
+			// A file carried back from the consumer and then sent again
+			// unchanged (the watcher sees the landing as a local change) is
+			// still the consumer's.
+			if old, had := manifest["/"+e.Path]; had && old.Consumer != 0 && old.Size == b.Size && old.ModTime.Equal(b.ModTime) {
+				b.Consumer = old.Consumer
+			}
 			manifest["/"+e.Path] = b
 		}
 	}
 }
 
 // baselineOf is a file as this machine has it now.
-func baselineOf(root, p string) (baseline, bool) {
+func baselineOf(root, p string) (Baseline, bool) {
 	info, err := os.Stat(localPath(root, p))
 	if err != nil {
-		return baseline{}, false
+		return Baseline{}, false
 	}
-	return baseline{Size: info.Size(), ModTime: info.ModTime()}, true
+	return Baseline{Size: info.Size(), ModTime: info.ModTime()}, true
+}
+
+// alreadyHeld names the entries the cache holds from an earlier session: the
+// record has a baseline for each and the file here still matches it. A fill that
+// resumed would otherwise send the whole tree again over whatever a container
+// has written since, and a changed file still goes, as a change here does.
+func (f *shares) alreadyHeld(share, root string, entries []Entry) []string {
+	manifest := f.sentOf(share, entries)
+	var held []string
+	for p, b := range manifest {
+		rel := strings.TrimPrefix(p, "/")
+		if now, ok := baselineOf(root, rel); ok && now.Size == b.Size && now.ModTime.Equal(b.ModTime) {
+			held = append(held, rel)
+		}
+	}
+	return held
+}
+
+// sentOf is the baseline of each entry some batch already put in the cache, by
+// path with a leading slash.
+func (f *shares) sentOf(share string, entries []Entry) map[string]Baseline {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]Baseline{}
+	for _, e := range entries {
+		if b, ok := f.manifests[share][slashed(e.Path)]; ok {
+			out[slashed(e.Path)] = b
+		}
+	}
+	return out
 }
 
 // baselines is a COPY of a share's manifest: the prefetch may still be adding
 // to it while a write-back round decides against it.
-func (f *shares) baselines(share string) map[string]baseline {
+func (f *shares) baselines(share string) map[string]Baseline {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	out := make(map[string]baseline, len(f.manifests[share]))
+	out := make(map[string]Baseline, len(f.manifests[share]))
 	for p, b := range f.manifests[share] {
 		out[p] = b
 	}
@@ -546,8 +778,15 @@ func (f *shares) rebase(share, root string, actions []action) {
 		switch {
 		case a.kind == kindDelete:
 			delete(manifest, a.Path)
+		case a.kind == kindLink:
+			if info, err := os.Lstat(localPath(root, a.Path)); err == nil {
+				manifest[a.Path] = linkBaseline(a.Link, info.ModTime())
+			} else {
+				delete(manifest, a.Path)
+			}
 		case a.kind == kindWrite || (a.kind == kindConflict && a.Wins):
 			if b, ok := baselineOf(root, a.Path); ok {
+				b.Consumer = a.Consumer
 				manifest[a.Path] = b
 			} else {
 				delete(manifest, a.Path)
@@ -563,7 +802,10 @@ func (f *shares) reports() []Report {
 
 	out := make([]Report, 0, len(f.state))
 	for _, state := range f.state {
-		out = append(out, state.Report)
+		r := state.Report
+		r.WriteBack = state.wbReport()
+		r.Ephemeral = state.opts.Ephemeral
+		out = append(out, r)
 	}
 	return out
 }

@@ -48,17 +48,55 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// A batch the store refuses ends the prefetch, and status has to say so. The
-// sender returned with the share neither done nor failed, so status read
-// "filling" for the rest of the session and never named the error.
-func TestAFailedBatchStopsThePrefetchWithItsError(t *testing.T) {
+// A batch the store refuses is retried, never final: a fill that gave up left
+// the share uncached for the rest of the connection and write-back, which waits
+// for a complete cache, with it. Status says why while it is failing, and the
+// share completes once the store takes the batch.
+func TestAFailedBatchIsRetriedUntilTheStoreTakesIt(t *testing.T) {
 	store := &fakeStore{applyErr: errors.New("the workspace refused the batch")}
 	c, root := treeCache(t, store)
+	c.fillBackoff = 5 * time.Millisecond
 	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
 
-	eventually(t, "the prefetch to report its failure", func() bool {
+	eventually(t, "the failure to be reported", func() bool {
 		r := c.Reports()
-		return len(r) == 1 && r[0].Done && r[0].Err != nil
+		return len(r) == 1 && !r[0].Done && r[0].FillErr != nil && !r[0].FillRetry.IsZero()
+	})
+
+	store.mu.Lock()
+	store.applyErr = nil
+	store.mu.Unlock()
+	eventually(t, "the fill to complete once the store takes it", func() bool {
+		r := c.Reports()
+		return len(r) == 1 && r[0].Done && r[0].FillErr == nil && r[0].Stats.Complete()
+	})
+	if n := store.appliedCount(); n != 120 {
+		t.Errorf("%d files were applied after the failures, want the whole tree once", n)
+	}
+}
+
+// The wait after a refused batch doubles up to a bound, and a batch that goes
+// through ends it.
+func TestAFailedBatchBacksOffAndResets(t *testing.T) {
+	store := &fakeStore{applyErr: errors.New("refused")}
+	c, root := treeCache(t, store)
+	c.fillBackoff = 2 * time.Millisecond
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
+
+	p := c.prefetchFor("/m/1111111111111111")
+	eventually(t, "several failures in a row", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.failures >= 3
+	})
+
+	store.mu.Lock()
+	store.applyErr = nil
+	store.mu.Unlock()
+	eventually(t, "the run of failures to end", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.failures == 0
 	})
 }
 

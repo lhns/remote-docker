@@ -2,12 +2,17 @@ package unions
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/lhns/remote-docker/core/cache"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // What the container changed, read out of the cache layer (ADR 0044).
@@ -21,13 +26,32 @@ import (
 // is not: overlayfs leaves a WRITE underneath a mounted union undefined, and
 // says nothing against looking.
 
-// Changes lists what the container did to a share.
-func (m *Manager) Changes(account, client, export string) ([]cache.Change, error) {
+// whiteoutPrefix starts every name an overlay uses for its own marks, which
+// fuse-overlayfs writes as files (see markerOf).
+const whiteoutPrefix = ".wh."
+
+// The names that say a directory hides what its lower held. fuse-overlayfs
+// writes both, a regular file and a character device, beside the opaque
+// attribute (test/union-probe.sh section 13).
+const (
+	opaqueMarker    = ".wh..wh..opq"
+	opaqueMarkerDev = ".wh..opq"
+)
+
+// Changes lists what the container did to a share. With carry it also reports
+// replaced directories and links, which a client that did not ask would read as
+// an ordinary change.
+func (m *Manager) Changes(account, client, export string, carry bool) ([]cache.Change, error) {
 	l, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err
 	}
 
+	return changesIn(l, upper, export, carry)
+}
+
+// changesIn walks one share's cache layer.
+func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error) {
 	// Asked before the walk, because WalkDir reports a root it cannot read
 	// through the same callback as any other entry -- so an upper that is not
 	// there at all comes back as no changes and no error, which is
@@ -38,7 +62,10 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 	}
 
 	var out []cache.Change
-	err = filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
+	// A replaced directory is told by its attribute and by its marker files,
+	// and is one change however many of them say so.
+	opaque := map[string]bool{}
+	err := filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == upper {
 			return nil //nolint:nilerr // an unreadable entry is one this pass does not report
 		}
@@ -53,6 +80,25 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 			return nil
 		}
 
+		// An overlay's own marks are never the container's files. Written into
+		// the user's tree they are names the union cannot hold, and the
+		// deletions they stand for would never arrive.
+		if strings.HasPrefix(d.Name(), whiteoutPrefix) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			if change, ok := markerChange(name, info); ok && (change.Deleted || carry) {
+				if change.Opaque {
+					if opaque[change.Path] {
+						return nil
+					}
+					opaque[change.Path] = true
+				}
+				out = append(out, change)
+			}
+			return nil
+		}
+
 		switch {
 		case isWhiteout(info):
 			// A character device 0:0 is how an overlay records a deletion, and
@@ -62,7 +108,24 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 			return nil
 		case info.IsDir():
 			// A directory in the upper is where a copy-up happened, not a
-			// change in itself. The files inside it are reported on their own.
+			// change in itself, unless it hides what the lower held under it.
+			// The files inside it are reported on their own.
+			if carry && !opaque[name] && opaqueDir(p) {
+				opaque[name] = true
+				out = append(out, cache.Change{Path: name, Opaque: true})
+			}
+			return nil
+		case info.Mode()&fs.ModeSymlink != 0:
+			// Never followed: WalkDir does not enter a linked directory, and
+			// the target is read as text and sent as it is.
+			if !carry {
+				return nil
+			}
+			target, err := os.Readlink(p)
+			if err != nil {
+				return nil
+			}
+			out = append(out, cache.Change{Path: name, Link: target, ModTime: info.ModTime().UnixNano()})
 			return nil
 		case !info.Mode().IsRegular():
 			// A socket or device the container made is not something to carry
@@ -91,38 +154,130 @@ func (m *Manager) Changes(account, client, export string) ([]cache.Change, error
 	return out, nil
 }
 
-// Pull streams the named paths out of the cache layer as a tar.
-func (m *Manager) Pull(account, client, export string, paths []string) ([]byte, error) {
+// markerChange reads a file named like an overlay mark: .wh.<name> is the
+// deletion of <name> beside it, and .wh..wh..opq says the directory it sits in
+// was replaced. Any other .wh. name is the overlay's bookkeeping and means
+// nothing to a client.
+func markerChange(name string, info fs.FileInfo) (cache.Change, bool) {
+	dir, base := path.Split(name)
+	switch {
+	case base == opaqueMarker || base == opaqueMarkerDev:
+		dir = strings.TrimSuffix(dir, "/")
+		if dir == "" {
+			// The share's own root cannot be replaced, and a client told so
+			// would delete everything the fill sent.
+			return cache.Change{}, false
+		}
+		return cache.Change{Path: dir, Opaque: true}, true
+	case strings.HasPrefix(base, whiteoutPrefix+".wh."):
+		return cache.Change{}, false
+	default:
+		if !info.Mode().IsRegular() && info.Mode()&fs.ModeCharDevice == 0 {
+			return cache.Change{}, false
+		}
+		return cache.Change{Path: dir + strings.TrimPrefix(base, whiteoutPrefix), Deleted: true}, true
+	}
+}
+
+// Pull streams the named paths out of the cache layer as a tar. With carry, a
+// path it cannot name or a file it cannot read is left out, named in the
+// returned list and logged, where without it the whole request fails as it
+// always did: one bad file must not starve every file asked for beside it.
+func (m *Manager) Pull(account, client, export string, paths []string, carry bool) ([]byte, []string, error) {
 	_, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pull(upper, paths)
+	tarball, skipped, err := pull(upper, paths, carry)
+	if len(skipped) > 0 {
+		logx.Or(m.Log).Warn("files a container wrote cannot be read to carry them back; they are left out",
+			"export", export, "files", len(skipped), "first", skipped[0].Name, "err", skipped[0].Err)
+	}
+	return tarball, names(skipped), err
 }
 
 // pull is the named paths under upper as a tar. A file that has gone since it
 // was reported is skipped, which is ordinary: the container is still running.
-func pull(upper string, paths []string) ([]byte, error) {
+func pull(upper string, paths []string, carry bool) ([]byte, []cache.Unreadable, error) {
 	r, err := os.OpenRoot(upper)
 	if err != nil {
-		return nil, fmt.Errorf("unions: opening the cache layer: %w", err)
+		return nil, nil, fmt.Errorf("unions: opening the cache layer: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
+	var skipped []cache.Unreadable
 	files := make([]cache.TarFile, 0, len(paths))
 	for _, p := range paths {
 		name, err := within(p)
 		if err != nil {
-			return nil, err
+			if !carry {
+				return nil, nil, err
+			}
+			skipped = append(skipped, cache.Unreadable{Name: p, Err: err})
+			continue
 		}
 		files = append(files, cache.TarFile{Name: name, Path: name})
 	}
 
 	var buf bytes.Buffer
-	if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
+	if !carry {
+		if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
+			return nil, nil, err
+		}
+		return buf.Bytes(), nil, nil
+	}
+	unreadable, err := cache.WriteTarNaming(r.Open, files, &buf)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, u := range unreadable {
+		skipped = append(skipped, cache.Unreadable{Name: "/" + u.Name, Err: u.Err})
+	}
+	return buf.Bytes(), skipped, nil
+}
+
+// names are the share paths of what a pull left out.
+func names(skipped []cache.Unreadable) []string {
+	out := make([]string, 0, len(skipped))
+	for _, s := range skipped {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// Present answers which of the paths exist in the merged view of a share, by
+// lstat and never following a link. The merged view is what a container sees:
+// a file a client wrote through the union is there although the cache layer
+// listing hides it, and a file the container deleted is not.
+func (m *Manager) Present(ctx context.Context, account, client, export string, paths []string) ([]string, error) {
+	_, root, err := m.mergedRoot(ctx, account, client, export)
+	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	return present(root, paths)
+}
+
+func present(root string, paths []string) ([]string, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("unions: opening the share: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	var out []string
+	for _, p := range paths {
+		name, err := within(p)
+		if err != nil {
+			// Cannot be asked about, so it is not claimed absent.
+			out = append(out, p)
+			continue
+		}
+		if _, err := r.Lstat(name); err == nil || !errors.Is(err, os.ErrNotExist) {
+			// Present, or an error that is not "absent": keep.
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.

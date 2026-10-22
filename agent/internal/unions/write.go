@@ -34,24 +34,28 @@ import (
 // that names an encoding this version does not have must not be handed to the
 // archive reader, which would fail somewhere inside it with a message about a
 // corrupt header instead of about the codec.
-func (m *Manager) Apply(ctx context.Context, account, client, export, codec string, body io.Reader) error {
+//
+// With carry, an entry that cannot be written is left out and named in the
+// answer, and the rest of the batch lands (cache.Request.Carry); without it the
+// first such entry fails the batch, as it always did.
+func (m *Manager) Apply(ctx context.Context, account, client, export, codec string, carry bool, body io.Reader) ([]string, error) {
 	l, root, err := m.mergedRoot(ctx, account, client, export)
 	if err != nil {
 		// The payload still has to be drained, or the next frame is read out
 		// of the middle of a tar. The caller cannot do it: only here is it
 		// known that nothing consumed the body.
 		_, _ = io.Copy(io.Discard, body)
-		return err
+		return nil, err
 	}
 
 	decoded, done, err := decoded(codec, body)
 	if err != nil {
 		_, _ = io.Copy(io.Discard, body)
-		return err
+		return nil, err
 	}
 	defer done()
 
-	return extract(root, decoded, func(name string, info os.FileInfo) {
+	return extractWith(root, decoded, carry, func(name string, info os.FileInfo) {
 		l.noteApplied(name, info.Size(), info.ModTime())
 	})
 }
@@ -62,24 +66,45 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 // every filled file would read as a container write for the rest of the
 // session.
 func extract(root string, body io.Reader, landed func(name string, info os.FileInfo)) error {
+	_, err := extractWith(root, body, false, landed)
+	return err
+}
+
+// extractWith is extract that, when skip is set, leaves out an entry it cannot
+// write and returns its path instead of failing. A file this entry CREATED and
+// could not finish is removed, so a container is not served it short. One that
+// was already there is left: the root is the merged mount, so a removal would
+// be a whiteout, which hides the live file instead of falling through to it. The
+// tar reader steps past what is unread of the entry, so the batch stays in
+// frame.
+func extractWith(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		return fmt.Errorf("unions: opening the share: %w", err)
+		return nil, fmt.Errorf("unions: opening the share: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
+	var skipped []string
 	tr := tar.NewReader(body)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return skipped, nil
 		}
 		if err != nil {
-			return fmt.Errorf("unions: reading a batch: %w", err)
+			return skipped, fmt.Errorf("unions: reading a batch: %w", err)
 		}
-		info, err := writeEntry(r, header, tr)
+		created := false
+		info, err := writeEntry(r, header, tr, &created)
 		if err != nil {
-			return err
+			if !skip {
+				return nil, err
+			}
+			if target, werr := within(header.Name); werr == nil && created {
+				_ = r.Remove(target)
+			}
+			skipped = append(skipped, "/"+strings.TrimPrefix(header.Name, "/"))
+			continue
 		}
 		if info != nil {
 			landed("/"+strings.TrimPrefix(header.Name, "/"), info)
@@ -94,7 +119,7 @@ func extract(root string, body io.Reader, landed func(name string, info os.FileI
 // is skipped rather than refused: the client does not send them, and a batch
 // that failed because of one would leave the cache half applied for a file
 // nothing can use anyway.
-func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, error) {
+func writeEntry(r *os.Root, header *tar.Header, body io.Reader, created *bool) (os.FileInfo, error) {
 	target, err := within(header.Name)
 	if err != nil {
 		return nil, err
@@ -126,7 +151,18 @@ func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, er
 		// Not a temporary renamed over the target: fuse-overlayfs forgets that
 		// a renamed-in file hides one in the lower, so a later `rm` of it
 		// shows the lower's file again (test/union-probe.sh section 6d).
-		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE, header.FileInfo().Mode().Perm())
+		//
+		// Created exclusively when it is not there, so the entry knows whether
+		// the file is its own: only a file this entry created is ever removed
+		// after a failed write. A rename of a temporary would give the same
+		// guarantee and is the thing the paragraph above rules out. A file that
+		// appeared since (the container made it) is opened as an existing one.
+		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, header.FileInfo().Mode().Perm())
+		if err == nil {
+			*created = true
+		} else if errors.Is(err, os.ErrExist) {
+			f, err = r.OpenFile(target, os.O_WRONLY|os.O_CREATE, header.FileInfo().Mode().Perm())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}

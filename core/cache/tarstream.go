@@ -15,6 +15,7 @@ package cache
 
 import (
 	"archive/tar"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,4 +108,75 @@ func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Wri
 	}
 
 	return tw.Close()
+}
+
+// Unreadable is one file WriteTarNaming left out, and why.
+type Unreadable struct {
+	Name string
+	Err  error
+}
+
+// WriteTarNaming is WriteTarFrom for a pull under Carry: a file that is there
+// and cannot be read is left out and NAMED, never failing the archive, so one
+// bad file costs itself and not every file asked for beside it. A file that has
+// gone, or is no longer a regular file, is left out silently as before: the
+// next listing reports what it is now.
+//
+// Each file is read whole before its header is written, since a header once out
+// has to be followed by that many bytes; a read failing half way would leave a
+// choice between NULs, which are a wrong file, and failing the archive.
+func WriteTarNaming(open func(string) (*os.File, error), files []TarFile, w io.Writer) ([]Unreadable, error) {
+	tw := tar.NewWriter(w)
+	var unreadable []Unreadable
+
+	for _, file := range files {
+		data, info, err := readWhole(open, file.Path)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				unreadable = append(unreadable, Unreadable{Name: file.Name, Err: err})
+			}
+			continue
+		}
+		if info == nil {
+			continue
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			unreadable = append(unreadable, Unreadable{Name: file.Name, Err: err})
+			continue
+		}
+		header.Name = file.Name
+		header.Size = int64(len(data))
+		header.Uid, header.Gid = 0, 0
+		header.Uname, header.Gname = "", ""
+		if err := tw.WriteHeader(header); err != nil {
+			return nil, fmt.Errorf("workspace: writing the header for %s: %w", file.Name, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return nil, fmt.Errorf("workspace: writing %s: %w", file.Name, err)
+		}
+	}
+	return unreadable, tw.Close()
+}
+
+// readWhole is a regular file's bytes, at most its size when opened, and its
+// info; a nil info with no error is a path that is no longer a regular file.
+func readWhole(open func(string) (*os.File, error), path string) ([]byte, os.FileInfo, error) {
+	f, err := open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(f, info.Size()))
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, info, nil
 }

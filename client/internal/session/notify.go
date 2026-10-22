@@ -186,10 +186,15 @@ func (s *Session) closeWatcher() {
 }
 
 // shareRestored is told of a share brought back from the record, which no
-// mount registered: if it watches, the watcher must exist and know it now, or
-// a container started against it is served unwatched until the next
-// reconcile.
+// mount registered: a union goes to the cache, and if it watches, the watcher
+// must exist and know it now, or a container started against it is served
+// unwatched until the next reconcile.
 func (s *Session) shareRestored(share *nfsserve.Share) {
+	// Attached with the words it was recorded with, prefetch included: its fill
+	// resumes, and its write-back starts again.
+	if share.Mode.Union() {
+		s.attachShare(share.ExportPath, share.LocalPath, share.Mode, share.Words())
+	}
 	if !share.Words().Watch.Watching() {
 		return
 	}
@@ -234,4 +239,60 @@ func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 			s.syncWatch()
 		}
 	}
+}
+
+// reattachUnions brings back the shares a running container still binds, as
+// soon as the session is connected, and does not wait for the container to touch
+// its mount.
+//
+// A restored share is attached to the cache and so is write-back for it
+// (shareRestored), but restoring waits for a MOUNT or a root handle the kernel
+// presents, and a container that only writes into its union presents neither: a
+// restarted client then never carried its writes back. The workspace knows which
+// unions are mounted, and the record knows which of them are this machine's, so
+// the two together name exactly the shares to restore. A share the workspace
+// holds no union for is left to the lazy path, and a workspace too old to answer
+// is left alone.
+func (s *Session) reattachUnions(ctx context.Context, live *liveConn) {
+	if s.shares == nil || s.cache == nil {
+		return
+	}
+	// Only when a union is recorded: a session with none must never ask, so it
+	// stays silent against a workspace too old for the channel.
+	recorded := s.shares.unionExports()
+	if len(recorded) == 0 {
+		return
+	}
+	// Through the connection being built, not the gate: this runs inside the
+	// connect, before the gate holds the connection.
+	ch, err := s.ensureCacheChan(ctx, live)
+	if err == nil {
+		var names []string
+		names, err = ch.Mounted(ctx)
+		if err == nil {
+			s.restoreMounted(live, recorded, names)
+			return
+		}
+	}
+	s.logQuiet(ctx, "could not ask which unions are mounted; a recorded union is restored when its container touches it", "err", err)
+}
+
+// restoreMounted restores the recorded unions whose cache volume is in names.
+func (s *Session) restoreMounted(live *liveConn, recorded, names []string) {
+	mounted := make(map[string]bool, len(names))
+	for _, n := range names {
+		mounted[n] = true
+	}
+	restored := 0
+	for _, export := range recorded {
+		volume, err := workspace.CacheVolumeForExport(live.clientID, export)
+		if err != nil || !mounted[volume] {
+			continue
+		}
+		if _, _, ok := s.registry.LookupOrRestore(export); ok {
+			restored++
+		}
+	}
+	s.log().Info("looked for recorded unions the workspace still has mounted",
+		"recorded", len(recorded), "mounted", len(names), "restored", restored)
 }

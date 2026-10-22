@@ -146,15 +146,36 @@ func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 	if err != nil {
 		return
 	}
-	keep := make(map[string]bool, len(volumes))
+	names := make([]string, 0, len(volumes))
 	for _, v := range volumes {
-		client, share, ok := workspace.ParseVolumeName(v.Name)
-		if !ok || (client != "" && client != live.clientID) {
+		names = append(names, v.Name)
+	}
+	var registered []string
+	for _, share := range s.registry.Shares() {
+		registered = append(registered, share.ExportPath)
+	}
+	s.shares.forget(recordsToKeep(names, live.clientID, registered))
+}
+
+// recordsToKeep is the exports whose record survives a prune: those this machine
+// has a volume for, and those this session has registered. The second matters
+// because a share is registered, and recorded, BEFORE its volume exists (a
+// union is prepared first, which takes seconds), so a prune landing in that gap
+// forgot the record of a share a container was about to bind, and a client
+// restarted under that container could not restore it.
+func recordsToKeep(volumeNames []string, clientID string, registered []string) map[string]bool {
+	keep := make(map[string]bool, len(volumeNames)+len(registered))
+	for _, name := range volumeNames {
+		client, share, ok := workspace.ParseVolumeName(name)
+		if !ok || (client != "" && client != clientID) {
 			continue
 		}
 		keep[workspace.ExportPathForID(share)] = true
 	}
-	s.shares.forget(keep)
+	for _, export := range registered {
+		keep[export] = true
+	}
+	return keep
 }
 
 func (s *Session) collector(live *liveConn) *rewrite.Collector {
@@ -221,6 +242,7 @@ func (s *Session) Status() any {
 		st.Storage = live.info.Storage
 	}
 	st.Caches = s.cacheStatus()
+	st.WriteBack = s.writeBackStatus()
 	return st
 }
 
@@ -330,6 +352,8 @@ func (s *Session) cacheStatus() []string {
 		switch {
 		case r.Err != nil:
 			what = "stopped: " + r.Err.Error()
+		case !r.Done && r.FillErr != nil:
+			what = "filling, and retrying at " + r.FillRetry.Format(time.TimeOnly) + " after: " + r.FillErr.Error()
 		case !r.Done:
 		case stats.Complete():
 			what = "cached"

@@ -57,6 +57,14 @@ const (
 	// walkEvery is how often the walk looks for a gap to fill.
 	walkEvery = 500 * time.Millisecond
 
+	// fillBackoffMin and fillBackoffMax bound the wait after a batch the store
+	// refused. A fill that gives up leaves the share uncached for good, and
+	// write-back, which waits for a complete cache, with it; so it is retried
+	// for as long as the share lives, quickly at first and then every few
+	// minutes.
+	fillBackoffMin = time.Second
+	fillBackoffMax = 5 * time.Minute
+
 	// bandwidthFloor is the smallest batch a bandwidth estimate is taken
 	// from. A batch under it is spent mostly on the round trip, so timing
 	// it says nothing about the link's throughput.
@@ -78,6 +86,11 @@ type prefetch struct {
 	queue    [][]Entry // demand batches, in order
 	lastRead time.Time // when a read last arrived, for the walk to yield to
 	walked   bool      // the walk has yielded everything it will
+
+	// failures counts batches in a row the store refused, and retryAt is when
+	// the next may go.
+	failures int
+	retryAt  time.Time
 
 	kick chan struct{} // the sender is woken, never blocked
 }
@@ -218,8 +231,12 @@ func (c *Cache) feedTree(p *prefetch) {
 		if len(pending) == 0 {
 			return
 		}
+		held := c.shares.alreadyHeld(p.share, p.root, pending)
 		p.mu.Lock()
 		p.tree.Add(pending)
+		for _, path := range held {
+			p.tree.MarkSent(path)
+		}
 		p.mu.Unlock()
 		pending = nil
 	}
@@ -237,6 +254,11 @@ func (c *Cache) feedTree(p *prefetch) {
 	c.shares.mu.Lock()
 	p.state.Stats = stats
 	c.shares.mu.Unlock()
+	if stats.Markers > 0 {
+		c.log().Warn("files named like an overlay marker are not copied to the share's cache; they are read live. "+
+			"They are leftovers of an overlay and safe to delete",
+			"share", p.share, "files", stats.Markers, "first", stats.FirstMarker)
+	}
 	p.wake()
 }
 
@@ -268,12 +290,10 @@ func (c *Cache) send(p *prefetch) {
 				break
 			}
 			if err := c.sendBatch(p.share, p.root, batch, p.state); err != nil {
-				// Said once, and kept for status. The share is served live
-				// meanwhile, and the next connection starts a new prefetch.
-				c.quiet(c.Ctx, "a share's prefetch could not be sent", "share", p.share, "demand", demand, "err", err)
-				c.shares.finish(p.state, false, err)
-				return
+				c.batchFailed(p, batch, demand, err)
+				break
 			}
+			c.batchSent(p)
 			// The link as now measured, so the next decision uses it. The
 			// tree is not rebuilt for this and forgets nothing.
 			p.mu.Lock()
@@ -284,12 +304,62 @@ func (c *Cache) send(p *prefetch) {
 	}
 }
 
+// batchFailed takes a refused batch back and schedules the next try. The share
+// is served live meanwhile, and the batch is sent again, so a fill is never
+// final: said once when it first fails, and kept for status.
+func (c *Cache) batchFailed(p *prefetch, batch []Entry, demand bool, err error) {
+	base := c.fillBackoff
+	if base <= 0 {
+		base = fillBackoffMin
+	}
+	p.mu.Lock()
+	p.tree.Unstore(batch)
+	delay := base
+	for i := 0; i < p.failures && delay < fillBackoffMax; i++ {
+		delay *= 2
+	}
+	delay = min(delay, fillBackoffMax)
+	first := p.failures == 0
+	p.failures++
+	p.retryAt = time.Now().Add(delay)
+	retryAt := p.retryAt
+	p.mu.Unlock()
+
+	c.shares.mu.Lock()
+	p.state.FillErr, p.state.FillRetry = err, retryAt
+	c.shares.mu.Unlock()
+
+	if first {
+		c.quiet(c.Ctx, "a share's prefetch could not be sent; it is retried", "share", p.share,
+			"demand", demand, "err", err, "retry in", delay.Round(time.Millisecond))
+	}
+	time.AfterFunc(delay, p.wake)
+}
+
+// batchSent ends a run of failures.
+func (c *Cache) batchSent(p *prefetch) {
+	p.mu.Lock()
+	again := p.failures > 0
+	p.failures, p.retryAt = 0, time.Time{}
+	p.mu.Unlock()
+	if !again {
+		return
+	}
+	c.shares.mu.Lock()
+	p.state.FillErr, p.state.FillRetry = nil, time.Time{}
+	c.shares.mu.Unlock()
+	c.log().Info("a share's prefetch is sending again", "share", p.share)
+}
+
 // next is what to send now: a queued demand batch, else, if the consumer
 // has been quiet and the budget allows, the walk's smallest unstored files.
 func (c *Cache) next(p *prefetch) (batch []Entry, demand bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if time.Now().Before(p.retryAt) {
+		return nil, false
+	}
 	if len(p.queue) > 0 {
 		batch, p.queue = p.queue[0], p.queue[1:]
 		return batch, true

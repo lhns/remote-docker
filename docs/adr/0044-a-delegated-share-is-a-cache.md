@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-15
+- Date: 2026-09-01, last amended 2026-10-21
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -12,6 +12,18 @@
   cache is the cache and the union is where a batch lands ([ADR 0045](0045-prefetch-follows-the-reads.md)).
   A landed file is overwritten in place, never emptied first and never renamed
   in; write-back on this machine renames a complete temporary over the file.
+  Amended 2026-10-21: write-back never stops for good. It progresses per file
+  with a deadline per call, tells a failure that mends (a full disk, the
+  network) from one that never will (a name this machine cannot hold), backs
+  off from 5s to 1 min and says so in `remote status`. The cache channel is
+  reopened when it dies, a failed fill batch is retried and never final, and
+  the agent drains a payload it did not read. An overlay's own marks are read
+  and never written into the user's tree; a replaced directory and a link the
+  container made come back (`Change.Opaque`, `Change.Link`, negotiated by
+  `Hello.Carry`). Nothing is deleted or overwritten here without checking the
+  ground truth as it is done: a deletion a directory implies only if the
+  consumer's merged view confirms it (`OpPresent`), and every path only if this
+  machine still has what decide saw.
 
 ## What forced it
 
@@ -296,7 +308,139 @@ baseline is the fill's copy; anything else is the container's.
   never sent looks exactly like one the container created, and the cost is
   content appearing in somebody's source tree that they never wrote.
 
+### Write-back never stops for good (amended 2026-10-21)
+
+It did. A user building `node_modules` on a Windows disk that filled had
+write-back stop and never resume, and the log said `has no cache: no union for
+this share`, `writing tools/.wh..wh..opq: ... invalid argument` and a repeated
+`a cache session ended err=EOF`. CI reproduced the cause before anything was
+fixed (PR 342); the causes, in the order they compound:
+
+| cause | what it did | answer |
+|---|---|---|
+| fuse-overlayfs writes a replaced directory as `trusted.overlay.opaque=y` AND a character device `.wh..opq` AND a regular file `.wh..wh..opq`; a deleted file is a char device 0:0 (`test/union-probe.sh` section 13, fuse-overlayfs 1.13-dev) | the regular marker was reported as the container's file, written into the user's tree, then sent back by the fill or an invalidation, which fuse-overlayfs refuses with EINVAL | the agent reads `.wh.<name>` as a deletion and `.wh..wh..opq`, `.wh..opq` and the xattr as one `Opaque` directory; the client refuses any `.wh.` component both ways and says the file is a leftover safe to delete |
+| a failed apply left the rest of its tar unread | the next request was read out of the middle of it: every request on the channel, for every share, then failed with `invalid character ... looking for beginning of value`, which is the repeated session end | the agent drains the payload whatever the extraction did |
+| the channel was opened once per connection | after that, or after any timeout (which closes the stream), nothing could be asked until the connection was replaced, which a running container can prevent for ever | `cacheChannel` marks itself dead on a closed stream or a failed read or write, and `ensureCacheChan` reopens it, one open at a time. A refusal in words (`Reply.Err`) does not retire it |
+| a failed fill batch ended the fill | the share was never complete, so write-back, which waits for a complete cache, never ran | a refused batch is taken back out of the tree and retried, 1s doubling to 5 min, said once; status shows the error and the next try |
+| one round was all or nothing, under one 2 minute deadline | a burst bigger than the budget moved nothing, and one file this machine refuses stopped every file behind it | a deadline per call, 200 files per pull, at most 2,000 landed per pass; the manifest and the record move per file |
+| a restart dropped the baselines | a restored share was not attached, and the record held paths and not baselines, so a file the container modified read as one this machine might have made and was never carried back | a restored share is attached with its recorded words (ADR 0027) and the fill record persists each file's size and time beside its path |
+
+Fixing those exposed three more, each found by CI after the first fixes:
+
+| cause | what it did | answer |
+|---|---|---|
+| a landed file keeps its time to the second (a tar does), and the consumer's own reading never equals that | the same version read as a new change every round and was written back again, which with passes of 2,000 files became a loop | `Baseline.Consumer` remembers the consumer's time for a version carried back, and persists |
+| a directory the container made reads as opaque, and a file written back into it stops being listed once the watcher sends it to the cache again (the agent hides what the client applied) | `expandReplaced` read the silence as the consumer deleting it: write-back deleted each file it had just landed, the watcher dropped it from the cache, and 5,000 files made in the container were gone within seconds | a file carried back from the consumer (`Consumer != 0`, kept by `noteSent` while unchanged) is never deleted on a directory's say-so |
+| a share is recorded before its volume exists (a union is prepared first, which takes seconds), and the prune after connect forgot records with no volume | a client restarted under that container had no record to restore | a prune keeps the record of every share this session has registered |
+| restoring waited for a MOUNT or root handle | a container that only writes into its union presents neither, so a restarted client carried back nothing | the session restores the recorded unions the workspace reports mounted as it connects (ADR 0027) |
+| a resumed fill sent the whole tree again | it overwrote what a running container had written over those files | the fill skips what the record says went and has not changed here (`alreadyHeld`, `Tree.MarkSent`) |
+
+A review of those fixes on 2026-10-21 found ways write-back could still take
+the user's own work. The rule behind every answer: **nothing here is deleted or
+overwritten on bookkeeping or on the absence of a report; each is checked
+against the ground truth at the moment it is acted on.**
+
+| cause | what it did | answer |
+|---|---|---|
+| the agent lists a replaced directory on every Changes while its marker exists, and hides what the client wrote into it | a file this machine created or edited there (the watcher sent it to the cache) read as deleted by the container, and was deleted here and then from the container | a deletion a directory implies is acted on only for a path the consumer's MERGED view confirms absent: `OpPresent`, lstat through the merged mount, never following a link. Present, an error or an agent without `Hello.Carry` all mean keep, and with such an agent no deletion is implied at all |
+| the candidates were computed after skipped changes were set aside | a link this account could not make at `D/F` read next round as the deletion of the user's `D/F` | the candidates come from every change reported |
+| decide looked at this machine once, and a pass lands up to 2,000 files over minutes | a file edited here meanwhile was overwritten; one created here meanwhile was replaced | each action carries what decide saw (exists, size, time, link target) and it is compared with a fresh stat just before the remove, the link or the rename (`stillAsSeen`, `writeUnderGuarded`); a path that changed is left, said once, and decided afresh |
+| one failed pull chunk ended the pass, and the agent failed the chunk for one file | an unreadable file starved every file behind it, and so did 2,000 files that never land | a failed chunk ends only itself (three in a row end the pass); under `Carry` the agent's pull names a file it cannot read in `Reply.Skipped`, which is set aside until its change differs; paths that keep failing rank behind the rest; a pass that landed anything backs off only 5s |
+| a resumed fill re-sent a file changed here while nothing ran | when the container had changed it too, its version was overwritten in the cache and the baseline reset, so the both-changed rule never ran | the fill leaves out a path it sent before that the consumer lists as changed (and not as the fill's own copy, which an agent that restarted also lists), says so once, and write-back decides it with the persisted baseline. Only the fill: an invalidation is the user writing now, and leaving it out would keep the container on its version for good once a conflict kept the user's |
+| a conflict was logged every round | the log said "your file is kept" every 5s | said once per path, again only after the path lands or stops being listed |
+| the agent removed a file after a failed write if it had not existed a moment before | a file the container created in that moment was removed | the file is opened `O_EXCL` when absent, so only a file the entry created is removed; a temporary renamed in would do the same and is what a landed file must not be (above) |
+| a dead cache channel was replaced and left open | an SSH channel and an agent handler leaked per failure | closed when replaced |
+
+**What a failed write means.** `classifyWrite` sorts it, by platform:
+
+| class | errors | what happens |
+|---|---|---|
+| space | ENOSPC, EDQUOT; Windows 112, 39 | the pass stops, the share backs off 5s doubling to 1 min and resets on success, and the file and the changes behind it stay pending |
+| name | EINVAL, ENAMETOOLONG, EILSEQ; Windows 123, 206, 1314; a path leaving the share; a case collision | that path is given up on and named once, in the log and in `remote status`, and tried again only when its change differs; the others carry on |
+| other | anything else, such as a file another program holds | left for the next round with the same backoff; the others carry on |
+| unreadable | the agent could not read it (`Reply.Skipped` on a pull) | given up on like a name, until its change differs |
+
+A pass that landed anything waits only the 5s floor, whatever else failed, so
+one file that never lands does not slow every other to once a minute.
+
+One Warn says a share stalled (why, the first path, how many are pending, when
+it tries next) and one Info says it moved again.
+
+**An overlay marker never reaches the user's tree.** A name starting `.wh.` is
+the union's own vocabulary and no file can be named so inside one. The agent
+reports `.wh.<name>` as `<name>` deleted; the client drops any change with such
+a component, an older agent's included, and the fill and an invalidation leave
+such a name out and warn once.
+
+**A removed or replaced directory is expanded on the client, and confirmed.**
+The layer says a deletion once, at the level it happened: a whiteout for a
+directory, or an `Opaque` directory. The client takes every path the FILL SENT
+under it as a candidate (`replacedDeletions`), asks the consumer which of them
+its merged view still has (`OpPresent`), and deletes only what is confirmed
+gone; each deletion then goes through `decide` like any other, so a file
+changed here since is kept and reported. The listing cannot answer this alone:
+the agent hides what the client wrote through the union, so a file the user
+created or edited there is silent in it exactly like one the container deleted.
+A file the fill never sent is deliberately not touched: under `prefetch=tree`
+most of a large tree was never sent, and a directory the container replaced
+leaves what was only ever on this machine, where it was.
+
+**Links are carried back by the rule the live share already follows**
+(README, "What differs from a bind mount"; `core-client/nfsserve/symlink.go`):
+make the link if this machine allows it, otherwise say so once and let nothing
+stand in for it. The agent reports a link in the layer with its target, verbatim
+and never followed; the client makes it under the share's `os.Root` through a
+temporary and a rename. An absolute target, or one leading out of the share, is
+still made: a link is a name and making one writes nothing through it, and
+`os.Root` keeps every later write from following it out. Without Developer
+Mode or elevation Windows refuses (1314): the link is a permanent per-path skip,
+counted and named in status, and never a copy of its target or a junction. A
+link here that differs from the container's is kept and reported. The fill does
+not send links, as before: the live export serves them on a read that falls
+through.
+
+**Negotiated, and nothing breaks across versions.** `cache.Hello.Carry` is the
+agent announcing it; `Request.Carry` is the client asking, and only if announced.
+An agent that has not got it ignores the field, so it reports no link or
+replaced directory (status says the workspace is too old, with the fix), and
+fails a batch on an unwritable entry as it always did. With `Carry` the agent
+leaves such an entry out and names it in `Reply.Skipped`; the client takes it
+out of the record and the manifest, so the file is read live and a copy the
+consumer makes later is the consumer's. A client without it never sees a field
+it would misread: a link reported to it would read as an empty file. Under
+`Carry` a pull names a file it cannot read in `Reply.Skipped` instead of failing
+the chunk, and `OpPresent` answers which paths the merged view has; a client
+facing an agent without `Carry` never asks it, and implies no deletion at all.
+
+**Deliberately not carried back:** a name this machine refuses (named once), a
+case collision on a filesystem that treats the two names as one (named once;
+landing it would replace the other file), a link this account may not make, and
+under `prefetch=tree` or `off` the files a replaced directory hid that the fill
+never sent.
+
+**A link write-back made is then invalidated like any change.** The watcher sees
+it, `invalidate` stats it (following the link) and sends the target's bytes under
+the link's name, and the agent writes them through the union. That is wasteful
+and not lossy: the content is the target's own. Skipping links there would
+leave a stale regular copy shadowing a file later replaced by a link, and a
+drop would be a whiteout over the lower's link, so it is left as it was.
+
+**Not decided here.** Whether a connection released while a container still
+writes can lose its tail, and whether the client should prepare a union again
+(which adopts) before it forgets a share for `no union for this share`, are
+open; the first is not shown by `integration.sh` 16b (18 files, no client
+command, three minutes), the second is a design change for the owner.
+
 ## What it measured
+
+- **Write-back reproductions, 2026-10-21 (PR 342).** On main: a directory the
+  container replaced left `tools/old` here and wrote `tools/.wh..wh..opq` into
+  the tree; a restarted client carried back neither a modified file nor a new
+  one; every request after the first failed apply answered `invalid character`;
+  and a Windows client never received `good` created beside `bad?name`. A full
+  disk (a 2 MiB tmpfs for a 4 MiB file) recovered by itself, 5,000 files in one
+  burst all arrived, and a container writing a file every 10s for three minutes
+  with no client command lost none.
 
 `test/bench.sh` on a GitHub runner, 2026-09-01, 300 files, ALL ROWS FROM ONE
 RUN. Seconds; `nfs_ops` is what the mount was asked for during the read.

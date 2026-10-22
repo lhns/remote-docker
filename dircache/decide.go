@@ -30,10 +30,31 @@ import (
 	"time"
 )
 
-// baseline is what the fill sent, for one path.
-type baseline struct {
+// Baseline is what the fill sent, for one path: the size and modification time
+// it had on THIS machine when it went.
+type Baseline struct {
 	Size    int64
 	ModTime time.Time
+
+	// Consumer is the modification time, in Unix nanoseconds on the consumer's
+	// clock, of a version this machine carried back from it. What landed here
+	// keeps a time to the second at best (a tar does), so the consumer's own
+	// reading of that file never equals ModTime again; without this the same
+	// version reads as a new change every round and is written back for ever.
+	// Zero for what the fill sent.
+	Consumer int64
+}
+
+// carries reports whether a change is exactly the version this baseline stands
+// for: a copy of the fill's, or one already carried back.
+func (b Baseline) carries(c Change) bool {
+	if c.Size != b.Size {
+		return false
+	}
+	if b.Consumer != 0 && c.ModTime == b.Consumer {
+		return true
+	}
+	return time.Unix(0, c.ModTime).Equal(b.ModTime)
 }
 
 // kind is what to do about one path.
@@ -50,6 +71,9 @@ const (
 	// kindConflict means both sides changed it. Reported whichever way it
 	// resolves, because silently choosing is the one thing this must not do.
 	kindConflict
+
+	// kindLink makes the symbolic link the consumer made (action.Link).
+	kindLink
 )
 
 func (k kind) String() string {
@@ -58,6 +82,8 @@ func (k kind) String() string {
 		return "write"
 	case kindDelete:
 		return "delete"
+	case kindLink:
+		return "link"
 	default:
 		return "conflict"
 	}
@@ -75,6 +101,40 @@ type action struct {
 
 	// Why is the one line a person is shown for a conflict.
 	Why string
+
+	// Link is the target of a kindLink, verbatim.
+	Link string
+
+	// Consumer is the consumer's modification time of the version a write
+	// carries back (Baseline.Consumer).
+	Consumer int64
+
+	// Seen is this machine's state of the path when it was decided, and
+	// LinkSeen the same for a link. A pass can run for minutes, so each is
+	// checked again immediately before the path is touched, and a path that
+	// changed here since is left alone.
+	Seen     seenState
+	LinkSeen linkState
+}
+
+// seenState is what this machine had at a path: whether it existed, and its
+// size and modification time.
+type seenState struct {
+	Here bool
+	Size int64
+	Mod  time.Time
+}
+
+func seenOf(info fs.FileInfo, here bool) seenState {
+	if !here || info == nil {
+		return seenState{}
+	}
+	return seenState{Here: true, Size: info.Size(), Mod: info.ModTime()}
+}
+
+// same reports whether now is what was seen.
+func (s seenState) same(now seenState) bool {
+	return s.Here == now.Here && s.Size == now.Size && s.Mod.Equal(now.Mod)
 }
 
 // localAt is what this machine knows about a path: its current state, or nothing
@@ -96,7 +156,7 @@ type localAt func(path string) (fs.FileInfo, bool)
 // run did not send and this machine no longer has was deleted here, and a
 // cached copy of it is not the consumer's to bring back.
 func decide(
-	manifest map[string]baseline,
+	manifest map[string]Baseline,
 	recorded map[string]bool,
 	changes []Change,
 	local localAt,
@@ -108,17 +168,24 @@ func decide(
 	}
 
 	var actions []action
+	seen := make(map[string]seenState, len(changes))
 	for _, change := range changes {
+		// A replaced directory and a link are not files to compare: the first
+		// is expanded into deletions before this (replacedDeletions) and the
+		// second is decided by decideLinks.
+		if change.Opaque || change.Link != "" {
+			continue
+		}
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
+		seen[change.Path] = seenOf(info, here)
 
 		// What the fill itself put there, which sits in the same layer as the
 		// consumer's writes (ADR 0044); without this every round asks for the
 		// whole tree back. A timestamp that did not survive the round trip
 		// exactly reads as the consumer's change, and the file comes back with
 		// the bytes it already has.
-		if sent && !change.Deleted && change.Size == base.Size &&
-			time.Unix(0, change.ModTime).Equal(base.ModTime) {
+		if sent && !change.Deleted && base.carries(change) {
 			continue
 		}
 
@@ -129,7 +196,7 @@ func decide(
 			if change.Deleted || here || recorded[change.Path] {
 				continue
 			}
-			actions = append(actions, action{Path: change.Path, kind: kindWrite})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite, Consumer: change.ModTime})
 			continue
 		}
 
@@ -151,13 +218,13 @@ func decide(
 		}
 
 		if !youChanged {
-			actions = append(actions, action{Path: change.Path, kind: kindWrite})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite, Consumer: change.ModTime})
 			continue
 		}
 
 		if !here {
 			actions = append(actions, action{
-				Path: change.Path, kind: kindConflict, Wins: true,
+				Path: change.Path, kind: kindConflict, Wins: true, Consumer: change.ModTime,
 				Why: "you deleted it and the container changed it; its version is kept",
 			})
 			continue
@@ -169,9 +236,12 @@ func decide(
 		containerAt := time.Unix(0, change.ModTime).Add(-skew)
 		wins := containerAt.After(info.ModTime())
 		actions = append(actions, action{
-			Path: change.Path, kind: kindConflict, Wins: wins,
+			Path: change.Path, kind: kindConflict, Wins: wins, Consumer: change.ModTime,
 			Why: conflictReason(wins),
 		})
+	}
+	for i := range actions {
+		actions[i].Seen = seen[actions[i].Path]
 	}
 	return actions
 }

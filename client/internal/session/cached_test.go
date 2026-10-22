@@ -2,12 +2,15 @@ package session
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lhns/remote-docker/dircache"
 )
 
 // overtakenWrite holds the first record write until a second has been written
@@ -50,10 +53,10 @@ func TestConcurrentCachedRecordsKeepTheNewerSet(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		store.Record("/m/aaaa", []string{"/a.go"})
+		store.Record("/m/aaaa", paths("/a.go"))
 	}()
 	<-held
-	store.Record("/m/bbbb", []string{"/b.go"})
+	store.Record("/m/bbbb", paths("/b.go"))
 	<-done
 
 	again := newCachedStore(path, nil)
@@ -74,17 +77,76 @@ func TestCachedStoreRoundTrip(t *testing.T) {
 		t.Error("an empty store claimed to know a share")
 	}
 
-	store.Record("/m/aaaa", []string{"/b.go", "/a.go"})
+	sentAt := time.Date(2026, 10, 21, 12, 0, 0, 123, time.UTC)
+	filled := paths("/b.go", "/a.go")
+	filled["/a.go"] = dircache.Baseline{Size: 42, ModTime: sentAt}
+	store.Record("/m/aaaa", filled)
 	again := newCachedStore(path, nil)
 
 	got, ok := again.Filled("/m/aaaa")
 	if !ok {
 		t.Fatal("the record did not survive being written and read")
 	}
-	// Sorted, so two runs of the same fill produce the same file rather than a
-	// diff of nothing.
-	if !slices.Equal(got, []string{"/a.go", "/b.go"}) {
-		t.Errorf("filled = %v", got)
+	names := slices.Sorted(maps.Keys(got))
+	if !slices.Equal(names, []string{"/a.go", "/b.go"}) {
+		t.Errorf("filled = %v", names)
+	}
+	// What a file looked like when it was sent is what write-back compares
+	// against after a restart; without it a modified file reads as one this
+	// machine made.
+	if b := got["/a.go"]; b.Size != 42 || !b.ModTime.Equal(sentAt) {
+		t.Errorf("the baseline of /a.go came back as %+v, want 42 bytes at %v", b, sentAt)
+	}
+	if b := got["/b.go"]; !b.ModTime.IsZero() {
+		t.Errorf("a path recorded before it landed came back with a baseline: %+v", b)
+	}
+
+	// The paths stay in the field a client before baselines reads, sorted so two
+	// runs of the same fill produce the same file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file cachedFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(file.Shares["/m/aaaa"], []string{"/a.go", "/b.go"}) {
+		t.Errorf("paths on disk = %v", file.Shares["/m/aaaa"])
+	}
+}
+
+// paths is a record of paths with no baselines.
+func paths(p ...string) map[string]dircache.Baseline {
+	out := make(map[string]dircache.Baseline, len(p))
+	for _, name := range p {
+		out[name] = dircache.Baseline{}
+	}
+	return out
+}
+
+// A record from before baselines existed has paths and nothing else, and reads
+// as paths with no baseline rather than as nothing.
+func TestCachedStoreReadsARecordFromBeforeBaselines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caches", "ws.json")
+	machine, account := thisMachine()
+	data, err := json.Marshal(map[string]any{
+		"version": cachedFileVersion, "machine": machine, "user": account,
+		"shares": map[string][]string{"/m/aaaa": {"/a.go"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := newCachedStore(path, nil).Filled("/m/aaaa")
+	if !ok || len(got) != 1 || !got["/a.go"].ModTime.IsZero() {
+		t.Errorf("filled = %v, %v; want /a.go recorded with no baseline", got, ok)
 	}
 }
 
