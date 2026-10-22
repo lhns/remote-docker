@@ -184,10 +184,12 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	changes, err := store.Changes(callCtx, share)
 	cancel()
 	if errors.Is(err, ErrShareGone) {
-		// Released, because nothing is bound to it any more (ADR 0044). The
-		// cache went with it, so there is nothing to carry back and nothing to
-		// compare against: stop polling rather than ask again every five
-		// seconds for as long as this cache lives.
+		// Released, because nothing is bound to it any more (ADR 0044). A far
+		// end that merely lost track of a cache it still serves is the Store's
+		// to repair before it says this. The cache went with it, so there is
+		// nothing to carry back and nothing to compare against: stop polling
+		// rather than ask again every five seconds for as long as this cache
+		// lives.
 		c.shares.forget(share)
 		return false
 	}

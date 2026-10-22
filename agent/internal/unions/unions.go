@@ -97,6 +97,13 @@ type Manager struct {
 	// queue behind one cold union.
 	pending map[string]chan struct{}
 
+	// sessions counts each machine's open cache sessions, by owner(); a
+	// machine with none has no entry. prepares numbers every successful
+	// Prepare, which stamps the union it answered with (live.prepared), so a
+	// Release can tell a union prepared while it asked the daemon (Open).
+	sessions map[string]int
+	prepares uint64
+
 	// probe answers whether a union is serving, and onStart is told about each
 	// one this manager mounts. Nil in production, where they are union.Alive
 	// and nothing. Tests need both: no union can be mounted on a development
@@ -121,6 +128,10 @@ type live struct {
 	cache  string // the managed volume holding the layer, for the collector
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// prepared is the Manager's prepares count when a Prepare last answered
+	// with this union. Guarded by Manager.mu.
+	prepared uint64
 
 	// applied is what the client's fill and invalidations wrote through this
 	// union, by path.
@@ -316,6 +327,7 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 					"  fix: give every mount of the directory the same owner, or remove the containers using it and restart the session",
 					req.Export, existing.spec.UID, existing.spec.GID, spec.UID, spec.GID)
 			}
+			m.stamp(existing)
 			return existing.spec.Merged(), nil
 		}
 
@@ -391,7 +403,16 @@ func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec unio
 		m.discard(k, l)
 		return "", err
 	}
+	m.stamp(l)
 	return spec.Merged(), nil
+}
+
+// stamp marks a union as just handed to a Prepare (live.prepared).
+func (m *Manager) stamp(l *live) {
+	m.mu.Lock()
+	m.prepares++
+	l.prepared = m.prepares
+	m.mu.Unlock()
 }
 
 // discard ends supervision of one union and waits for its supervisor, taking
@@ -639,19 +660,62 @@ func (m *Manager) aliveErr(ctx context.Context, spec union.Spec) error {
 	return union.Alive(ctx, spec)
 }
 
+// Open records a cache session of a machine, and returns what ends it: the
+// machine's unused unions are released when its LAST session ends.
+//
+// A client replaces a channel it no longer trusts while the agent may still be
+// finishing the old one, and a released connection can be followed by a new
+// one at once. Releasing when any one session ended took the union another had
+// just prepared, before its container existed to hold it: the container then
+// bound an empty directory where the union should be (ADR 0044).
+func (m *Manager) Open(account, client string) (end func(context.Context)) {
+	o := owner(account, client)
+	m.mu.Lock()
+	if m.sessions == nil {
+		m.sessions = map[string]int{}
+	}
+	m.sessions[o]++
+	m.mu.Unlock()
+
+	return func(ctx context.Context) {
+		m.mu.Lock()
+		if m.sessions[o]--; m.sessions[o] <= 0 {
+			delete(m.sessions, o)
+		}
+		m.mu.Unlock()
+		m.Release(ctx, account, client)
+	}
+}
+
 // Release drops the shares a machine holds that nothing is using, which is
-// what its cache session ending means.
+// what its last cache session ending means.
 //
 // NOT every share: the union outlives the channel that asked for it, because
 // the channel goes whenever the connection under it is released (ADR 0015)
-// while the containers bound to the union keep running (ADR 0044).
+// while the containers bound to the union keep running (ADR 0044). Nothing
+// while a session of the machine is open, and no union prepared while the
+// daemon was being asked, whose container that answer cannot include: see Open.
 func (m *Manager) Release(ctx context.Context, account, client string) {
+	o := owner(account, client)
+	m.mu.Lock()
+	if m.sessions[o] > 0 {
+		m.mu.Unlock()
+		return
+	}
+	asked := m.prepares
+	m.mu.Unlock()
+
 	held := m.heldByContainers(ctx, account, client)
 
 	m.mu.Lock()
+	if m.sessions[o] > 0 {
+		// That session's end releases them, asking the daemon afresh.
+		m.mu.Unlock()
+		return
+	}
 	var specs []union.Spec
 	for k, l := range m.shares {
-		if !ownedBy(k, account, client) {
+		if !ownedBy(k, account, client) || l.prepared > asked {
 			continue
 		}
 		if held[l.spec.Merged()] {

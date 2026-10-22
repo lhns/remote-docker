@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-21
+- Date: 2026-09-01, last amended 2026-10-22
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -24,6 +24,11 @@
   ground truth as it is done: a deletion a directory implies only if the
   consumer's merged view confirms it (`OpPresent`), and every path only if this
   machine still has what decide saw.
+  Amended 2026-10-22: a union is released only once no container is bound to
+  it AND the machine's last cache session has ended, never one prepared while
+  the daemon was asked. A share the workspace calls unknown while its
+  filesystem still has the union mounted (an agent restarted under a running
+  container) is prepared again, which adopts it, before it is given up.
 
 ## What forced it
 
@@ -281,6 +286,44 @@ So a share is released only when no container is bound to it. Only the daemon
 can say, since a union is bound by path rather than as a volume; on any doubt
 the mount is KEPT.
 
+Amended 2026-10-22: and only when the machine's LAST cache session ends.
+"No container is bound" was necessary and not sufficient. A union a session has
+just prepared is held by nothing until its container is created, and a client
+replaces a channel it stopped trusting (PR 342) while the agent is still ending
+the old one; that end released what the new channel had prepared, and the
+container bound an empty directory. So:
+
+- `Manager.Open` counts a machine's cache sessions, and `Release` does nothing
+  while one is open.
+- A union a `Prepare` answered with after `Release` asked the daemon is kept:
+  that answer cannot include its container. Each `Prepare` stamps the union
+  (`live.prepared`), so nothing grows per machine.
+- An expired ephemeral run's cleanup (ADR 0050) calls `Release` with no session
+  open, unchanged.
+
+### An agent restart loses the record, not the union (amended 2026-10-22)
+
+Where dockerd outlives the agent (ADR 0025) a restarted agent has no record of a
+union a running container still binds. Every request about it answered
+`no union for this share`, which the client read as released, so write-back
+stopped for that share until a new container prepared it.
+
+- Before it takes `Reply.Unknown` as gone, the client asks `OpMounted`. A share
+  whose cache volume the workspace's filesystem still has mounted is prepared
+  again exactly as its mount prepared it (export, cache volume, port, read
+  mode, owner), and the request is asked once more. `Prepare` ADOPTS a serving
+  union, so this mounts nothing.
+- Not mounted, or the prepare refused, or still unknown: gone, as before.
+  Preparing a released union would mount one for nobody, released and prepared
+  again on every connection. A channel that broke while asking is an error the
+  caller retries, not a reason to forget.
+- One reprepare per share at a time per channel; every share request takes
+  this path, so a fill or an invalidation meeting the restart recovers too.
+- Rejected: the agent adopting lazily from the filesystem on the first unknown
+  request. A `live` needs the whole `union.Spec` to remount a union that dies,
+  and the port, read mode and owner are known only to the client; `Prepare`
+  already adopts, chowns and single-flights.
+
 ### Write-back: baselines first, clocks last
 
 The upper holds the container's writes **and the fill's own copies**, since
@@ -426,10 +469,10 @@ leave a stale regular copy shadowing a file later replaced by a link, and a
 drop would be a whiteout over the lower's link, so it is left as it was.
 
 **Not decided here.** Whether a connection released while a container still
-writes can lose its tail, and whether the client should prepare a union again
-(which adopts) before it forgets a share for `no union for this share`, are
-open; the first is not shown by `integration.sh` 16b (18 files, no client
-command, three minutes), the second is a design change for the owner.
+writes can lose its tail is open; it is not shown by `integration.sh` 16b (18
+files, no client command, three minutes). Whether the client prepares a union
+again before it forgets a share was decided on 2026-10-22 (above, "An agent
+restart loses the record, not the union").
 
 ## What it measured
 
@@ -509,6 +552,8 @@ nothing for a fill driven by reads.
   unmounted dev 59 against parent 59, mounted 63 against 59). Reachable only
   where dockerd outlives the agent (the VM deployment, ADR 0025; in a container
   the agent is pid 1 and takes every dind with it), so `test/vm.sh` section 5b
-  asserts it by counting union servers across an agent restart.
+  asserts it by counting union servers across an agent restart, and by a write
+  the running container makes after the restart reaching the runner before any
+  new container prepares the share.
 - **Disk**: one cache per share per client, growing with what the container
   writes as well as with the tree.

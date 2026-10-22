@@ -366,6 +366,8 @@ else
                 bad "the union served nothing before any restart: $(echo "$out" | tail -2 | tr -s '[:space:]' ' ')"
                 dump_agent_log false
             fi
+            write_comes_back rd vm-deleg "$UNIONDIR" "write=back before the restart" back ||
+                dump_agent_log false
 
             before=$(unions_running)
             stop_agent
@@ -374,6 +376,23 @@ else
             else
                 bad "the agent did not come back"
                 dump_agent_log false
+            fi
+
+            # BEFORE any new container prepares the share, which would adopt
+            # the union on its own: the restarted agent has no record of it,
+            # and write-back has to get it back by itself (ADR 0044, "An agent
+            # restart loses the record, not the union"). Another file than
+            # write_comes_back's, which has already arrived.
+            if outputs '^after the restart$' rd exec vm-deleg sh -c 'echo "after the restart" >/w/after-restart && cat /w/after-restart'; then
+                if back=$(wait_for_content "$UNIONDIR/after-restart" "after the restart" 90); then
+                    ok "a write the container makes after the restart reaches this machine"
+                else
+                    bad "the container's write after the restart never arrived here: [$back]"
+                    grep -iE "union|cache|write-back|stall" "$WORK/client2.log" | tail -10 | sed 's/^/        /'
+                    dump_agent_log false
+                fi
+            else
+                bad "the container could not write into its union after the restart: [$LAST_OUTPUT]"
             fi
 
             # A NEW container asks the agent to prepare the share again; without

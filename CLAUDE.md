@@ -670,7 +670,12 @@ premise of the project, and it applies to building it too. So:
   MOUNTED: against a stat it would wait forever on the empty directory a dead
   union leaves behind. Reachable only where dockerd outlives the agent, so
   `test/vm.sh` is where it is asserted and a container deployment cannot show
-  it: there the agent is pid 1 and takes every dind with it.
+  it: there the agent is pid 1 and takes every dind with it. The restarted
+  agent has no record of the union, so it answers `Reply.Unknown`; the client
+  asks `OpMounted` and, if the filesystem still has it, prepares it again
+  (which adopts) before it gives the share up (`Session.reprepare`). Never
+  reprepare a share `OpMounted` does not list: that union was released, and
+  preparing it mounts one for nobody on every connection.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an
@@ -791,7 +796,12 @@ premise of the project, and it applies to building it too. So:
   nothing else in the workspace relates the two -- and "cannot tell" means
   KEEP. It presented far from its cause: the container started, read its cache
   and wrote into it, and everything afterwards answered `has no cache; prepare
-  it first`, with write-back and invalidation both silent.
+  it first`, with write-back and invalidation both silent. Not bound is not
+  enough: a union just prepared is bound by nothing until its container is
+  created, so `Release` also waits for the machine's LAST cache session to end
+  (`Manager.Open`) and keeps any union a `Prepare` answered with while it asked
+  the daemon. A client replaces a dead channel while the agent is still ending
+  the old one, and that end used to take the new channel's union.
 
 - **The cache layer does NOT say who wrote what.** An overlay's upper holds
   what was written through the union, and the fill writes through the union
@@ -1728,10 +1738,15 @@ its pure planning function was.
   fuse-overlayfs's own documentation and a backport argument, not on a run; what
   would settle it is a root mount on a stock pre-4.18 kernel.
 - **Union adoption anywhere but `test/vm.sh`.** It is asserted only there,
+  write-back resuming after the restart included,
   because it is only reachable where dockerd outlives the agent (ADR 0025): in a
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
-  the section skips and says so.
+  the section skips and says so. Shared-daemon mode only, since stock dind has
+  no fuse-overlayfs: with a daemon per account, `OpMounted` reads that daemon's
+  namespace only once the restarted agent has adopted it (`Lookup`, never
+  `Ensure`), so write-back resuming there rests on the connect's warm-up
+  adopting it before the first write-back round, which nothing asserts.
 - **`remote set`, and listing or removing tokens.** Unit tested only: `remote
   set` against a config file, and `token ls` and `token rm` on both ends
   (`agent/internal/sshd/manage_test.go` over a real SSH connection,

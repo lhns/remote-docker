@@ -290,6 +290,7 @@ func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChann
 		}
 		return nil, err
 	}
+	c.reprepare = func(ctx context.Context, export string) error { return s.reprepare(ctx, l, c, export) }
 	l.cacheChan, l.cacheErr = c, nil
 	return c, nil
 }

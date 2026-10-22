@@ -15,6 +15,9 @@ type fakeVolumes struct {
 	mountpoint string
 	sources    map[string]bool
 	err        error
+
+	// asked runs while the daemon is being asked which mounts are in use.
+	asked func()
 }
 
 func (f fakeVolumes) RawMountpoint(context.Context, string, string) (string, error) {
@@ -22,6 +25,9 @@ func (f fakeVolumes) RawMountpoint(context.Context, string, string) (string, err
 }
 
 func (f fakeVolumes) MountSources(context.Context, string) (map[string]bool, error) {
+	if f.asked != nil {
+		f.asked()
+	}
 	return f.sources, f.err
 }
 
@@ -75,6 +81,43 @@ func TestReleaseAccountDropsAUnionNobodyHolds(t *testing.T) {
 
 	if len(m.shares) != 0 {
 		t.Errorf("kept %d unions with no container on them", len(m.shares))
+	}
+}
+
+// A client replaces a cache channel it no longer trusts while the agent is
+// still ending the old one. The old one's end must not release what the new
+// one prepares, before any container exists to hold it.
+func TestASessionEndingReleasesNothingWhileAnotherOfTheMachineIsOpen(t *testing.T) {
+	m := held(t, fakeVolumes{sources: map[string]bool{}})
+	endOld := m.Open("alice", thisClient)
+	endNew := m.Open("alice", thisClient)
+
+	endOld(context.Background())
+	if len(m.shares) != 2 {
+		t.Fatalf("the old session's end released %d unions while the new one was open", 2-len(m.shares))
+	}
+
+	endNew(context.Background())
+	if len(m.shares) != 0 {
+		t.Errorf("the last session's end kept %d unions nothing holds", len(m.shares))
+	}
+}
+
+// A session that opens, prepares and ends while a release asks the daemon: its
+// container did not exist when the daemon answered, so that answer cannot keep
+// its union, and the union must not go on it.
+func TestAUnionPreparedWhileTheDaemonWasAskedIsKept(t *testing.T) {
+	var m *Manager
+	m = held(t, fakeVolumes{sources: map[string]bool{}, asked: func() {
+		m.stamp(m.shares[key("alice", thisClient, firstExport)])
+	}})
+	m.Release(context.Background(), "alice", thisClient)
+
+	if _, ok := m.shares[key("alice", thisClient, firstExport)]; !ok {
+		t.Error("released a union prepared after the daemon was asked")
+	}
+	if _, ok := m.shares[key("alice", thisClient, secondExport)]; ok {
+		t.Error("kept a union nothing holds and nothing prepared since")
 	}
 }
 
