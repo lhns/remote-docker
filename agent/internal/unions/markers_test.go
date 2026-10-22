@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// H3. fuse-overlayfs may record a deletion and an opaque directory as files
+// fuse-overlayfs may record a deletion and an opaque directory as files
 // named .wh.<name> and .wh..wh..opq instead of a device and an xattr. Reported
 // as the container's files, they were written into the user's tree, and the
 // deletions they stand for never arrived (ADR 0044).

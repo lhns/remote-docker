@@ -239,7 +239,7 @@ func TestFilesThatKeepFailingDoNotStarveTheRest(t *testing.T) {
 		if f.Path < fmt.Sprintf("/f%05d", writeBackRoundFiles) {
 			return errors.New("held open by another program")
 		}
-		return writeUnder(r, f)
+		return writeUnder(r, f, nil)
 	}
 
 	rounds(t, c, clk, 4)
@@ -257,7 +257,7 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 	root := t.TempDir()
 	writeLocal(t, root, "main.go", "edited here since the restart")
 	writeLocal(t, root, "other.go", "package x\n")
-	rec := &memRecord{m: map[string]map[string]Baseline{wbShare: {
+	rec := &fakeRecord{filled: map[string]map[string]Baseline{wbShare: {
 		"/main.go":  {Size: 3, ModTime: time.Unix(5, 0)}, // as sent, before the edit
 		"/other.go": {Size: 3, ModTime: time.Unix(5, 0)},
 	}}}
@@ -310,7 +310,7 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 func TestAResumedFillSendsAFileWhoseListedVersionIsTheFillsOwn(t *testing.T) {
 	root := t.TempDir()
 	writeLocal(t, root, "main.go", "edited here since the restart")
-	rec := &memRecord{m: map[string]map[string]Baseline{wbShare: {
+	rec := &fakeRecord{filled: map[string]map[string]Baseline{wbShare: {
 		"/main.go": {Size: 3, ModTime: time.Unix(5, 0)},
 	}}}
 	store := &faultStore{}
@@ -371,7 +371,7 @@ func TestAFileTheWorkspaceCannotReadIsSetAsideAndTheRestLand(t *testing.T) {
 func TestAResumedFillOfAnEphemeralShareSendsWhatChangedHere(t *testing.T) {
 	root := t.TempDir()
 	writeLocal(t, root, "main.go", "edited here since the restart")
-	rec := &memRecord{m: map[string]map[string]Baseline{wbShare: {
+	rec := &fakeRecord{filled: map[string]map[string]Baseline{wbShare: {
 		"/main.go": {Size: 3, ModTime: time.Unix(5, 0)},
 	}}}
 	store := &faultStore{}

@@ -87,8 +87,8 @@ func (c *Cache) writeBackRound(ctx context.Context) {
 
 // budget is how long one call to the store may take.
 func (c *Cache) budget() time.Duration {
-	if c.roundBudget > 0 {
-		return c.roundBudget
+	if c.callBudget > 0 {
+		return c.callBudget
 	}
 	return writeBackTimeout
 }
@@ -107,7 +107,7 @@ func (c *Cache) land(r *os.Root, f File, guard func() bool) error {
 	if err := caseClash(r, relPath(f.Path)); err != nil {
 		return err
 	}
-	return writeUnderGuarded(r, f, guard)
+	return writeUnder(r, f, guard)
 }
 
 // errChangedHere says a path changed on this machine since write-back decided
@@ -203,9 +203,9 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	// is not a deletion a replaced directory implies.
 	reported := changes
 	changes = c.shares.unskipped(share, changes)
-	changes = c.dropMarkers(ctx, share, root, changes)
+	changes = c.dropMarkers(ctx, share, changes)
 	if len(changes) == 0 {
-		c.shares.wbForgetSaid(share, nil)
+		c.shares.wbForget(share, reported)
 		c.recovered(ctx, share, root)
 		return false
 	}
@@ -220,11 +220,11 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	defer func() { _ = r.Close() }()
 
 	manifest := c.shares.baselines(share)
-	changes = c.dropClashes(ctx, share, root, r, manifest, changes)
+	changes = c.dropClashes(ctx, share, r, manifest, changes)
 	for _, p := range c.confirmedAbsent(ctx, store, share, replacedDeletions(manifest, reported)) {
 		changes = append(changes, Change{Path: p, Deleted: true})
 	}
-	c.shares.wbForgetSaid(share, changes)
+	c.shares.wbForget(share, reported, changes)
 	actions := decide(manifest, recorded, changes, localAtRoot(r), c.skew(), state.Cached)
 	actions = append(actions, decideLinks(manifest, changes, linkAtRoot(r))...)
 	if len(actions) == 0 {
@@ -232,7 +232,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 		return false
 	}
 
-	for _, conflict := range conflicts(actions) {
+	for _, conflict := range ofKind(actions, kindConflict) {
 		if c.shares.wbConflictNew(share, conflict.Path, conflict.Why) {
 			c.log().Warn("a file changed in both places",
 				"path", strings.TrimPrefix(conflict.Path, "/"),
@@ -293,7 +293,7 @@ func (p *writePass) run(store Store, actions []action) bool {
 	for _, path := range deletes(actions) {
 		p.remove(path)
 	}
-	for _, a := range linkActions(actions) {
+	for _, a := range ofKind(actions, kindLink) {
 		p.link(a)
 	}
 
@@ -351,8 +351,7 @@ func (p *writePass) remove(path string) {
 
 // link makes a link the consumer made.
 func (p *writePass) link(a action) {
-	if now := linkAtRoot(p.r)(a.Path); now.Exists != a.LinkSeen.Exists || now.IsLink != a.LinkSeen.IsLink ||
-		now.Target != a.LinkSeen.Target || !now.ModTime.Equal(a.LinkSeen.ModTime) {
+	if !p.stillAsSeen(a) {
 		p.changedHere(a.Path)
 		return
 	}
@@ -439,6 +438,9 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 // saw. A pass can run for minutes, so each path is looked at again immediately
 // before it is touched.
 func (p *writePass) stillAsSeen(a action) bool {
+	if a.kind == kindLink {
+		return a.LinkSeen.same(linkAtRoot(p.r)(a.Path))
+	}
 	rel := relPath(a.Path)
 	if !a.Seen.Here {
 		// Nothing was there; anything now, a dangling link included, is the
@@ -472,8 +474,14 @@ func (p *writePass) failed(path string, err error) {
 		}
 		return
 	}
+	sk := Skipped{Why: err.Error()}
 	var clash *caseClashError
-	sk := Skipped{Why: err.Error(), Link: p.change[path].Link != "", Clash: errors.As(err, &clash)}
+	switch {
+	case p.change[path].Link != "":
+		sk.Kind = SkipLink
+	case errors.As(err, &clash):
+		sk.Kind = SkipClash
+	}
 	p.c.skipped(p.ctx, p.share, p.change[path], sk)
 }
 
@@ -484,14 +492,12 @@ func (p *writePass) failed(path string, err error) {
 // both sides agree on, so the next round starts from it rather than seeing the
 // same change again.
 func (p *writePass) commit(acts []action, added, removed []string) {
-	c := p.c
-	c.shares.rebase(p.share, p.root, acts)
-	c.recording.Lock()
-	c.shares.editRecord(p.share, added, true)
-	c.shares.editRecord(p.share, removed, false)
-	c.recording.Unlock()
-	c.shares.wbUnskip(p.share, added, removed)
-	c.saveRecord(p.share)
+	f := &p.c.shares
+	f.rebase(p.share, p.root, acts)
+	f.editRecord(p.share, added, true)
+	f.editRecord(p.share, removed, false)
+	f.wbLanded(p.share, added, removed)
+	p.c.saveRecord(p.share)
 }
 
 // stall says a round could not finish, and when the next try is. Said once, when
@@ -534,22 +540,14 @@ func (c *Cache) skipped(ctx context.Context, share string, ch Change, sk Skipped
 // says so once each. A current agent never reports one; an older one reports
 // fuse-overlayfs's marker files as the container's, and written into somebody's
 // tree they are files they never made.
-func (c *Cache) dropMarkers(ctx context.Context, share, root string, changes []Change) []Change {
-	var out []Change
-	for i, ch := range changes {
-		if !overlayMarker(ch.Path) {
-			if out != nil {
-				out = append(out, ch)
-			}
+func (c *Cache) dropMarkers(ctx context.Context, share string, changes []Change) []Change {
+	out := make([]Change, 0, len(changes))
+	for _, ch := range changes {
+		if overlayMarker(ch.Path) {
+			c.skipped(ctx, share, ch, Skipped{Why: "an overlay marker, which is never a file of yours; it is safe to delete", Kind: SkipMarker})
 			continue
 		}
-		if out == nil {
-			out = slices.Clone(changes[:i])
-		}
-		c.skipped(ctx, share, ch, Skipped{Why: "an overlay marker, which is never a file of yours; it is safe to delete"})
-	}
-	if out == nil {
-		return changes
+		out = append(out, ch)
 	}
 	return out
 }
@@ -558,12 +556,12 @@ func (c *Cache) dropMarkers(ctx context.Context, share, root string, changes []C
 // on a filesystem that treats the two as one: landing it would replace the other
 // with different contents, and decide would otherwise read it as a file that was
 // always here and say nothing.
-func (c *Cache) dropClashes(ctx context.Context, share, root string, r *os.Root, manifest map[string]Baseline, changes []Change) []Change {
+func (c *Cache) dropClashes(ctx context.Context, share string, r *os.Root, manifest map[string]Baseline, changes []Change) []Change {
 	out := make([]Change, 0, len(changes))
 	for _, ch := range changes {
 		if _, sent := manifest[ch.Path]; !sent && !ch.Deleted && !ch.Opaque && ch.Link == "" {
 			if err := caseClash(r, relPath(ch.Path)); err != nil {
-				c.skipped(ctx, share, ch, Skipped{Why: err.Error(), Clash: true})
+				c.skipped(ctx, share, ch, Skipped{Why: err.Error(), Kind: SkipClash})
 				continue
 			}
 		}
@@ -673,11 +671,10 @@ func landLink(r *os.Root, rel, target string) error {
 //
 // The store names the path and is not this machine's to trust with one; os.Root
 // refuses "..", and a symlink or junction pointing outside the share.
-func writeUnder(r *os.Root, file File) error { return writeUnderGuarded(r, file, nil) }
-
-// writeUnderGuarded is writeUnder that asks guard just before the rename, so a
-// file that changed here while it was being written is not replaced.
-func writeUnderGuarded(r *os.Root, file File, guard func() bool) error {
+//
+// guard, if not nil, is asked just before the rename, so a file that changed
+// here while it was being written is not replaced (errChangedHere).
+func writeUnder(r *os.Root, file File, guard func() bool) error {
 	rel := relPath(file.Path)
 	if err := r.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return err

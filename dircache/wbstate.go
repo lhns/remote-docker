@@ -5,6 +5,7 @@ package dircache
 // change. All of it is read and written under shares.mu.
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -40,15 +41,28 @@ type WriteBackReport struct {
 type Skipped struct {
 	Path string
 
-	// Why is the error, as a person reads it.
-	Why string
-
-	// Link and Clash say what kind of path it is, for status to group them: a
-	// link this account may not create, and a name that differs only in case
-	// from one already here.
-	Link  bool
-	Clash bool
+	// Why is the error, as a person reads it, and Kind what status groups it
+	// under, since a person needs to know what to do about each.
+	Why  string
+	Kind SkipKind
 }
+
+// SkipKind is why write-back gave up on a path.
+type SkipKind int
+
+const (
+	// SkipName is a path this machine cannot hold, or one it could not read.
+	SkipName SkipKind = iota
+
+	// SkipLink is a link this account may not create here.
+	SkipLink
+
+	// SkipClash is a name that differs only in case from one already here.
+	SkipClash
+
+	// SkipMarker is a name the union reserves for its own bookkeeping.
+	SkipMarker
+)
 
 // skip is a path given up on and the change that was refused, so a later
 // change to the same path is tried again.
@@ -66,20 +80,29 @@ type wbState struct {
 	reason    string
 	firstPath string
 	pending   int
-	skipped   map[string]skip
 
-	// said is the conflict last reported for each path, so a file kept as a
-	// conflict is said once and not every round. Forgotten when the path lands.
-	said map[string]string
-
-	// tried counts the rounds a path was asked for and did not land.
-	tried map[string]int
+	// Per path, each forgotten once the path lands or stops being pending
+	// (wbLanded, wbForget): the change given up on, the conflict last said (so
+	// a conflict kept is said once and not every round), and how many passes
+	// asked for it without it landing.
+	skipped map[string]skip
+	said    map[string]string
+	tried   map[string]int
 }
 
 // same reports whether a change is the one that was refused.
 func (s skip) same(c Change) bool {
 	return s.change.Size == c.Size && s.change.ModTime == c.ModTime &&
 		s.change.Deleted == c.Deleted && s.change.Link == c.Link
+}
+
+// backoff is the wait after failures in a row: min, doubling, at most max.
+func backoff(minWait, maxWait time.Duration, failures int) time.Duration {
+	d := minWait
+	for i := 0; i < failures && d < maxWait; i++ {
+		d *= 2
+	}
+	return min(d, maxWait)
 }
 
 // wbReady reports whether a share may be tried at now.
@@ -104,13 +127,8 @@ func (f *shares) wbFail(share string, now time.Time, reason, first string, pendi
 	if progress {
 		w.failures = 0
 	}
-	delay := writeBackBackoffMin
-	for i := 0; i < w.failures && delay < writeBackBackoffMax; i++ {
-		delay *= 2
-	}
-	delay = min(delay, writeBackBackoffMax)
+	w.next = now.Add(backoff(writeBackBackoffMin, writeBackBackoffMax, w.failures))
 	w.failures++
-	w.next = now.Add(delay)
 	newly = !w.stalled
 	if newly {
 		w.since = now
@@ -169,28 +187,8 @@ func (f *shares) wbConflictNew(share, path, why string) bool {
 	return true
 }
 
-// wbForgetSaid forgets the conflicts of paths no longer pending, so one that
-// comes back after it was settled is said again.
-func (f *shares) wbForgetSaid(share string, changes []Change) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s, ok := f.state[share]
-	if !ok || len(s.wb.said) == 0 {
-		return
-	}
-	pending := make(map[string]bool, len(changes))
-	for _, ch := range changes {
-		pending[ch.Path] = true
-	}
-	for p := range s.wb.said {
-		if !pending[p] {
-			delete(s.wb.said, p)
-		}
-	}
-}
-
 // wbRanked orders paths by how often they were asked for and did not land,
-// fewest first and otherwise as given. A path no longer pending is forgotten.
+// fewest first and otherwise as given.
 func (f *shares) wbRanked(share string, paths []string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -198,22 +196,12 @@ func (f *shares) wbRanked(share string, paths []string) []string {
 	if !ok || len(s.wb.tried) == 0 {
 		return paths
 	}
-	pending := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		pending[p] = true
-	}
-	for p := range s.wb.tried {
-		if !pending[p] {
-			delete(s.wb.tried, p)
-		}
-	}
 	out := slices.Clone(paths)
 	slices.SortStableFunc(out, func(a, b string) int { return s.wb.tried[a] - s.wb.tried[b] })
 	return out
 }
 
-// wbTry records a pass: a path asked for that landed forgets its count, one that
-// did not adds to it.
+// wbTry records a pass: each path asked for that did not land adds to its count.
 func (f *shares) wbTry(share string, asked, landed map[string]bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -225,17 +213,16 @@ func (f *shares) wbTry(share string, asked, landed map[string]bool) {
 		s.wb.tried = map[string]int{}
 	}
 	for p := range asked {
-		if landed[p] {
-			delete(s.wb.tried, p)
-		} else {
+		if !landed[p] {
 			s.wb.tried[p]++
 		}
 	}
 }
 
-// wbUnskip forgets paths that have now landed: a path given up on and then
-// changed is tried again, and once it goes through it is no longer given up on.
-func (f *shares) wbUnskip(share string, paths ...[]string) {
+// wbLanded forgets everything remembered about paths that have now landed: a
+// path given up on and then changed is tried again, and once it goes through it
+// is no longer given up on.
+func (f *shares) wbLanded(share string, paths ...[]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.state[share]
@@ -246,12 +233,13 @@ func (f *shares) wbUnskip(share string, paths ...[]string) {
 		for _, p := range list {
 			delete(s.wb.skipped, p)
 			delete(s.wb.said, p)
+			delete(s.wb.tried, p)
 		}
 	}
 }
 
 // unskipped removes from changes what was given up on and has not changed
-// since, and forgets a skipped path that is no longer reported at all.
+// since.
 func (f *shares) unskipped(share string, changes []Change) []Change {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -259,21 +247,35 @@ func (f *shares) unskipped(share string, changes []Change) []Change {
 	if !ok || len(s.wb.skipped) == 0 {
 		return changes
 	}
-	present := make(map[string]bool, len(changes))
 	out := make([]Change, 0, len(changes))
 	for _, ch := range changes {
-		present[ch.Path] = true
 		if sk, skipped := s.wb.skipped[ch.Path]; skipped && sk.same(ch) {
 			continue
 		}
 		out = append(out, ch)
 	}
-	for p := range s.wb.skipped {
-		if !present[p] {
-			delete(s.wb.skipped, p)
+	return out
+}
+
+// wbForget forgets what write-back remembers about every path no longer
+// pending: the conflict said, the failed tries, the change given up on. A path
+// that comes back after it was settled is then said, tried and judged afresh.
+func (f *shares) wbForget(share string, pending ...[]Change) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.state[share]
+	if !ok {
+		return
+	}
+	keep := map[string]bool{}
+	for _, list := range pending {
+		for _, ch := range list {
+			keep[ch.Path] = true
 		}
 	}
-	return out
+	maps.DeleteFunc(s.wb.said, func(p, _ string) bool { return !keep[p] })
+	maps.DeleteFunc(s.wb.tried, func(p string, _ int) bool { return !keep[p] })
+	maps.DeleteFunc(s.wb.skipped, func(p string, _ skip) bool { return !keep[p] })
 }
 
 // wbReport is a share's write-back as status shows it.

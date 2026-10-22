@@ -12,8 +12,8 @@ import (
 func TestPresentIsAskedOnlyOfAnAgentThatAnnouncedCarry(t *testing.T) {
 	stream := newScripted(`{"x":["/a"]}` + "\n")
 	c := channelOver(stream)
-	if _, err := c.Present(t.Context(), "/m/1111111111111111", []string{"/a", "/b"}); !errors.Is(err, errNoPresent) {
-		t.Errorf("without Carry: %v, want errNoPresent", err)
+	if _, err := c.Present(t.Context(), "/m/1111111111111111", []string{"/a", "/b"}); !errors.Is(err, dircache.ErrCannotPresent) {
+		t.Errorf("without Carry: %v, want dircache.ErrCannotPresent", err)
 	}
 	if len(stream.written) != 0 {
 		t.Errorf("a request was sent to an agent that cannot answer: %s", stream.written)

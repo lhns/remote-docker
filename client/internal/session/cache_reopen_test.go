@@ -9,7 +9,7 @@ import (
 	"github.com/lhns/remote-docker/dircache"
 )
 
-// H1. The cache channel was opened once per connection and kept for good, so
+// The cache channel was opened once per connection and kept for good, so
 // after one timeout (which closes the stream) or one end of the stream by the
 // workspace, every Changes, Pull and Apply failed until the SSH connection was
 // replaced, which a running container can keep from ever happening (ADR 0044).
@@ -62,7 +62,7 @@ func TestACacheChannelATimeoutClosedIsReopened(t *testing.T) {
 	}
 }
 
-// H6. A share restored from the record after a restart registers for NFS and
+// A share restored from the record after a restart registers for NFS and
 // told the cache nothing, so write-back, which polls only attached shares,
 // never ran for it again (ADR 0027, ADR 0044).
 func TestARestoredUnionShareIsAttachedToTheCache(t *testing.T) {

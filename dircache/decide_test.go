@@ -185,7 +185,7 @@ func TestPartitionsForTheCaller(t *testing.T) {
 	if got := deletes(actions); len(got) != 1 || got[0] != "/b" {
 		t.Errorf("deletes = %v", got)
 	}
-	if got := conflicts(actions); len(got) != 2 {
+	if got := ofKind(actions, kindConflict); len(got) != 2 {
 		t.Errorf("conflicts = %v, want both reported whichever way they resolved", got)
 	}
 }

@@ -78,12 +78,12 @@ func writeBackLines(reports []dircache.Report, carryKnown, carries bool) []strin
 func skippedLines(local string, skipped []dircache.Skipped) []string {
 	var names, links, clashes, markers []dircache.Skipped
 	for _, sk := range skipped {
-		switch {
-		case sk.Link:
+		switch sk.Kind {
+		case dircache.SkipLink:
 			links = append(links, sk)
-		case sk.Clash:
+		case dircache.SkipClash:
 			clashes = append(clashes, sk)
-		case strings.Contains(sk.Why, "overlay marker"):
+		case dircache.SkipMarker:
 			markers = append(markers, sk)
 		default:
 			names = append(names, sk)

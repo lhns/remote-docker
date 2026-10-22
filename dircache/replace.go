@@ -77,6 +77,11 @@ type linkState struct {
 	ModTime time.Time
 }
 
+// same reports whether now is what was seen.
+func (s linkState) same(now linkState) bool {
+	return s.Exists == now.Exists && s.IsLink == now.IsLink && s.Target == now.Target && s.ModTime.Equal(now.ModTime)
+}
+
 // linkAt answers what is at a share-relative path without following it.
 type linkAt func(path string) linkState
 
@@ -121,17 +126,6 @@ func decideLinks(manifest map[string]Baseline, changes []Change, local linkAt) [
 		}
 	}
 	return actions
-}
-
-// linkActions are the actions to make a link at.
-func linkActions(actions []action) []action {
-	var out []action
-	for _, a := range actions {
-		if a.kind == kindLink {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 // overlayMarker reports whether a share path has a component the union reserves

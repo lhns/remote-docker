@@ -21,10 +21,10 @@ func TestWriteBackStatusNamesWhatIsStalledAndWhatWasLeftBehind(t *testing.T) {
 		}},
 		{Local: "/home/alice/a-fine", WriteBack: dircache.WriteBackReport{Skipped: []dircache.Skipped{
 			{Path: "/bad?name", Why: "invalid name"},
-			{Path: "/node_modules/.bin/tsc", Why: "privilege not held", Link: true},
-			{Path: "/node_modules/.bin/tsserver", Why: "privilege not held", Link: true},
-			{Path: "/license", Why: "differs only in case", Clash: true},
-			{Path: "/x/.wh..wh..opq", Why: "an overlay marker, never a file of yours"},
+			{Path: "/node_modules/.bin/tsc", Why: "privilege not held", Kind: dircache.SkipLink},
+			{Path: "/node_modules/.bin/tsserver", Why: "privilege not held", Kind: dircache.SkipLink},
+			{Path: "/license", Why: "differs only in case", Kind: dircache.SkipClash},
+			{Path: "/x/.wh..wh..opq", Why: "an overlay marker, never a file of yours", Kind: dircache.SkipMarker},
 		}}},
 	}
 

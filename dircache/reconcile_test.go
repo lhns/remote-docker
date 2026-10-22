@@ -2,6 +2,7 @@ package dircache
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"testing"
 )
 
+// fakeRecord is a Record that survives a Cache, as the file does a process.
 type fakeRecord struct {
 	mu     sync.Mutex
 	filled map[string]map[string]Baseline
@@ -29,7 +31,7 @@ func (r *fakeRecord) Filled(share string) (map[string]Baseline, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	paths, ok := r.filled[share]
-	return paths, ok
+	return maps.Clone(paths), ok
 }
 
 func (r *fakeRecord) Record(share string, filled map[string]Baseline) {
@@ -38,7 +40,7 @@ func (r *fakeRecord) Record(share string, filled map[string]Baseline) {
 	if r.filled == nil {
 		r.filled = map[string]map[string]Baseline{}
 	}
-	r.filled[share] = filled
+	r.filled[share] = maps.Clone(filled)
 }
 
 // A file deleted here while nothing ran is taken out of the cache on the next
