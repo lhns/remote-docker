@@ -33,6 +33,9 @@ software.
 - **`write=back` resumes by itself after the workspace agent restarts** under a
   running container (a VM workspace). Before, the container's writes stopped
   reaching your machine until another container used the same directory.
+- **A container started right after a reconnect no longer risks an empty
+  directory** where a `write=back` mount should be: the end of the old
+  connection could take away the cache the new one had just set up for it.
 - **Files named `.wh.something` are no longer written into your directory.** They
   were overlay bookkeeping, and one of them made the workspace refuse every
   later update of the cache. If your shared directory already has files such as
