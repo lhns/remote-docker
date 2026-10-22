@@ -415,10 +415,9 @@ premise of the project, and it applies to building it too. So:
   silently on Windows. The share record gained `read`, `write`, `owner`, `watch`
   and `prefetch` WITHOUT a version bump: `readBound` drops a record whose version
   differs. A record with a variant must have the export that variant derives, and
-  one without must have the legacy one. Prefetch is recorded, restored into
-  the words and resumed: a restored share is attached to the cache with them,
-  which is also what lets write-back run for it again (ADR 0027, ADR 0042,
-  ADR 0045, amended 2026-10-21).
+  one without must have the legacy one. Prefetch is recorded and restored into
+  the words, and resumed: a restored share is attached to the cache with them,
+  which also lets write-back run for it (ADR 0027, ADR 0042, ADR 0045).
 - **A union's root has the share's owner, and an agent that cannot do it is
   refused, not trusted** (ADR 0046). The merged root is the upper directory the
   agent creates as root; `owner=` on a `write=back` mount would otherwise
@@ -484,67 +483,56 @@ premise of the project, and it applies to building it too. So:
   share: the workspace names the path, and a link in the share must not lead
   it out (`writeback_link_test.go`).
 - **Write-back never stops for good, and a failure is classified, never
-  final** (ADR 0044, 2026-10-21). A user's write-back stopped and never
-  resumed, and the causes compounded: a marker file written into the tree, a
-  failed apply that left its tar unread, a channel opened once per connection,
-  a failed fill that was final, and a round that was all or nothing. So: the
-  deadline is per store call and a pass lands at most 2,000 files in chunks of
-  200, moving the manifest and the record per file; `classifyWrite` sorts an
-  error into SPACE (ENOSPC, EDQUOT, Windows 112 and 39: stop the pass, back off
-  from 5s to 1 min, reset on success), NAME (EINVAL, ENAMETOOLONG, EILSEQ,
-  Windows 123, 206 and 1314, a path leaving the share, a case collision: that
-  path alone is given up on and named once until its change differs) or OTHER
-  (a file another program holds: pending, the rest carry on). One Warn says it
-  stalled and one Info says it recovered; `remote status` says which, with the
-  skipped paths. Never turn a class into a retry loop without a backoff or a
-  skip into a silence. The cache channel is reopened when it dies
-  (`ensureCacheChan`; a refusal in words does not retire it), a refused fill
-  batch is taken back out of the tree (`Tree.Unstore`) and retried from 1s to
-  5 min, and an agent drains an apply's payload whatever the extraction did,
-  or the next request is read out of the middle of a tar and every request on
-  the channel for every share fails with `invalid character`. A file this
-  machine carried back is marked with the consumer's own time
-  (`Baseline.Consumer`) and is never deleted because a directory above it is
-  opaque or absent from the changes: the agent stops listing what the cache was
-  written over, and CI watched 5,000 files vanish from the container when that
-  silence was read as a deletion. A prune keeps the record of every registered
-  share, since a share is recorded before its volume exists.
+  final** (ADR 0044, 2026-10-21). The deadline is per store call and a pass
+  lands at most 2,000 files in chunks of 200, moving the manifest and the record
+  per file. `classifyWrite` sorts a failure into space (stop the pass, back off
+  5s to 1 min), name (that path alone is given up on and named once until its
+  change differs) or other (pending, the rest carry on); the ADR 0044 table has
+  the errnos. Never turn a class into a retry loop without a backoff or a skip
+  into a silence. The cache channel is reopened when it dies (`ensureCacheChan`;
+  a refusal in words does not retire it), and a refused fill batch is taken back
+  out of the tree (`Tree.Unstore`) and retried from 1s to 5 min. The agent
+  drains an apply's payload whatever the extraction did: otherwise the next
+  request is read out of the middle of a tar and every request on the channel,
+  for every share, fails with `invalid character`. A file carried back is marked
+  with the consumer's own time (`Baseline.Consumer`) and is never deleted on a
+  directory's say-so: the agent stops listing what the cache was written over,
+  and reading that silence as a deletion once emptied 5,000 files out of a
+  container. A
+  prune keeps the record of every registered share, since a share is recorded
+  before its volume exists.
 - **Write-back deletes or overwrites here only what it has checked against the
   ground truth at that moment** (ADR 0044, 2026-10-21). The listing hides what
   the client wrote through the union, so a file the user created or edited in a
   directory the container replaced is silent exactly like one it deleted. A
-  deletion a removed or replaced directory implies is therefore confirmed absent
-  from the consumer's MERGED view (`OpPresent`: lstat, never a link, under
-  `Hello.Carry`); present, an error or an agent that cannot answer means keep,
-  and without one no deletion is implied at all. The candidates come from every
+  deletion such a directory implies is therefore confirmed absent from the
+  consumer's MERGED view (`OpPresent`: lstat, never a link); present, an error
+  or an agent that cannot answer means keep. The candidates come from every
   change reported, including those set aside. Each path's state from decide is
   compared with a fresh stat right before its remove, link or rename
-  (`stillAsSeen`, `writeUnderGuarded`), because a pass runs for minutes. A
-  resumed FILL never sends a path it sent before that the consumer lists as
-  changed (not as the fill's own copy); an invalidation still does, since it is
-  the user writing now and leaving it out strands the container on its version.
-  No file starves the rest: a failed chunk ends only itself, the agent's pull
-  names an unreadable file (`Reply.Skipped` under `Carry`), paths that keep
-  failing rank last (`wbRanked`), and a pass that landed anything backs off only
-  5s. A conflict is said once per path. The agent removes after a failed write
-  only a file the entry created (`O_EXCL`), never via a temporary renamed in.
+  (`stillAsSeen`, the guard `writeUnder` takes), because a pass runs for
+  minutes. A resumed FILL never sends a path it sent before that the consumer
+  lists as changed; an invalidation still does, since it is the user writing now
+  and leaving it out strands the container on its version. No file starves the
+  rest (a failed chunk ends only itself, paths that keep failing rank last with
+  `wbRanked`), and the agent removes after a failed write only a file the entry
+  created (`O_EXCL`), never via a temporary renamed in.
 - **An overlay marker never reaches the user's tree** (ADR 0044, 2026-10-21).
   fuse-overlayfs records a replaced directory as `trusted.overlay.opaque=y`, a
   character device `.wh..opq` AND a regular file `.wh..wh..opq`, and a deletion
   as a device 0:0 (`union-probe.sh` section 13, recorded, not asserted). A name
-  starting `.wh.` is the union's own and no file can be named so inside one:
-  the agent reports `.wh.<name>` as `<name>` deleted and a replaced directory as
-  one `Change.Opaque`; the client drops any change with such a component (an
-  older agent's included), the fill's walk and an invalidation leave such a
-  name out, and each says once that it is a leftover safe to delete. A whiteout
-  or an opaque directory is expanded on the CLIENT into deletions of what the
-  fill sent under it and the merged view no longer has (`replacedDeletions`,
-  `OpPresent`), through `decide`, never of anything the fill did not send. Links and these are `Hello.Carry` and `Request.Carry`:
-  the agent announces, the client asks only then, and an agent that did not
-  announce is never sent the field and never sends a link an old client would
-  read as an empty file. Links keep their target verbatim and are made under
-  the share's `os.Root` through a temporary and a rename; Windows without
-  privilege (1314) skips the link by path, never a copy or a junction.
+  starting `.wh.` is the union's own, so in either direction the client drops
+  it and says once that it is a leftover safe to delete. The agent reports
+  `.wh.<name>` as `<name>` deleted and a replaced directory as one
+  `Change.Opaque`; the CLIENT expands a whiteout or an opaque directory into
+  deletions of what the fill sent under it and the merged view no longer has
+  (`replacedDeletions` plus `OpPresent`), through `decide`, never of anything
+  the fill did not send. `Hello.Carry` and `Request.Carry` negotiate all of
+  this: the client asks only if the agent announced, so an old agent is never
+  sent the field and never sends a link an old client would read as an empty
+  file. Links keep their target verbatim and are made under the share's
+  `os.Root` through a temporary and a rename; Windows without privilege (1314)
+  skips the link by path, never a copy or a junction.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
@@ -670,12 +658,12 @@ premise of the project, and it applies to building it too. So:
   MOUNTED: against a stat it would wait forever on the empty directory a dead
   union leaves behind. Reachable only where dockerd outlives the agent, so
   `test/vm.sh` is where it is asserted and a container deployment cannot show
-  it: there the agent is pid 1 and takes every dind with it. The restarted
-  agent has no record of the union, so it answers `Reply.Unknown`; the client
-  asks `OpMounted` and, if the filesystem still has it, prepares it again
-  (which adopts) before it gives the share up (`Session.reprepare`). Never
-  reprepare a share `OpMounted` does not list: that union was released, and
-  preparing it mounts one for nobody on every connection.
+  it: there the agent is pid 1 and takes every dind with it. A restarted agent
+  has no record of the union and answers `Reply.Unknown`; the client asks
+  `OpMounted` and, if the filesystem still has it, prepares it again (which
+  adopts) before giving the share up (`Session.reprepare`). Never reprepare a
+  share `OpMounted` does not list: it was released, and preparing it mounts one
+  for nobody on every connection.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an
@@ -797,11 +785,11 @@ premise of the project, and it applies to building it too. So:
   KEEP. It presented far from its cause: the container started, read its cache
   and wrote into it, and everything afterwards answered `has no cache; prepare
   it first`, with write-back and invalidation both silent. Not bound is not
-  enough: a union just prepared is bound by nothing until its container is
-  created, so `Release` also waits for the machine's LAST cache session to end
+  enough: a union just prepared is bound by nothing until its container exists,
+  and a client replaces a dead channel while the agent is still ending the old
+  one. So `Release` also waits for the machine's LAST cache session to end
   (`Manager.Open`) and keeps any union a `Prepare` answered with while it asked
-  the daemon. A client replaces a dead channel while the agent is still ending
-  the old one, and that end used to take the new channel's union.
+  the daemon.
 
 - **The cache layer does NOT say who wrote what.** An overlay's upper holds
   what was written through the union, and the fill writes through the union
@@ -1333,16 +1321,15 @@ and `owner=` into an owned union. What this cannot tell is `eager` from
 Write-back past trouble, in `integration.sh` 15g and 16b and `machine.yml`
 (2026-10-21, PR 342): a directory the container replaced giving `tools/new`
 here, `tools/old` gone and no `.wh.` name anywhere, with the cache channel still
-in step afterwards; links made in the container arriving as links with their
-targets as written; a share on a 2 MiB tmpfs taking a 4 MiB file once it was
-resized and a later file after it; 5,000 files from one burst; a modified file
-and a new one arriving after `remote restart -f`; and 18 files written 10s apart
-with no client command in three minutes. On a Windows runner `good` and a later
-file arrive beside a `bad?name` that NTFS refuses, status names it, and a link
+in step; links made in the container arriving as links with their targets as
+written; a share on a 2 MiB tmpfs taking a 4 MiB file once resized and a later
+file after it; 5,000 files from one burst; a modified file and a new one
+arriving after `remote restart -f`; and 18 files written 10s apart with no
+client command in three minutes. On a Windows runner `good` and a later file
+arrive beside a `bad?name` that NTFS refuses, status names it, and a link
 arrives as a symlink. `union-probe.sh` section 13 RECORDS what fuse-overlayfs
-writes for a replaced directory and a deleted file (an xattr, a device
-`.wh..opq`, a regular `.wh..wh..opq`, and a device 0:0 for a file) and asserts
-nothing: a change in it should be read.
+writes for a replaced directory and a deleted file and asserts nothing: a
+change in it should be read.
 
 Keys and enrolment, in `integration.sh` 11f to 11i: a key in the enrolled
 directory and one in the operator's authenticating the same account (ADR
@@ -1738,15 +1725,15 @@ its pure planning function was.
   fuse-overlayfs's own documentation and a backport argument, not on a run; what
   would settle it is a root mount on a stock pre-4.18 kernel.
 - **Union adoption anywhere but `test/vm.sh`.** It is asserted only there,
-  write-back resuming after the restart included,
-  because it is only reachable where dockerd outlives the agent (ADR 0025): in a
-  container the agent is pid 1 and takes every dind with it. That suite needs
+  write-back resuming after the restart included, because it is only reachable
+  where dockerd outlives the agent (ADR 0025): in a container the agent is pid 1
+  and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so. Shared-daemon mode only, since stock dind has
-  no fuse-overlayfs: with a daemon per account, `OpMounted` reads that daemon's
+  no fuse-overlayfs. With a daemon per account, `OpMounted` sees that daemon's
   namespace only once the restarted agent has adopted it (`Lookup`, never
-  `Ensure`), so write-back resuming there rests on the connect's warm-up
-  adopting it before the first write-back round, which nothing asserts.
+  `Ensure`), so resuming there rests on the connect's warm-up adopting it before
+  the first write-back round, which nothing asserts.
 - **`remote set`, and listing or removing tokens.** Unit tested only: `remote
   set` against a config file, and `token ls` and `token rm` on both ends
   (`agent/internal/sshd/manage_test.go` over a real SSH connection,
