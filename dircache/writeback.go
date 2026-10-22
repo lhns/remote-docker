@@ -92,23 +92,6 @@ func (c *Cache) budget() time.Duration {
 	return writeBackTimeout
 }
 
-// land writes one file into the share.
-//
-// guard is asked immediately before the file replaces its target, and a false
-// answer leaves the target untouched (errChangedHere).
-func (c *Cache) land(r *os.Root, f File, guard func() bool) error {
-	if c.writeFile != nil {
-		if guard != nil && !guard() {
-			return errChangedHere
-		}
-		return c.writeFile(r, f)
-	}
-	if err := caseClash(r, relPath(f.Path)); err != nil {
-		return err
-	}
-	return writeUnder(r, f, guard)
-}
-
 // errChangedHere says a path changed on this machine since write-back decided
 // about it, so it was not touched.
 var errChangedHere = errors.New("changed here since write-back looked at it")
@@ -219,7 +202,8 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	defer func() { _ = r.Close() }()
 
 	manifest := c.shares.baselines(share)
-	changes = c.dropClashes(ctx, share, r, manifest, changes)
+	names := c.caseNames(r)
+	changes = c.dropClashes(ctx, share, names, manifest, changes)
 	for _, p := range c.confirmedAbsent(ctx, store, share, replacedDeletions(manifest, reported)) {
 		changes = append(changes, Change{Path: p, Deleted: true})
 	}
@@ -240,7 +224,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) bool {
 	}
 
 	pass := &writePass{
-		c: c, ctx: ctx, share: share, root: root, r: r,
+		c: c, ctx: ctx, share: share, root: root, r: r, names: names,
 		change: make(map[string]Change, len(changes)),
 		action: make(map[string]action, len(actions)),
 	}
@@ -309,11 +293,11 @@ func (c *Cache) dropMarkers(ctx context.Context, share string, changes []Change)
 // on a filesystem that treats the two as one: landing it would replace the other
 // with different contents, and decide would otherwise read it as a file that was
 // always here and say nothing.
-func (c *Cache) dropClashes(ctx context.Context, share string, r *os.Root, manifest map[string]Baseline, changes []Change) []Change {
+func (c *Cache) dropClashes(ctx context.Context, share string, names *caseNames, manifest map[string]Baseline, changes []Change) []Change {
 	out := make([]Change, 0, len(changes))
 	for _, ch := range changes {
 		if _, sent := manifest[ch.Path]; !sent && !ch.Deleted && !ch.Opaque && ch.Link == "" {
-			if err := caseClash(r, relPath(ch.Path)); err != nil {
+			if err := names.clash(relPath(ch.Path)); err != nil {
 				c.skipped(ctx, share, ch, Skipped{Why: err.Error(), Kind: SkipClash})
 				continue
 			}
@@ -321,42 +305,6 @@ func (c *Cache) dropClashes(ctx context.Context, share string, r *os.Root, manif
 		out = append(out, ch)
 	}
 	return out
-}
-
-// caseClash reports a path that exists here under a different spelling.
-//
-// Only when the name asked for resolves: on a filesystem that tells the two
-// apart it does not, and both may exist.
-func caseClash(r *os.Root, rel string) error {
-	if _, err := r.Lstat(rel); err != nil {
-		return nil
-	}
-	dir, base := filepath.Split(rel)
-	if dir == "" {
-		dir = "."
-	}
-	d, err := r.Open(dir)
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = d.Close() }()
-	names, err := d.Readdirnames(-1)
-	if err != nil {
-		return nil
-	}
-	other := ""
-	for _, n := range names {
-		if n == base {
-			return nil
-		}
-		if strings.EqualFold(n, base) {
-			other = n
-		}
-	}
-	if other == "" {
-		return nil
-	}
-	return &caseClashError{path: filepath.ToSlash(rel), existing: other}
 }
 
 func (c *Cache) skew() time.Duration {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type writePass struct {
 	share string
 	root  string
 	r     *os.Root
+	names *caseNames
 
 	change map[string]Change
 	action map[string]action
@@ -99,7 +101,11 @@ func (p *writePass) remove(path string) {
 		p.changedHere(path)
 		return
 	}
-	err := p.r.Remove(relPath(path))
+	rel := relPath(path)
+	err := p.r.Remove(rel)
+	if err == nil {
+		p.names.removed(rel)
+	}
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		p.commit([]action{p.action[path]}, nil, []string{path})
 		p.landed++
@@ -118,7 +124,10 @@ func (p *writePass) link(a action) {
 	if p.c.makeLink != nil {
 		mk = p.c.makeLink
 	}
-	if err := mk(p.r, relPath(a.Path), a.Link); err != nil {
+	rel := relPath(a.Path)
+	err := mk(p.r, rel, a.Link)
+	p.names.wrote(rel, err == nil)
+	if err != nil {
 		p.failed(a.Path, err)
 		return
 	}
@@ -143,7 +152,7 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 			return nil
 		}
 		act := p.action[f.Path]
-		werr := p.c.land(p.r, f, func() bool { return p.stillAsSeen(act) })
+		werr := p.land(f, func() bool { return p.stillAsSeen(act) })
 		if werr == nil {
 			wrote = append(wrote, f.Path)
 			return nil
@@ -191,6 +200,26 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 	}
 	p.chunkFails = 0
 	return true
+}
+
+// land writes one file into the share.
+//
+// guard is asked immediately before the file replaces its target, and a false
+// answer leaves the target untouched (errChangedHere).
+func (p *writePass) land(f File, guard func() bool) error {
+	if p.c.writeFile != nil {
+		if guard != nil && !guard() {
+			return errChangedHere
+		}
+		return p.c.writeFile(p.r, f)
+	}
+	rel := relPath(f.Path)
+	if err := p.names.clash(rel); err != nil {
+		return err
+	}
+	err := writeUnder(p.r, f, guard)
+	p.names.wrote(rel, err == nil)
+	return err
 }
 
 // stillAsSeen reports whether this machine still has at the path what decide
@@ -257,4 +286,98 @@ func (p *writePass) commit(acts []action, added, removed []string) {
 	f.editRecord(p.share, removed, false)
 	f.wb.landed(p.share, added, removed)
 	p.c.saveRecord(p.share)
+}
+
+// caseNames is what one pass has read of each directory here, to find a name
+// that differs only in case from one already here (clash). A directory is
+// listed on first use and then kept in step with what the pass itself lands and
+// removes, so a pass lists it once rather than once per file. A change made
+// here meanwhile is stillAsSeen's to catch, just before each write.
+type caseNames struct {
+	r    *os.Root
+	list func(r *os.Root, dir string) ([]string, error)
+
+	// dirs holds each listed directory's names, by its path ("." for the
+	// share's root).
+	dirs map[string]map[string]bool
+}
+
+func (c *Cache) caseNames(r *os.Root) *caseNames {
+	list := readDirNames
+	if c.listDir != nil {
+		list = c.listDir
+	}
+	return &caseNames{r: r, list: list, dirs: map[string]map[string]bool{}}
+}
+
+// readDirNames lists a directory in the share.
+func readDirNames(r *os.Root, dir string) ([]string, error) {
+	d, err := r.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Readdirnames(-1)
+}
+
+// clash reports a path that exists here under a different spelling.
+//
+// Only when the name asked for resolves: on a filesystem that tells the two
+// apart it does not, and both may exist.
+func (n *caseNames) clash(rel string) error {
+	if _, err := n.r.Lstat(rel); err != nil {
+		return nil
+	}
+	dir, base := filepath.Dir(rel), filepath.Base(rel)
+	names := n.dirs[dir]
+	if names == nil {
+		listed, err := n.list(n.r, dir)
+		if err != nil {
+			return nil
+		}
+		names = make(map[string]bool, len(listed))
+		for _, name := range listed {
+			names[name] = true
+		}
+		n.dirs[dir] = names
+	}
+	if names[base] {
+		return nil
+	}
+	for name := range names {
+		if strings.EqualFold(name, base) {
+			return &caseClashError{path: filepath.ToSlash(rel), existing: name}
+		}
+	}
+	return nil
+}
+
+// wrote notes a write at rel, which added its name if it landed. Either way
+// the directories above it may have been made for it, under the spelling asked
+// for or, where case is not told apart, as one already here, so a listing that
+// lacks one of them exactly is read again.
+func (n *caseNames) wrote(rel string, landed bool) {
+	dir := filepath.Dir(rel)
+	if names := n.dirs[dir]; names != nil && landed {
+		names[filepath.Base(rel)] = true
+	}
+	for parent := filepath.Dir(dir); parent != dir; dir, parent = parent, filepath.Dir(parent) {
+		if names := n.dirs[parent]; names != nil && !names[filepath.Base(dir)] {
+			delete(n.dirs, parent)
+		}
+	}
+}
+
+// removed notes a name the pass removed. Removed under another spelling, which
+// a filesystem that does not tell case apart allows, the listing is read again.
+func (n *caseNames) removed(rel string) {
+	dir, base := filepath.Dir(rel), filepath.Base(rel)
+	delete(n.dirs, rel)
+	switch names := n.dirs[dir]; {
+	case names == nil:
+	case names[base]:
+		delete(names, base)
+	default:
+		delete(n.dirs, dir)
+	}
 }

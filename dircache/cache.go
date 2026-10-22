@@ -150,12 +150,14 @@ type Cache struct {
 	changed   map[string]changedAnswer
 
 	// The rest are seams for tests: how long one call to the store may take,
-	// how one file and one link land here, the clock write-back backs off by,
-	// and the first wait after a failed fill batch. Zero and nil mean
-	// writeBackTimeout, writeUnder, landLink, time.Now and fillBackoffMin.
+	// how one file and one link land here, how a directory here is listed for
+	// a case clash, the clock write-back backs off by, and the first wait after
+	// a failed fill batch. Zero and nil mean writeBackTimeout, writeUnder,
+	// landLink, readDirNames, time.Now and fillBackoffMin.
 	callBudget  time.Duration
 	writeFile   func(r *os.Root, f File) error
 	makeLink    func(r *os.Root, rel, target string) error
+	listDir     func(r *os.Root, dir string) ([]string, error)
 	now         func() time.Time
 	fillBackoff time.Duration
 }
