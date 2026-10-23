@@ -20,7 +20,7 @@ import (
 // and returns the share.
 func shareWith(t *testing.T, dir string, mode workspace.Mode, words workspace.ShareWords) *nfsserve.Share {
 	t.Helper()
-	share, err := nfsserve.NewRegistry(defaultAttrs(0, 0)).Register(dir, mode, words)
+	share, err := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0)).Register(dir, mode, words)
 	if err != nil {
 		t.Fatal(err)
 	}

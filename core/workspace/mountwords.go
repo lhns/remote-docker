@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"io/fs"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -9,12 +10,15 @@ import (
 
 // The words a mount may carry beyond read= and write= (ADR 0042). Where the
 // mode decides how a mount is served, these decide what its share reports and
-// does. owner= is identity: a directory mounted with another owner is another
-// share. watch= and prefetch= are effort spent on one share, which runs at the
-// highest level any mount of it asked for (Max, ADR 0042).
+// does. owner=, fmask= and dmask= are identity: a directory mounted with
+// another owner or mask is another share. watch= and prefetch= are effort spent
+// on one share, which runs at the highest level any mount of it asked for (Max,
+// ADR 0042).
 //
 //	owner=1000        the uid, and gid, every file in the share reports
 //	owner=1000.2000   uid and gid; any one non-digit separates them
+//	fmask=0111        permission bits cleared from every file's reported mode
+//	dmask=022         permission bits cleared from every directory's
 //	watch=partial     whether, and how much of, a local change is replayed
 //	prefetch=tree     how a union's cache is filled ahead of reads
 
@@ -72,6 +76,49 @@ func (o Owner) String() string {
 	}
 	return fmt.Sprintf("%d:%d", o.UID, o.GID)
 }
+
+// Mask is permission bits cleared from the modes a share reports, as FAT's
+// and ntfs-3g's fmask and dmask do (ADR 0046). Set distinguishes a named 0,
+// which overrides a session default, from no word at all.
+type Mask struct {
+	Bits fs.FileMode
+	Set  bool
+}
+
+// maskForms is the tail of every mask refusal.
+const maskForms = "want 1 to 4 octal digits, at most 0777 (0111, 022)"
+
+// ParseFileMask reads fmask=, an octal mask as umask spells one.
+func ParseFileMask(s string) (Mask, error) { return parseMask("fmask", s) }
+
+// ParseDirMask reads dmask=, refusing a mask that clears every execute bit: a
+// directory nobody can enter is a share nobody can use.
+func ParseDirMask(s string) (Mask, error) {
+	m, err := parseMask("dmask", s)
+	if err != nil {
+		return Mask{}, err
+	}
+	if m.Bits&0o111 == 0o111 {
+		return Mask{}, fmt.Errorf("workspace: dmask %s clears every execute bit, so no directory in the share could be entered; leave at least one", m)
+	}
+	return m, nil
+}
+
+func parseMask(name, s string) (Mask, error) {
+	s = strings.TrimSpace(s)
+	// Checked by hand because ParseUint also takes a sign and underscores.
+	if len(s) < 1 || len(s) > 4 || strings.Trim(s, "01234567") != "" {
+		return Mask{}, fmt.Errorf("workspace: %s %q is not valid; %s", name, s, maskForms)
+	}
+	bits, err := strconv.ParseUint(s, 8, 32)
+	if err != nil || bits > 0o777 {
+		return Mask{}, fmt.Errorf("workspace: %s %q is not valid; %s", name, s, maskForms)
+	}
+	return Mask{Bits: fs.FileMode(bits), Set: true}, nil
+}
+
+// String is the canonical spelling, four octal digits; unset is 0000.
+func (m Mask) String() string { return fmt.Sprintf("%04o", uint32(m.Bits)) }
 
 // Watch is how much of what happens to a share on this machine is replayed
 // inside the workspace (ADR 0016): nothing, what can be replayed faithfully,
@@ -204,9 +251,12 @@ func (p Prefetch) String() string {
 }
 
 // ShareWords are the words that belong to a share rather than to one mount of
-// it. Owner is part of the share's identity; Watch and Prefetch are raised.
+// it. Owner and the masks are part of the share's identity; Watch and Prefetch
+// are raised.
 type ShareWords struct {
 	Owner    Owner
+	FMask    Mask
+	DMask    Mask
 	Watch    Watch
 	Prefetch Prefetch
 }
@@ -231,6 +281,8 @@ type MountWords struct {
 // session's own settings, refuses these keys and names that setting.
 var shareKeySetting = map[string]string{
 	"owner":    "REMOTE_DOCKER_SHARE_OWNER",
+	"fmask":    "REMOTE_DOCKER_SHARE_FMASK",
+	"dmask":    "REMOTE_DOCKER_SHARE_DMASK",
 	"watch":    "REMOTE_DOCKER_WATCH",
 	"prefetch": "REMOTE_DOCKER_PREFETCH",
 }
@@ -240,10 +292,9 @@ func isShareKey(key string) bool {
 	return ok
 }
 
-// ParseMount reads a comma-separated list of read=, write=, owner=, watch=,
-// prefetch= and
-// Docker's own consistency words. A key named twice is refused, and so is any
-// other word, naming it.
+// ParseMount reads a comma-separated list of read=, write=, owner=, fmask=,
+// dmask=, watch=, prefetch= and Docker's own consistency words. A key named
+// twice is refused, and so is any other word, naming it.
 func ParseMount(s string) (MountWords, error) {
 	var w MountWords
 	var modeWords []string
@@ -269,6 +320,18 @@ func ParseMount(s string) (MountWords, error) {
 				return MountWords{}, err
 			}
 			w.Owner = o
+		case "fmask":
+			m, err := ParseFileMask(value)
+			if err != nil {
+				return MountWords{}, err
+			}
+			w.FMask = m
+		case "dmask":
+			m, err := ParseDirMask(value)
+			if err != nil {
+				return MountWords{}, err
+			}
+			w.DMask = m
 		case "watch":
 			got, err := ParseWatch(value)
 			if err != nil {

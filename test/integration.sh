@@ -1705,6 +1705,57 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         dump_workspace_log 40
     fi
 
+    # fmask= and dmask= clear bits from the modes a share reports, after the
+    # execute bit is taken from the real file (ADR 0046). Each mask is a share
+    # of its own, like an owner. The unmasked line is today's modes.
+    MASKDIR="$WORK/words-mask"
+    mkdir -p "$MASKDIR/sub"
+    echo x >"$MASKDIR/plain"
+    printf '#!/bin/sh\n' >"$MASKDIR/run.sh"
+    chmod 0755 "$MASKDIR/run.sh"
+    modes='stat -c %a /w/plain /w/run.sh /w/sub | tr "\n" " "'
+    for c in "|666 777 777" "fmask=0111|666 666 777" "dmask=022|666 777 755"; do
+        words=${c%%|*} want=${c#*|}
+        if outputs "^$want ?$" dockert run --rm -v "$MASKDIR:/w${words:+:$words}" alpine:3 sh -c "$modes"; then
+            ok "${words:-no mask}: a file, an executable and a directory report $want"
+        else
+            bad "${words:-no mask}: the modes are [$LAST_OUTPUT], want $want"
+        fi
+    done
+    if outputs '^666 666 777 ?$' dockert run --rm --mount "type=bind,src=$MASKDIR,dst=/w,\"consistency=fmask=0111\"" alpine:3 sh -c "$modes"; then
+        ok "fmask=0111 on --mount reports the same"
+    else
+        bad "fmask=0111 on --mount: the modes are [$LAST_OUTPUT], want 666 666 777"
+    fi
+
+    # git records only the owner's execute bit, so under fmask=0111 a host
+    # file it would have committed as 100755 is 100644. Run as a uid that is
+    # not the share's owner: a union checks modes itself, so a mask that took
+    # write away too would make this write fail.
+    GITMASK="$WORK/words-gitmask"
+    mkdir -p "$GITMASK"
+    printf '#!/bin/sh\n' >"$GITMASK/host.sh"
+    chmod 0755 "$GITMASK/host.sh"
+    outputs . dockert run --rm --user 1000 -e HOME=/tmp --entrypoint sh -v "$GITMASK:/w:write=back,fmask=0111" alpine/git -c '
+        git config --global --add safe.directory "*"
+        cd /w && git init -q && git add -A
+        echo "mode: $(git ls-files -s host.sh | cut -d" " -f1)"
+        echo "filemode: $(git config core.filemode)"
+        echo appended >>host.sh && echo "write: ok"'
+    gitmask=$LAST_OUTPUT
+    if grep -qE '^mode: 100644$' <<<"$gitmask"; then
+        ok "git as uid 1000 on a write=back,fmask=0111 union records a host file as 100644"
+    else
+        bad "git on a masked union: [$gitmask], want mode: 100644"
+        dump_workspace_log 40
+    fi
+    if grep -qE '^write: ok$' <<<"$gitmask"; then
+        ok "and uid 1000 can still write a host file there"
+    else
+        bad "uid 1000 could not write a host file on a masked union: [$gitmask]"
+    fi
+    info "core.filemode in a repository git init made there: $(sed -n 's/^filemode: //p' <<<"$gitmask")"
+
     # watch= is per mount: this client runs with watching off, so every
     # watched case below turns the watcher on for its own directory.
     PROBES="$WORK/probes"

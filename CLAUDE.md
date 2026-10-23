@@ -380,10 +380,10 @@ premise of the project, and it applies to building it too. So:
 - **A docker.sock bind is the container's own daemon, never the parent's**
   (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
   when this machine has one.
-- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]`,
-  `watch=off|partial|coarse` or `prefetch=off|eager|tree`, nothing else, and it
-  is consumed, never forwarded** (ADR 0042). `owner=`, `watch=` and `prefetch=`
-  are words of the SHARE and not of the mode: `workspace.ParseMode` (the session settings) refuses them,
+- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]`, `fmask=O`,
+  `dmask=O`, `watch=off|partial|coarse` or `prefetch=off|eager|tree`, nothing
+  else, and it is consumed, never forwarded** (ADR 0042). `owner=`, the masks,
+  `watch=` and `prefetch=` are words of the SHARE and not of the mode: `workspace.ParseMode` (the session settings) refuses them,
   `ParseMount` reads them, and `IsModeWord` claims the key so a misspelt value is
   refused here instead of reaching the daemon. `-v` cannot carry `1000:2000`
   (docker/cli refuses a fourth colon), so the separator is any one non-digit
@@ -393,12 +393,15 @@ premise of the project, and it applies to building it too. So:
   bind is rewritten. Docker's own `default`/`consistent`/`cached`/`delegated`
   (`api/types/mount.Consistency`) are aliases for whole modes; any other
   bare word is refused: a word that is neither namespaced nor Docker's is not
-  ours. `--mount` is split on
+  ours. `fmask=` and `dmask=` are octal bits cleared from the reported file and
+  directory modes, the file's after its execute bit (ADR 0046); a `dmask`
+  clearing every execute bit is refused. `--mount` is split on
   commas by the CLI, so both axes reach it as one csv-quoted field. `read=cached`
   is `actimeo=60,nocto` and rests on the watcher poking what changed, which
   is why asking for it with watching off is refused. A share is one
-  directory per read, write and owner, and nothing is refused between mounts:
-  `workspace.ShareIDFor` hashes the path with all three, so a mount asking for a
+  directory per read, write, owner and mask, and nothing is refused between
+  mounts: `workspace.ShareIDFor` hashes the path with all of them, a mask
+  appended only when it is not 0 so no earlier id moved, so a mount asking for a
   new combination gets its own export, volume and union beside the others, and
   nothing changes under a running container. Every variant has a new id, the
   default one included; `LegacyShareID` (the path alone) exists only to restore
@@ -411,10 +414,11 @@ premise of the project, and it applies to building it too. So:
   needs the watcher is still refused, being a contradiction within one mount.
   A share's attributes come from the session's
   (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
-  uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
-  silently on Windows. The share record gained `read`, `write`, `owner`, `watch`
-  and `prefetch` WITHOUT a version bump: `readBound` drops a record whose version
-  differs. A record with a variant must have the export that variant derives, and
+  uid, gid and masks replaced; building them from `nfsserve.DefaultAttrs` loses
+  that silently on Windows. The share record gained `read`, `write`, `owner`,
+  `fmask`, `dmask`, `watch` and `prefetch` WITHOUT a version bump: `readBound`
+  drops a record whose version differs. A mask is recorded only when it is not
+  0, and one not recorded restores as 0, never as the session's default. A record with a variant must have the export that variant derives, and
   one without must have the legacy one. Prefetch is recorded and restored into
   the words, and resumed: a restored share is attached to the cache with them,
   which also lets write-back run for it (ADR 0027, ADR 0042, ADR 0045).
@@ -809,6 +813,9 @@ premise of the project, and it applies to building it too. So:
 - **A share reports 0666/0777 owned by root or `REMOTE_DOCKER_SHARE_OWNER`,
   and a union's upper is 0777** (ADR 0046). A plain mount is granted by ACCESS whatever the mode; a
   union checks the copied mode locally and refused every uid but root.
+  `fmask=` and `dmask=` clear bits from those modes, so a mask clearing a write
+  bit brings that refusal back on a union for every uid but the owner: docs
+  recommend `fmask=0111` and nothing else.
 - **The share ROOT handle must survive this process; nothing below it needs
   to.** MOUNT issues the root handle once and the kernel never mounts again, so
   a root that stops resolving leaves every lookup starting from something dead

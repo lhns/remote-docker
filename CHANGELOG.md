@@ -8,6 +8,16 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **Choose the permissions a share reports**, per mount with `fmask=` and
+  `dmask=` or for every mount with `REMOTE_DOCKER_SHARE_FMASK` and
+  `REMOTE_DOCKER_SHARE_DMASK`. From a Windows host every file looks executable;
+  `fmask=0111` makes them plain `0666` files, so git in a container stops
+  recording them all as executable.
+
 ## 0.15.0 — 2026-10-22
 
 ### New

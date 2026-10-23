@@ -38,10 +38,11 @@ type Share struct {
 	// recorded, which no new mount ever resolves to.
 	Mode workspace.Mode
 
-	// words are what this share is registered with, resolved: the owner is
-	// always set. The owner is identity and fixed, since the filesystem is
-	// built with it and never replaced (ADR 0046); watch and prefetch are
-	// raised by later mounts, never lowered, hence the lock. Read with Words.
+	// words are what this share is registered with, resolved: the owner and
+	// the masks are always set. They are identity and fixed, since the
+	// filesystem is built with them and never replaced (ADR 0046); watch and
+	// prefetch are raised by later mounts, never lowered, hence the lock.
+	// Read with Words.
 	mu    sync.RWMutex
 	words workspace.ShareWords
 
@@ -142,12 +143,12 @@ func NewRegistry(attrs Attrs) *Registry {
 	}
 }
 
-// Register exports localPath as the variant mode and the owner in words name,
-// at /m/<id> with the id derived from both so it is the same on every run
-// (ADR 0007). A directory already registered as that variant is returned as it
-// stands rather than duplicated, its watch and prefetch raised to the stronger
-// of what it has and what was asked; another variant of the same directory is
-// a share of its own.
+// Register exports localPath as the variant mode and the owner and masks in
+// words name, at /m/<id> with the id derived from them so it is the same on
+// every run (ADR 0007). A directory already registered as that variant is
+// returned as it stands rather than duplicated, its watch and prefetch raised
+// to the stronger of what it has and what was asked; another variant of the
+// same directory is a share of its own.
 //
 // Unset words take the registry's attributes. They are applied to a copy of
 // them, because r.attrs is the session's (it carries AlwaysExecutable on
@@ -180,6 +181,14 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 		attrs.UID, attrs.GID = words.Owner.UID, words.Owner.GID
 	}
 	words.Owner = workspace.Owner{UID: attrs.UID, GID: attrs.GID, Set: true}
+	if words.FMask.Set {
+		attrs.FileMask = words.FMask.Bits
+	}
+	if words.DMask.Set {
+		attrs.DirMask = words.DMask.Bits
+	}
+	words.FMask = workspace.Mask{Bits: attrs.FileMask, Set: true}
+	words.DMask = workspace.Mask{Bits: attrs.DirMask, Set: true}
 	if words.Watch == workspace.WatchUnset {
 		words.Watch = workspace.WatchOff
 	}
@@ -193,7 +202,7 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 	// directory gets a share of its own instead of the old one.
 	exportPath := recorded
 	if exportPath == "" {
-		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: words.Owner}))
+		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, variantOf(mode, words)))
 	}
 
 	r.mu.Lock()
@@ -230,20 +239,26 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 	return share, nil
 }
 
+// variantOf is the variant a share's mode and words name.
+func variantOf(mode workspace.Mode, words workspace.ShareWords) workspace.ShareVariant {
+	return workspace.ShareVariant{Mode: mode, Owner: words.Owner, FMask: words.FMask, DMask: words.DMask}
+}
+
 // RecordedExport is the export this program would have given localPath as
 // recorded: derived from the variant when the record has one, from the path
 // alone when it predates the variant. Empty for a variant with no owner, which
-// no share was ever registered without. A record is believed only if the
-// export it names is this one: the far side names an id and never a path, so
-// the id is recomputed before it is believed (ADR 0027).
-func RecordedExport(localPath string, mode workspace.Mode, owner workspace.Owner) string {
+// no share was ever registered without; a mask not recorded is 0, which every
+// share before the masks had. A record is believed only if the export it
+// names is this one: the far side names an id and never a path, so the id is
+// recomputed before it is believed (ADR 0027).
+func RecordedExport(localPath string, mode workspace.Mode, words workspace.ShareWords) string {
 	if mode == workspace.ModeUnset {
 		return workspace.ExportPathForID(workspace.LegacyShareID(localPath))
 	}
-	if !owner.Set {
+	if !words.Owner.Set {
 		return ""
 	}
-	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: owner}))
+	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, variantOf(mode, words)))
 }
 
 // Lookup finds the share serving an export path. A path below a share's root
@@ -287,9 +302,12 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	// registers exactly the path it was given.
 	clean := normalizeExport(exportPath)
 	local, mode, words, ok := r.Restore(clean)
-	if !ok || clean != RecordedExport(local, mode, words.Owner) {
+	if !ok || clean != RecordedExport(local, mode, words) {
 		return nil, "", false
 	}
+	// A mask the record does not name is 0, as its id was derived. Left
+	// unset, the session's default would mask a share whose id says it is not.
+	words.FMask.Set, words.DMask.Set = true, true
 	share, err := r.register(local, clean, mode, words)
 	if err != nil || share.ExportPath != clean {
 		return nil, "", false

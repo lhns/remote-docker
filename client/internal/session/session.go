@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"runtime"
@@ -222,7 +223,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		ctx:      runCtx,
 		cancel:   cancel,
 		stopped:  make(chan struct{}),
-		registry: nfsserve.NewRegistry(defaultAttrs(opts.Config.ShareUID, opts.Config.ShareGID)),
+		registry: nfsserve.NewRegistry(defaultAttrs(opts.Config.ShareUID, opts.Config.ShareGID, opts.Config.ShareFileMask, opts.Config.ShareDirMask)),
 	}
 	// Set before the first share is registered, whose filesystem is built with it.
 	s.registry.Log = opts.Log
@@ -444,10 +445,11 @@ func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info,
 }
 
 // defaultAttrs is what every file in a share reports (ADR 0046): root unless
-// the user named another owner.
-func defaultAttrs(uid, gid uint32) nfsserve.Attrs {
+// the user named another owner, and nothing masked unless the user named a mask.
+func defaultAttrs(uid, gid uint32, fmask, dmask fs.FileMode) nfsserve.Attrs {
 	a := nfsserve.DefaultAttrs
 	a.UID, a.GID = uid, gid
+	a.FileMask, a.DirMask = fmask, dmask
 	// Windows has no execute bit, so without this nothing on a share runs.
 	a.AlwaysExecutable = runtime.GOOS == "windows"
 	return a

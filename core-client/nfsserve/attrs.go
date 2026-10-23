@@ -48,6 +48,12 @@ type Attrs struct {
 	// Where the local filesystem does have an execute bit, leave this off:
 	// the real bits are preserved instead, which is strictly better.
 	AlwaysExecutable bool
+
+	// FileMask and DirMask are cleared from what a file or a directory
+	// reports, the file's after the execute bit is decided: fmask=0111 is
+	// how a share from Windows reports its files as 0666 (ADR 0046).
+	FileMask os.FileMode
+	DirMask  os.FileMode
 }
 
 // executableBits are the permissions granted when a file is executable.
@@ -184,7 +190,7 @@ type identity struct {
 func (i *attrInfo) Mode() fs.FileMode {
 	mode := i.FileInfo.Mode()
 	if mode.IsDir() {
-		return (mode &^ fs.ModePerm) | (i.attrs.DirMode & fs.ModePerm)
+		return (mode &^ fs.ModePerm) | (i.attrs.DirMode &^ i.attrs.DirMask & fs.ModePerm)
 	}
 
 	perm := i.attrs.FileMode & fs.ModePerm
@@ -196,7 +202,7 @@ func (i *attrInfo) Mode() fs.FileMode {
 	if i.attrs.AlwaysExecutable || mode&executableBits != 0 {
 		perm |= executableBits
 	}
-	return (mode &^ fs.ModePerm) | perm
+	return (mode &^ fs.ModePerm) | (perm &^ i.attrs.FileMask)
 }
 
 // Sys is how the attributes actually reach the wire: go-nfs checks Sys() for

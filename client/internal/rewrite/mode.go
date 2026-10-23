@@ -136,9 +136,9 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 }
 
 // resolveMount settles one mount's words and refuses what cannot be served.
-// Two mounts of one directory asking for another read, write or owner are two
-// shares and nothing here compares them; mounts of one variant are one share,
-// and their watch and prefetch rise to the strongest asked (ADR 0042).
+// Two mounts of one directory asking for another read, write, owner or mask
+// are two shares and nothing here compares them; mounts of one variant are one
+// share, and their watch and prefetch rise to the strongest asked (ADR 0042).
 func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, source string, asked workspace.MountWords, spelled string) (workspace.MountWords, error) {
 	resolved := workspace.MountWords{
 		Mode:       asked.Mode.Or(r.modeFor(source)).Or(workspace.DefaultMode),
@@ -151,6 +151,13 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, sou
 	}
 	if !resolved.Owner.Set {
 		resolved.Owner = workspace.Owner{Set: true}
+	}
+	// The masks the same way: the word, the session's, else nothing cleared.
+	if !resolved.FMask.Set {
+		resolved.FMask = workspace.Mask{Bits: r.ShareFMask.Bits, Set: true}
+	}
+	if !resolved.DMask.Set {
+		resolved.DMask = workspace.Mask{Bits: r.ShareDMask.Bits, Set: true}
 	}
 	got := resolved.Mode
 
@@ -176,7 +183,8 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, sou
 		}
 	}
 
-	key := workspace.CanonicalKey(source) + "\x00" + got.String() + "\x00" + resolved.Owner.String()
+	key := workspace.CanonicalKey(source) + "\x00" + got.String() + "\x00" + resolved.Owner.String() +
+		"\x00" + resolved.FMask.String() + "\x00" + resolved.DMask.String()
 	if mounts[key] {
 		// The union, its owner and the share are settled by the first mount of
 		// the variant. This one may still ask for a watch the first did not.

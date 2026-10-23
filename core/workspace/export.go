@@ -86,11 +86,14 @@ func isDriveLetter(c byte) bool {
 }
 
 // ShareVariant is what makes two mounts of one directory different shares
-// (ADR 0042): how the mount is served and who owns what it reports. Both are
-// resolved, so the same mount always names the same variant.
+// (ADR 0042): how the mount is served, who owns what it reports and which
+// permission bits it hides. All are resolved, so the same mount always names
+// the same variant; only the masks' bits count, not whether they were named.
 type ShareVariant struct {
 	Mode  Mode
 	Owner Owner
+	FMask Mask
+	DMask Mask
 }
 
 // ShareIDFor is the stable identifier for a local directory mounted as variant,
@@ -100,11 +103,21 @@ type ShareVariant struct {
 // orphaning them. Every variant has its own id, so mounting one directory two
 // ways gives two exports, two volumes and two unions that never meet.
 //
+// A mask is appended only when it clears something, so every share from
+// before the masks keeps its id, and with it its volume and its union.
+//
 // Watch and prefetch are not here: they are effort spent on a share and rise
 // with the mounts that ask for them (ADR 0042).
 func ShareIDFor(localPath string, v ShareVariant) string {
-	return digestID(fmt.Sprintf("%s\x00%s\x00%s\x00%d:%d",
-		CanonicalKey(localPath), v.Mode.Read, v.Mode.Write, v.Owner.UID, v.Owner.GID))
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00%d:%d",
+		CanonicalKey(localPath), v.Mode.Read, v.Mode.Write, v.Owner.UID, v.Owner.GID)
+	if v.FMask.Bits != 0 {
+		key += "\x00f" + v.FMask.String()
+	}
+	if v.DMask.Bits != 0 {
+		key += "\x00d" + v.DMask.String()
+	}
+	return digestID(key)
 }
 
 // LegacyShareID is the id releases before the variant derived from the path

@@ -366,9 +366,10 @@ Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
 A session reads its settings (`REMOTE_DOCKER_PREFETCH`, `_WATCH`,
-`_CONSISTENCY`, `_SHARE_OWNER`, the cache limits and the timeouts) once, when it
-starts. A command with one of those variables set in its environment, to a
-value the session does not have, restarts an idle session and says what changed;
+`_CONSISTENCY`, `_SHARE_OWNER`, `_SHARE_FMASK`, `_SHARE_DMASK`, the cache
+limits and the timeouts) once, when it starts. A command with one of those
+variables set in its environment, to a value the session does not have,
+restarts an idle session and says what changed;
 if the session is in use it warns and leaves it alone, and `remote restart`
 applies them once nothing needs it. A variable that is not set is no opinion:
 a plain `docker ps` never changes a session. Config-file values are applied by
@@ -414,6 +415,8 @@ single mount can carry are in [Mount options](#mount-options).
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid:gid` every file in a share reports (gid defaults to the uid). The default for mounts naming no `owner=`. See [A container that is not root](#a-container-that-is-not-root) |
+| `REMOTE_DOCKER_SHARE_FMASK` | `shareFmask` | | `0`; octal bits cleared from every file's reported mode. The default for mounts naming no `fmask=` |
+| `REMOTE_DOCKER_SHARE_DMASK` | `shareDmask` | | `0`; octal bits cleared from every directory's reported mode. The default for mounts naming no `dmask=` |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` on Linux, `~/Library/Application Support/remote-docker` on macOS |
 | `REMOTE_DOCKER_IGNORE_CREDENTIAL_HELPERS` | | | off; set it to proceed when a registry login in `~/.docker/config.json` names a credential helper that is not installed, for a run that needs none of those registries |
@@ -492,6 +495,8 @@ little differently (examples below the table).
 | `watch=` | `off`, `partial`, `coarse` | `off`. `REMOTE_DOCKER_WATCH` / `watch`, which also takes `on`, `true`, `1`, `yes` (`partial`) and `best-effort` (`coarse`) | replays your edits inside the workspace so file watchers there fire; see [File watching](#file-watching) | a mount word takes only the three canonical values; `read=cached` and every union raise `off` to `partial` |
 | `prefetch=` | `off`, `eager`, `tree` | `off`. `REMOTE_DOCKER_PREFETCH` / `prefetch` | fills a union's cache ahead of reads, within `REMOTE_DOCKER_CACHE_FILES` and `_BYTES` | `eager` and `tree` need `read=cached` with `write=back` or `ephemeral`; anywhere else they are refused, not ignored |
 | `owner=` | `1000` (uid and gid), or uid and gid joined by one separator, as `1000.2000` | `0:0` (root). `REMOTE_DOCKER_SHARE_OWNER` / `shareOwner` | the uid and gid every file in the share reports, for an image that runs as another user; see [A container that is not root](#a-container-that-is-not-root) | the separator is any one character that is not a digit, `=` or `,`: write `.` in `-v`, whose option list cannot carry a fourth colon; `:` also works in `--mount` and compose. On a union the workspace must be able to give the root an owner, else the mount is refused |
+| `fmask=` | octal, 1 to 4 digits, at most `0777`, as `0111` | `0`. `REMOTE_DOCKER_SHARE_FMASK` / `shareFmask` | bits cleared from every file's reported mode, after the execute bit; `0111` makes files from a Windows host `0666`; see [A container that is not root](#a-container-that-is-not-root) | on a union, a cleared write bit makes the files read-only for every uid but the owner |
+| `dmask=` | octal, as `fmask=` | `0`. `REMOTE_DOCKER_SHARE_DMASK` / `shareDmask` | bits cleared from every directory's reported mode, as `022` | a mask clearing all three execute bits is refused; on a union, a cleared write bit refuses every uid but the owner, and the union's root stays `0777` |
 | `default`, `consistent` | | | Docker's own words for `read=direct,write=through` | any other bare word is refused |
 | `cached` | | | Docker's word for `read=cached,write=through` | |
 | `delegated` | | | Docker's word for `read=cached,write=back` | |
@@ -499,12 +504,13 @@ little differently (examples below the table).
 
 An axis or word a mount does not name comes from the per-directory rule
 (`consistencyPaths`), then the setting, then the default. Each combination of
-`read=`, `write=` and `owner=` is a share of its own, so one directory can be
-mounted differently in each container at the same time; nothing is refused for
-differing. `watch=` and `prefetch=` are per share instead: the share runs at the
-strongest any of its mounts asked for (`coarse` over `partial` over `off`,
-`eager` over `tree` over `off`), and it does not drop back while the session
-runs. Our words are removed before the daemon sees the mount.
+`read=`, `write=`, `owner=`, `fmask=` and `dmask=` is a share of its own, so
+one directory can be mounted differently in each container at the same time;
+nothing is refused for differing. `watch=` and `prefetch=` are per share
+instead: the share runs at the strongest any of its mounts asked for (`coarse`
+over `partial` over `off`, `eager` over `tree` over `off`), and it does not
+drop back while the session runs. Our words are removed before the daemon sees
+the mount.
 
 **`docker run -v`**: the third field is a comma-separated list, `ro,read=cached`,
 never `:read=cached:ro`.
@@ -514,6 +520,7 @@ docker run -v ./project:/app:read=cached img
 docker run -v ./project:/app:ro,read=cached,watch=partial img
 docker run -v ./src:/app:read=cached,write=back,prefetch=tree,owner=1000.2000 img
 docker run -v ./target:/app/target:write=ephemeral img
+docker run -v ./project:/app:write=back,fmask=0111 img   # files from Windows as 0666
 docker run -v ./data:/data:watch=off img      # holds for read=direct,write=through
 ```
 
@@ -1343,6 +1350,27 @@ once: a mount naming another owner is a share of its own, beside the first,
 with its own volume. Containers running together under different owners see
 the same files.
 
+**The modes** can be narrowed with `fmask=` and `dmask=`, octal bits cleared
+from what every file and directory reports, as FAT and ntfs-3g mounts take
+them; `REMOTE_DOCKER_SHARE_FMASK` and `_DMASK` set them for every mount. The
+file mask applies after the execute bit is decided, and a mount with another
+mask is a share of its own. Three things to know:
+
+- **Clear execute bits, not write bits, on a union.** A union checks modes
+  itself, so a mask that takes write away (`0133`, `022`) makes the files
+  read-only for every uid but the share's owner. A plain mount still grants
+  every access. `fmask=0111` is the one to reach for.
+- **`chmod +x` is hidden** under `fmask=0111`: it still reaches the file on a
+  Linux host, but the mode read back has no execute bit.
+- **A union's root stays `0777`**, and files a container creates in a union
+  keep the modes it gave them.
+
+**git in a container on a share from Windows.** Every file reports `0777`
+there, and a repository `git init` made inside a container has
+`core.filemode=true`, so git records every file as executable and Git for
+Windows then shows them all as modified. Mount with `fmask=0111`, or run
+`git config core.filemode false` in that repository.
+
 **A named volume is not a share, and gets none of that.** Where the image has no
 directory at the mount path, the daemon creates it root-owned 0755, so a
 non-root container gets EACCES on its first write. That is Docker's own rule,
@@ -1426,7 +1454,7 @@ Windows client; CI fails on any difference not listed in
 
 | behaviour | on a share | why |
 |---|---|---|
-| owner and mode | every file is owned by root (`0:0`), or by `REMOTE_DOCKER_SHARE_OWNER`; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve | ADR 0046, `Attrs.AlwaysExecutable` |
+| owner and mode | every file is owned by root (`0:0`), or by `REMOTE_DOCKER_SHARE_OWNER`; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve; `fmask=` and `dmask=` then clear bits, which hides a `chmod +x` and, on a union, a cleared write bit refuses every uid but the owner | ADR 0046, `Attrs.AlwaysExecutable` |
 | `chown` | accepted, changes nothing | ownership is synthesised |
 | `utime`, `touch -d` | accepted, changes nothing: every SETATTR of times is dropped, so a `touch` does not move a file's mtime | the watcher replays a SETATTR to invalidate, and applying one looped |
 | `chmod` | reaches the file on this machine, with the owner's read and write forced on; the mode read back is still the synthesised one, so the execute bit on a Linux host is all a container can observe | the share is served as that owner |

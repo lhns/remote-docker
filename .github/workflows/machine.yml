@@ -146,6 +146,18 @@ jobs:
           $out
           if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
 
+      # NTFS has no execute bit, so every file reports 0777 unless fmask=
+      # clears it (ADR 0046). The same runner-written file, both ways.
+      - name: fmask=0111 reports a file from Windows as 0666
+        shell: pwsh
+        run: |
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 stat -c %a /w/marker) -join "`n"
+          "default: $out"
+          if ($out -notmatch '^777$') { throw "with no mask the file reports [$out], want 777" }
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w:fmask=0111" alpine:3 stat -c %a /w/marker) -join "`n"
+          "fmask=0111: $out"
+          if ($out -notmatch '^666$') { throw "with fmask=0111 the file reports [$out], want 666" }
+
       # A pipe that cannot half-close hangs here rather than failing.
       - name: piped stdin reaches EOF in run -i and exec -i
         shell: pwsh

@@ -24,12 +24,14 @@ import (
 
 // shareRecord is one directory this workspace asked to export.
 //
-// Read, Write and Owner are the share's variant and Watch and Prefetch its
-// raised words, all resolved. A record without one predates the word and takes
-// the session's default, which is why the file version does not move: a bump
-// would make every restore fail after an upgrade (ADR 0027). A record with no
-// read and write was written before the variant was in the export id; it
-// restores under its recorded export and the mode stays unknown.
+// Read, Write, Owner and the masks are the share's variant and Watch and
+// Prefetch its raised words, all resolved. A record without one predates the
+// word and takes the session's default, which is why the file version does not
+// move: a bump would make every restore fail after an upgrade (ADR 0027). A
+// mask is written only when it clears something, and one not written is 0,
+// as the share's id was derived. A record with no read and write was written
+// before the variant was in the export id; it restores under its recorded
+// export and the mode stays unknown.
 type shareRecord struct {
 	Export   string    `json:"export"`
 	Path     string    `json:"path"`
@@ -37,6 +39,8 @@ type shareRecord struct {
 	Read     string    `json:"read,omitempty"`
 	Write    string    `json:"write,omitempty"`
 	Owner    string    `json:"owner,omitempty"` // uid:gid
+	FMask    string    `json:"fmask,omitempty"` // four octal digits
+	DMask    string    `json:"dmask,omitempty"`
 	Watch    string    `json:"watch,omitempty"`
 	Prefetch string    `json:"prefetch,omitempty"`
 }
@@ -61,6 +65,12 @@ func (r shareRecord) words() workspace.ShareWords {
 	if o, err := workspace.ParseOwner(r.Owner); err == nil {
 		w.Owner = o
 	}
+	if m, err := workspace.ParseFileMask(r.FMask); err == nil {
+		w.FMask = m
+	}
+	if m, err := workspace.ParseDirMask(r.DMask); err == nil {
+		w.DMask = m
+	}
 	if watch, err := workspace.ParseWatch(r.Watch); err == nil {
 		w.Watch = watch
 	}
@@ -80,6 +90,12 @@ func recordFor(share *nfsserve.Share) shareRecord {
 	}
 	if words.Owner.Set {
 		rec.Owner = words.Owner.String()
+	}
+	if words.FMask.Bits != 0 {
+		rec.FMask = words.FMask.String()
+	}
+	if words.DMask.Bits != 0 {
+		rec.DMask = words.DMask.String()
 	}
 	rec.Watch, rec.Prefetch = string(words.Watch), string(words.Prefetch)
 	return rec
@@ -177,7 +193,7 @@ func (s *shareStore) usable(rec shareRecord) bool {
 	if rec.Export == "" || rec.Path == "" {
 		return false
 	}
-	if rec.Export != nfsserve.RecordedExport(rec.Path, rec.mode(), rec.words().Owner) {
+	if rec.Export != nfsserve.RecordedExport(rec.Path, rec.mode(), rec.words()) {
 		return false
 	}
 	if !rec.LastUsed.IsZero() && time.Since(rec.LastUsed) > shareUnused {
@@ -198,7 +214,8 @@ func (s *shareStore) remember(share *nfsserve.Share) {
 	// Not rewritten on every container: only on change or an hour-stale stamp.
 	next := recordFor(share)
 	changed := !known || rec.Path != next.Path || rec.Read != next.Read || rec.Write != next.Write ||
-		rec.Owner != next.Owner || rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
+		rec.Owner != next.Owner || rec.FMask != next.FMask || rec.DMask != next.DMask ||
+		rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
 	if changed {
 		s.records[share.ExportPath] = next
 	}

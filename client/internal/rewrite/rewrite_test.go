@@ -32,12 +32,14 @@ func (f *fakeSharer) Share(localPath string, mount workspace.MountWords) (string
 		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
-	f.exports = append(f.exports, workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner})))
+	export := workspace.ExportPathForID(workspace.ShareIDFor(localPath,
+		workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner, FMask: mount.FMask, DMask: mount.DMask}))
+	f.exports = append(f.exports, export)
 	if f.words == nil {
 		f.words = map[string]workspace.ShareWords{}
 	}
 	f.words[localPath] = words
-	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner})), f.files[localPath], nil
+	return export, f.files[localPath], nil
 }
 
 type fakeVolumes struct {

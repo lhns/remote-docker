@@ -121,6 +121,53 @@ func TestShareIDFollowsTheVariant(t *testing.T) {
 	}
 }
 
+// Ids from before the masks, computed by the code that shipped them. A share
+// whose id moves loses its volume and its union on upgrade, so a mount naming
+// no mask must still derive exactly these.
+func TestShareIDWithoutMasksDidNotMove(t *testing.T) {
+	const p = "/home/alice/project"
+	owner := Owner{UID: 1000, GID: 1000, Set: true}
+	for _, tc := range []struct {
+		v    ShareVariant
+		want string
+	}{
+		{ShareVariant{Mode: DefaultMode, Owner: owner}, "4924c75bb0662050"},
+		{ShareVariant{Mode: Mode{ReadCached, WriteBack}, Owner: Owner{Set: true}}, "55305174f95e46fc"},
+		// A mask named as 0 clears nothing and is not a variant of its own.
+		{ShareVariant{Mode: DefaultMode, Owner: owner, FMask: Mask{Set: true}, DMask: Mask{Set: true}}, "4924c75bb0662050"},
+	} {
+		if got := ShareIDFor(p, tc.v); got != tc.want {
+			t.Errorf("ShareIDFor(%+v) = %q, want %q", tc.v, got, tc.want)
+		}
+	}
+}
+
+func TestShareIDFollowsTheMasks(t *testing.T) {
+	const p = "/home/alice/project"
+	base := ShareVariant{Mode: DefaultMode, Owner: Owner{Set: true}}
+	fmask := base
+	fmask.FMask = Mask{Bits: 0o111, Set: true}
+	dmask := base
+	dmask.DMask = Mask{Bits: 0o022, Set: true}
+	both := fmask
+	both.DMask = dmask.DMask
+	// The same bits on the other axis must not collide.
+	swapped := base
+	swapped.DMask = Mask{Bits: 0o111, Set: true}
+
+	seen := map[string]string{}
+	for name, v := range map[string]ShareVariant{"none": base, "fmask": fmask, "dmask": dmask, "both": both, "dmask 0111": swapped} {
+		id := ShareIDFor(p, v)
+		if prev, ok := seen[id]; ok {
+			t.Errorf("%s and %s both yield %q", prev, name, id)
+		}
+		seen[id] = name
+		if id == LegacyShareID(p) {
+			t.Errorf("%s yields the legacy id", name)
+		}
+	}
+}
+
 // Every variant, the default included, has an id no release before this one
 // derived from the path alone, so an old volume is never taken for a new share.
 func TestShareIDNeverEqualsTheLegacyID(t *testing.T) {
