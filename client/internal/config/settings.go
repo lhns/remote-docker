@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"slices"
 	"sort"
@@ -18,9 +19,10 @@ import (
 // Names are the user-facing spelling, and every value is parsed and written
 // back in its canonical form, so what is compared is what a value means: watch
 // "on" is "partial", consistency "cached" is "read=cached,write=through", an
-// empty watch or prefetch is "off", and the share owner is uid:gid, so 1000,
-// 1000:1000 and 1000.1000 compare equal. A value that does not parse is kept
-// as written, which is a difference like any other.
+// empty watch or prefetch is "off", the share owner is uid:gid, so 1000,
+// 1000:1000 and 1000.1000 compare equal, and a mask is four octal digits. A
+// value that does not parse is kept as written, which is a difference like any
+// other.
 func (c Config) SessionSettings() map[string]string {
 	paths := make([]string, 0, len(c.ConsistencyPaths))
 	for dir, mode := range c.ConsistencyPaths {
@@ -38,6 +40,8 @@ func (c Config) SessionSettings() map[string]string {
 		"cache-bytes":       fmt.Sprint(c.CacheBytes),
 		"prefetch":          canonicalPrefetch(c.Prefetch),
 		"share-owner":       c.shareOwnerSetting(),
+		"share-fmask":       maskSetting(c.ShareFMask, c.ShareFileMask, workspace.ParseFileMask),
+		"share-dmask":       maskSetting(c.ShareDMask, c.ShareDirMask, workspace.ParseDirMask),
 		"idle-timeout":      c.IdleTimeout.String(),
 		"daemon-idle":       c.DaemonIdle.String(),
 		"daemon-standby":    c.DaemonStandby.String(),
@@ -55,6 +59,18 @@ func (c Config) shareOwnerSetting() string {
 		return o.String()
 	}
 	return c.ShareOwner
+}
+
+// maskSetting is a mask in its one spelling, read from the string when there
+// is one, as shareOwnerSetting is.
+func maskSetting(s string, parsed fs.FileMode, parse func(string) (workspace.Mask, error)) string {
+	if s == "" {
+		return workspace.Mask{Bits: parsed}.String()
+	}
+	if m, err := parse(s); err == nil {
+		return m.String()
+	}
+	return s
 }
 
 // canonicalMode is a mode in its one spelling, with an axis it leaves unset
@@ -101,6 +117,10 @@ var notSessionSettings = map[string]string{
 	"ShareUID":         "ShareOwner, parsed",
 	"ShareGID":         "ShareOwner, parsed",
 	"shareOwnerSource": "names where ShareOwner came from, for an error",
+	"ShareFileMask":    "ShareFMask, parsed",
+	"ShareDirMask":     "ShareDMask, parsed",
+	"shareFMaskSource": "names where ShareFMask came from, for an error",
+	"shareDMaskSource": "names where ShareDMask came from, for an error",
 }
 
 // SettingChange is one setting whose value differs between two sessions.
@@ -119,6 +139,8 @@ var settingEnv = map[string]string{
 	"cache-bytes":    EnvCacheBytes,
 	"prefetch":       EnvPrefetch,
 	"share-owner":    EnvShareOwner,
+	"share-fmask":    EnvShareFMask,
+	"share-dmask":    EnvShareDMask,
 	"idle-timeout":   EnvIdleTimeout,
 	"daemon-idle":    EnvDaemonIdle,
 	"daemon-standby": EnvDaemonStandby,

@@ -1,7 +1,7 @@
 # 0042 — Docker's mount consistency, applied to the NFS mount
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-15
+- Date: 2026-09-01, last amended 2026-10-23
 - Current answer: a mount has two settings, `read=direct|cached` and
   `write=through|back|ephemeral`, and those two words are the only spelling:
   `-v /a:/b:ro,read=cached`, `--mount '...,"consistency=read=cached,write=back"'`,
@@ -11,14 +11,17 @@
   the watcher. `through` writes here as it happens; `back` and `ephemeral`
   write into a union ([ADR 0044](0044-a-delegated-share-is-a-cache.md)), and
   only `back` carries it home.
-- A mount may also carry words of its SHARE, beside the two axes: `owner=` and
-  `watch=off|partial|coarse` and `prefetch=off|eager|tree` (amendment 2026-10-14).
-  The session settings do not accept them; each has a default of its own
-  (`REMOTE_DOCKER_SHARE_OWNER`, `REMOTE_DOCKER_WATCH`,
-  `REMOTE_DOCKER_PREFETCH`).
-- A share is identified by (directory, read, write, owner) (amendment
-  2026-10-15). A mount asking for a new combination gets its own share, export,
-  volume and union beside the others, and nothing is refused or replaced.
+- A mount may also carry words of its SHARE, beside the two axes: `owner=`,
+  `fmask=`, `dmask=`, `watch=off|partial|coarse` and `prefetch=off|eager|tree`
+  (amendments 2026-10-14, 2026-10-23). The session settings do not accept them;
+  each has a default of its own (`REMOTE_DOCKER_SHARE_OWNER`,
+  `REMOTE_DOCKER_SHARE_FMASK`, `REMOTE_DOCKER_SHARE_DMASK`,
+  `REMOTE_DOCKER_WATCH`, `REMOTE_DOCKER_PREFETCH`).
+- A share is identified by (directory, read, write, owner, fmask, dmask)
+  (amendments 2026-10-15, 2026-10-23); a mask is in the id only when it is not
+  0, so no earlier id moved. A mount asking for a new combination gets its own
+  share, export, volume and union beside the others, and nothing is refused or
+  replaced.
   `watch=` and `prefetch=` are effort spent on one share: it runs at the
   highest level any mount of it asked for (`off < partial < coarse`,
   `off < tree < eager`), raised silently and never lowered while the session
@@ -137,6 +140,9 @@ refused here rather than forwarded.
   before this program sees it. So write `owner=1000.2000` there; `:` works in
   `--mount` and in compose's `consistency:`. One number is both ids. Empty
   sides, values over 32 bits and anything else are refused naming the forms.
+- `fmask=` and `dmask=` (amended 2026-10-23, ADR 0046) take octal, 1 to 4
+  digits, at most `0777`. Anything else is refused naming the word, and so is a
+  `dmask` clearing all three execute bits.
 - Checked 2026-10-14 at docker/cli v29.8.2. Re-check: `grep -rn 'too many colons' internal/volumespec` in the module `client/go.mod` requires.
 
 **It combines with `ro` as a comma.** A `-v` has at most three colon-separated
@@ -209,6 +215,18 @@ succeeding.
   fuse-overlayfs process. A container sees what is written through another
   share only after that share's writes reach this machine (a union's write-back
   delay) or its cache is invalidated by the watcher.
+
+**The masks are identity too** (amended 2026-10-23).
+
+- `fmask=` and `dmask=` (ADR 0046) are fixed per share for the reason the owner
+  is: the filesystem is built with them, and a union's cache already holds
+  files copied up with the old modes.
+- `ShareIDFor` appends `\x00f<mask>` and `\x00d<mask>` only when the mask is
+  not 0. Every share made before the masks keeps its id, volume and union;
+  `export_test.go` pins two ids computed by the code before the change.
+- The share record gains `fmask` and `dmask`, written only when not 0, with no
+  version bump. A record without them restores with both at 0, as its id was
+  derived, never with the session's default.
 
 ## What it bought
 

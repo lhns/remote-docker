@@ -16,7 +16,7 @@ var alice1000 = workspace.ShareWords{Owner: workspace.Owner{UID: 1000, GID: 2000
 // them in the record.
 func TestTheWordsAreRememberedAndRestored(t *testing.T) {
 	s, project, _ := store(t)
-	reg := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	reg := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	share, err := reg.Register(project, workspace.DefaultMode, alice1000)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func mountOf(w workspace.ShareWords) workspace.MountWords {
 // first, with its own export, and nothing is refused (ADR 0042).
 func TestTheRegistrarGivesEachVariantItsOwnShare(t *testing.T) {
 	dir := t.TempDir()
-	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
+	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))}
 
 	direct := mountOf(workspace.ShareWords{})
 	cached := workspace.MountWords{Mode: workspace.Mode{Read: workspace.ReadCached, Write: workspace.WriteThrough}, ShareWords: direct.ShareWords}
@@ -130,7 +130,7 @@ func TestARestoredShareIsFoundByItsVariantOnly(t *testing.T) {
 	s.remember(share)
 
 	next := newShareStore(s.path, nil)
-	registry := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	registry := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	registry.Restore = next.restore
 	if _, _, ok := registry.LookupOrRestore(share.ExportPath); !ok {
 		t.Fatal("not restored")
@@ -157,7 +157,7 @@ func TestANewMountIsNotGivenALegacyShare(t *testing.T) {
 	s.save()
 
 	next := newShareStore(s.path, nil)
-	registry := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	registry := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	registry.Restore = next.restore
 	if _, _, ok := registry.LookupOrRestore(legacy); !ok {
 		t.Fatal("the legacy record was not restored")
@@ -173,5 +173,43 @@ func TestANewMountIsNotGivenALegacyShare(t *testing.T) {
 	}
 	if _, _, ok := registry.Lookup(legacy); !ok {
 		t.Error("the restored share stopped resolving once a new mount arrived")
+	}
+}
+
+// A share's masks are recorded and restored with it, and a record whose masks
+// do not derive its export is not believed. An unmasked share writes no mask
+// field, so its record is what it was before the masks.
+func TestTheMasksAreRememberedAndRestored(t *testing.T) {
+	s, project, _ := store(t)
+	// The session default masks, which a share naming none is recorded with.
+	reg := nfsserve.NewRegistry(defaultAttrs(0, 0, 0o111, 0))
+	masked, err := reg.Register(project, workspace.DefaultMode, workspace.ShareWords{DMask: workspace.Mask{Bits: 0o022, Set: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := reg.Register(project, workspace.DefaultMode, workspace.ShareWords{FMask: workspace.Mask{Set: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.remember(masked)
+	s.remember(plain)
+
+	next := newShareStore(s.path, nil)
+	if _, _, words, ok := next.restore(masked.ExportPath); !ok ||
+		words.FMask != (workspace.Mask{Bits: 0o111, Set: true}) || words.DMask != (workspace.Mask{Bits: 0o022, Set: true}) {
+		t.Errorf("restored %v, %v; want fmask 0111 and dmask 0022", words, ok)
+	}
+	rec := next.records[plain.ExportPath]
+	if rec.FMask != "" || rec.DMask != "" {
+		t.Errorf("an unmasked share recorded fmask %q, dmask %q; want neither", rec.FMask, rec.DMask)
+	}
+	if _, _, _, ok := next.restore(plain.ExportPath); !ok {
+		t.Error("the unmasked share was not restored")
+	}
+
+	edited := next.records[masked.ExportPath]
+	edited.FMask = "0022"
+	if next.usable(edited) {
+		t.Error("a record whose mask was edited is still believed")
 	}
 }

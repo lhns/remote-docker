@@ -160,3 +160,19 @@ func TestShareOwnerSpellingsAgree(t *testing.T) {
 		t.Errorf("default owner = %q, want 0:0", got)
 	}
 }
+
+// A mask is one setting however it is spelled, and unset is 0000.
+func TestShareMaskSpellingsAgree(t *testing.T) {
+	for _, in := range []string{"111", "0111", " 0111"} {
+		if got := (Config{ShareFMask: in}).SessionSettings()["share-fmask"]; got != "0111" {
+			t.Errorf("fmask %q = %q, want 0111", in, got)
+		}
+	}
+	if got := (Config{ShareDirMask: 0o22}).SessionSettings()["share-dmask"]; got != "0022" {
+		t.Errorf("parsed dmask = %q, want 0022", got)
+	}
+	s := Config{}.SessionSettings()
+	if s["share-fmask"] != "0000" || s["share-dmask"] != "0000" {
+		t.Errorf("default masks = %q, %q, want 0000", s["share-fmask"], s["share-dmask"])
+	}
+}

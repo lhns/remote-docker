@@ -87,6 +87,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Prefetch:   prefetchWord(s.prefetch),
 		Mode:       s.opts.Mode,
 		ShareOwner: workspace.Owner{UID: s.opts.Config.ShareUID, GID: s.opts.Config.ShareGID, Set: true},
+		ShareFMask: workspace.Mask{Bits: s.opts.Config.ShareFileMask, Set: true},
+		ShareDMask: workspace.Mask{Bits: s.opts.Config.ShareDirMask, Set: true},
 		ModePaths:  s.opts.ModePaths,
 
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },

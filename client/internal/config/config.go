@@ -98,6 +98,19 @@ type Config struct {
 
 	// shareOwnerSource names where ShareOwner came from, for its error.
 	shareOwnerSource string
+
+	// ShareFMask and ShareDMask are the octal masks a share clears from its
+	// files' and directories' modes when a mount names no fmask= or dmask=
+	// (ADR 0046); ShareFileMask and ShareDirMask are them parsed, and zero
+	// when unset.
+	ShareFMask    string
+	ShareDMask    string
+	ShareFileMask fs.FileMode
+	ShareDirMask  fs.FileMode
+
+	// shareFMaskSource and shareDMaskSource name where each came from.
+	shareFMaskSource string
+	shareDMaskSource string
 }
 
 // DefaultDaemonIdle is never: exiting takes the endpoint that compose, buildx
@@ -148,6 +161,8 @@ type Workspace struct {
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
 	DaemonStandby string   `json:"daemonStandby,omitempty"`
 	ShareOwner    string   `json:"shareOwner,omitempty"`
+	ShareFMask    string   `json:"shareFmask,omitempty"`
+	ShareDMask    string   `json:"shareDmask,omitempty"`
 
 	// Machine is set when this program provisioned the workspace's Linux
 	// system. It is the only record one was built, which is why `rm` refuses
@@ -266,6 +281,8 @@ const (
 	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
 	EnvDaemonStandby = "REMOTE_DOCKER_DAEMON_STANDBY"
 	EnvShareOwner    = "REMOTE_DOCKER_SHARE_OWNER"
+	EnvShareFMask    = "REMOTE_DOCKER_SHARE_FMASK"
+	EnvShareDMask    = "REMOTE_DOCKER_SHARE_DMASK"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -304,6 +321,21 @@ func (f File) Resolve(o Overrides) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("config: %s: %w", cfg.shareOwnerSource, err)
 		}
+	}
+	// So is an invalid mask, for the same reason.
+	if cfg.ShareFMask != "" {
+		m, err := workspace.ParseFileMask(cfg.ShareFMask)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %s: %w", cfg.shareFMaskSource, err)
+		}
+		cfg.ShareFileMask = m.Bits
+	}
+	if cfg.ShareDMask != "" {
+		m, err := workspace.ParseDirMask(cfg.ShareDMask)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %s: %w", cfg.shareDMaskSource, err)
+		}
+		cfg.ShareDirMask = m.Bits
 	}
 
 	// The workspace lowercases the key file's name, so a user set as "Alice"
@@ -428,6 +460,12 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.ShareOwner != "" {
 		cfg.ShareOwner, cfg.shareOwnerSource = ws.ShareOwner, "the shareOwner setting"
 	}
+	if ws.ShareFMask != "" {
+		cfg.ShareFMask, cfg.shareFMaskSource = ws.ShareFMask, "the shareFmask setting"
+	}
+	if ws.ShareDMask != "" {
+		cfg.ShareDMask, cfg.shareDMaskSource = ws.ShareDMask, "the shareDmask setting"
+	}
 }
 
 // duration parses "90s", "-1s" and the like. Malformed means unset, never an
@@ -515,6 +553,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvShareOwner); v != "" {
 		cfg.ShareOwner, cfg.shareOwnerSource = v, EnvShareOwner
+	}
+	if v := os.Getenv(EnvShareFMask); v != "" {
+		cfg.ShareFMask, cfg.shareFMaskSource = v, EnvShareFMask
+	}
+	if v := os.Getenv(EnvShareDMask); v != "" {
+		cfg.ShareDMask, cfg.shareDMaskSource = v, EnvShareDMask
 	}
 }
 

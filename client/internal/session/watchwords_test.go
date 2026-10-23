@@ -16,7 +16,7 @@ func hostingSession(t *testing.T, defaultWatch workspace.Watch, shares *shareSto
 	t.Helper()
 	s := standbySession(t)
 	s.opts = Options{Role: Host, Watch: defaultWatch}
-	s.registry = nfsserve.NewRegistry(defaultAttrs(0, 0))
+	s.registry = nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	s.shares = shares
 	s.registry.Restore = s.restoreShare
 	s.registry.Restored = s.shareRestored
@@ -28,7 +28,7 @@ func hostingSession(t *testing.T, defaultWatch workspace.Watch, shares *shareSto
 // asking for more raises the record.
 func TestTheWatchWordIsRememberedAndRestored(t *testing.T) {
 	s, project, _ := store(t)
-	reg := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	reg := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	share, err := reg.Register(project, workspace.DefaultMode, workspace.ShareWords{Watch: workspace.WatchPartial})
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestNoWatcherStartsAfterClose(t *testing.T) {
 func TestTheRegistrarRaisesTheWatchAndNeverLowersIt(t *testing.T) {
 	dir := t.TempDir()
 	told := 0
-	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0)), changed: func() { told++ }}
+	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0)), changed: func() { told++ }}
 
 	var export string
 	for _, watch := range []workspace.Watch{workspace.WatchOff, workspace.WatchPartial, workspace.WatchOff, workspace.WatchCoarse, workspace.WatchPartial} {
@@ -184,7 +184,7 @@ func TestARaisedWatchReachesTheRunningWatcher(t *testing.T) {
 
 // Shares reach the watcher in their own mode.
 func TestSharesOfCarriesEachSharesMode(t *testing.T) {
-	registry := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	registry := nfsserve.NewRegistry(defaultAttrs(0, 0, 0, 0))
 	for dir, watch := range map[string]workspace.Watch{
 		t.TempDir(): workspace.WatchCoarse, t.TempDir(): workspace.WatchPartial, t.TempDir(): workspace.WatchOff,
 	} {

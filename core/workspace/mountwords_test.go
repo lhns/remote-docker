@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -196,5 +197,76 @@ func TestParsePrefetchAndMount(t *testing.T) {
 	}
 	if !IsModeWord("prefetch=lazy") {
 		t.Error("prefetch= is a mount word")
+	}
+}
+
+func TestParseMasks(t *testing.T) {
+	for in, want := range map[string]fs.FileMode{"0": 0, "0111": 0o111, "111": 0o111, "022": 0o022, " 22 ": 0o022, "777": 0o777, "0777": 0o777} {
+		got, err := ParseFileMask(in)
+		if err != nil || got != (Mask{Bits: want, Set: true}) {
+			t.Errorf("ParseFileMask(%q) = %v, %v; want %04o", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "8", "0999", "1000", "00777", "-1", "+1", "0o111", "1_1", "a"} {
+		_, err := ParseFileMask(in)
+		if err == nil || !strings.Contains(err.Error(), "fmask") || !strings.Contains(err.Error(), "octal") {
+			t.Errorf("ParseFileMask(%q) = %v, want a refusal naming fmask and the forms", in, err)
+		}
+	}
+	if m, err := ParseDirMask("022"); err != nil || m.Bits != 0o022 {
+		t.Errorf("ParseDirMask(022) = %v, %v", m, err)
+	}
+	// One execute bit left is enough to enter; none is not.
+	if _, err := ParseDirMask("0110"); err != nil {
+		t.Errorf("ParseDirMask(0110): %v", err)
+	}
+	for _, in := range []string{"0111", "0777", "0133"} {
+		if _, err := ParseDirMask(in); err == nil || !strings.Contains(err.Error(), "execute") {
+			t.Errorf("ParseDirMask(%q) = %v, want a refusal naming the execute bits", in, err)
+		}
+	}
+	if s := (Mask{Bits: 0o22, Set: true}).String(); s != "0022" {
+		t.Errorf("String = %q, want 0022", s)
+	}
+}
+
+func TestParseMountReadsMasks(t *testing.T) {
+	got, err := ParseMount("write=back,fmask=0111,dmask=022")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MountWords{Mode: Mode{Write: WriteBack}, ShareWords: ShareWords{FMask: Mask{0o111, true}, DMask: Mask{0o022, true}}}
+	if got != want {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// A named 0 is set, so it can override a session default.
+	if got, err := ParseMount("fmask=0"); err != nil || got.FMask != (Mask{Set: true}) {
+		t.Errorf("fmask=0 = %v, %v", got, err)
+	}
+	for in, says := range map[string]string{
+		"fmask=1,fmask=2": "twice",
+		"dmask=1,dmask=2": "twice",
+		"fmask=0999":      "fmask",
+		"dmask=x":         "dmask",
+		"dmask=0111":      "execute",
+	} {
+		if _, err := ParseMount(in); err == nil || !strings.Contains(err.Error(), says) {
+			t.Errorf("ParseMount(%q) = %v, want a refusal naming %s", in, err, says)
+		}
+	}
+}
+
+func TestParseModeRefusesMasksAndNamesTheSettings(t *testing.T) {
+	for word, setting := range map[string]string{"fmask=0111": "REMOTE_DOCKER_SHARE_FMASK", "dmask=022": "REMOTE_DOCKER_SHARE_DMASK"} {
+		if _, err := ParseMode("read=cached," + word); err == nil || !strings.Contains(err.Error(), setting) {
+			t.Errorf("ParseMode(%s) = %v, want a refusal naming %s", word, err, setting)
+		}
+		if !IsModeWord(word) {
+			t.Errorf("%q is a mount word and was not recognised", word)
+		}
+	}
+	// Claimed by its key, so a misspelt value is refused rather than forwarded.
+	if !IsModeWord("fmask=rw") || IsModeWord("fmask") {
+		t.Error("IsModeWord claims fmask= by its key, and only with a value")
 	}
 }

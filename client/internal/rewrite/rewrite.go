@@ -104,6 +104,11 @@ type Rewriter struct {
 	// otherwise; a Rewriter built without one treats it as root.
 	ShareOwner workspace.Owner
 
+	// ShareFMask and ShareDMask are the masks a mount naming none clears
+	// (ADR 0046). Unset is 0.
+	ShareFMask workspace.Mask
+	ShareDMask workspace.Mask
+
 	// OpenCache reaches the cache channel, opened only once a mount needs it.
 	// Its error is the tail of the refusal. Nil means no cache at all.
 	OpenCache func(ctx context.Context) (Cache, error)

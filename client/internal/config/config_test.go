@@ -383,3 +383,39 @@ func TestResolveShareOwnerNamesItsSource(t *testing.T) {
 		t.Errorf("a bad file owner = %v, want an error naming shareOwner", err)
 	}
 }
+
+// The masks follow the owner: the environment over the file, and a bad value
+// refused naming where it came from.
+func TestResolveShareMasks(t *testing.T) {
+	path := writeConfig(t, `{"host": "workspace.example", "shareFmask": "022", "shareDmask": "002"}`)
+
+	cfg, err := Resolve(Overrides{}, path)
+	if err != nil || cfg.ShareFileMask != 0o022 || cfg.ShareDirMask != 0o002 {
+		t.Fatalf("from the file = %04o, %04o, %v; want 0022, 0002", cfg.ShareFileMask, cfg.ShareDirMask, err)
+	}
+
+	t.Setenv(EnvShareFMask, "0111")
+	cfg, err = Resolve(Overrides{}, path)
+	if err != nil || cfg.ShareFileMask != 0o111 || cfg.ShareDirMask != 0o002 {
+		t.Fatalf("with %s = %04o, %04o, %v; want 0111 over the file", EnvShareFMask, cfg.ShareFileMask, cfg.ShareDirMask, err)
+	}
+
+	for env, bad := range map[string]string{EnvShareFMask: "0999", EnvShareDMask: "0111"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, bad)
+			if _, err := Resolve(Overrides{}, path); err == nil || !strings.Contains(err.Error(), env) {
+				t.Errorf("%s=%s = %v, want an error naming %s", env, bad, err, env)
+			}
+		})
+	}
+
+	t.Setenv(EnvShareFMask, "")
+	for key, body := range map[string]string{
+		"shareFmask": `{"host": "workspace.example", "shareFmask": "rw"}`,
+		"shareDmask": `{"host": "workspace.example", "shareDmask": "0777"}`,
+	} {
+		if _, err := Resolve(Overrides{}, writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("a bad %s = %v, want an error naming it", key, err)
+		}
+	}
+}
