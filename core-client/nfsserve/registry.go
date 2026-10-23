@@ -202,7 +202,7 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 	// directory gets a share of its own instead of the old one.
 	exportPath := recorded
 	if exportPath == "" {
-		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, variantOf(mode, words)))
+		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, words.Variant(mode)))
 	}
 
 	r.mu.Lock()
@@ -239,11 +239,6 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 	return share, nil
 }
 
-// variantOf is the variant a share's mode and words name.
-func variantOf(mode workspace.Mode, words workspace.ShareWords) workspace.ShareVariant {
-	return workspace.ShareVariant{Mode: mode, Owner: words.Owner, FMask: words.FMask, DMask: words.DMask}
-}
-
 // RecordedExport is the export this program would have given localPath as
 // recorded: derived from the variant when the record has one, from the path
 // alone when it predates the variant. Empty for a variant with no owner, which
@@ -258,7 +253,7 @@ func RecordedExport(localPath string, mode workspace.Mode, words workspace.Share
 	if !words.Owner.Set {
 		return ""
 	}
-	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, variantOf(mode, words)))
+	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, words.Variant(mode)))
 }
 
 // Lookup finds the share serving an export path. A path below a share's root

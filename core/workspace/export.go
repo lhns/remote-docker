@@ -96,6 +96,11 @@ type ShareVariant struct {
 	DMask Mask
 }
 
+// Variant is the variant a share served as mode with these words is.
+func (w ShareWords) Variant(mode Mode) ShareVariant {
+	return ShareVariant{Mode: mode, Owner: w.Owner, FMask: w.FMask, DMask: w.DMask}
+}
+
 // ShareIDFor is the stable identifier for a local directory mounted as variant,
 // derived from its canonical key and the variant. The same mount always yields
 // the same id, on this run and on the next one, which is what lets a

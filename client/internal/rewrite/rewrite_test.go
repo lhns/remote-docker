@@ -32,8 +32,7 @@ func (f *fakeSharer) Share(localPath string, mount workspace.MountWords) (string
 		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
-	export := workspace.ExportPathForID(workspace.ShareIDFor(localPath,
-		workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner, FMask: mount.FMask, DMask: mount.DMask}))
+	export := workspace.ExportPathForID(workspace.ShareIDFor(localPath, mount.Variant(mount.Mode)))
 	f.exports = append(f.exports, export)
 	if f.words == nil {
 		f.words = map[string]workspace.ShareWords{}
