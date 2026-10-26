@@ -717,6 +717,16 @@ if command -v fuse-overlayfs >/dev/null 2>&1; then
         echo "$f" >"$EXPORT_DIR/parity/tree/sub/$f"
     done
     echo old >"$EXPORT_DIR/parity/repl/old"
+    # A lower of its own: section 9 unmounted the shared one. Mounted as
+    # section 1 mounts it, so copy-up reads through NFS as a share does.
+    PLOWER=$WORK/parity-lower
+    mkdir -p "$PLOWER"
+    if ! sudo mount -t nfs 127.0.0.1:"$EXPORT_DIR" "$PLOWER" \
+        -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2,actimeo=1,noatime 2>"$WORK/parity-nfs.err"; then
+        info "could not mount the export again for section 14: $(cat "$WORK/parity-nfs.err")"
+    fi
+    LOWER=$PLOWER
+    report "the lower as fuse-overlayfs will see it" ls -la "$LOWER/parity"
     if sudo fuse-overlayfs -o "lowerdir=$LOWER/parity,upperdir=$PB/upper,workdir=$PB/work" \
         "$PB/merged" 2>"$WORK/parity.err"; then
         sudo chown 1000:1000 "$PB/merged/old.txt"
@@ -738,6 +748,8 @@ if command -v fuse-overlayfs >/dev/null 2>&1; then
 
         sudo mkdir "$PB/merged/emptydir"
         report "a directory made through the union" sudo find "$PB/upper/emptydir" -printf '%y %m %p\n'
+        report "its extended attributes (opaque or not)" \
+            sudo sh -c "command -v getfattr >/dev/null || apt-get install -y -qq attr >/dev/null 2>&1; getfattr -d -m - $PB/upper/emptydir 2>&1"
 
         # The deletion and the replace first, then writes beside them later:
         # the times write-back reads must be the first ones.

@@ -181,6 +181,12 @@ type Request struct {
 	// (Hello.Times). Sent only when announced; an agent without it ignores the
 	// field.
 	Times bool `json:"t,omitempty"`
+
+	// Fill marks an OpApply as a prefetch batch, under Times: a file the
+	// container has its own version of in the cache layer is left as it is and
+	// named in Reply.Kept, because a fill never overwrites the container's work
+	// (ADR 0044). An invalidation does not set it: that is the user writing now.
+	Fill bool `json:"f,omitempty"`
 }
 
 // Reply is the agent's answer to one request.
@@ -207,6 +213,10 @@ type Reply struct {
 	// entries that could not be written (or read) and were left out, where the
 	// rest of the batch went. Spelled as a share path.
 	Skipped []string `json:"k,omitempty"`
+
+	// Kept answers an OpApply that asked for Fill: the paths left as the
+	// container had them, which are not in the cache as the client sent them.
+	Kept []string `json:"kp,omitempty"`
 
 	// Present answers OpPresent: the subset of the paths that exist.
 	Present []string `json:"x,omitempty"`

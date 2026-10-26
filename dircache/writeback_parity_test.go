@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -412,7 +414,8 @@ func TestNothingChangedHereLaterIsEverOverwritten(t *testing.T) {
 		}
 		ctime := func(string) (time.Time, bool) { return localCtime, true }
 
-		actions := decide(manifest, nil, []Change{ch}, local, ctime, skew, 0o111)
+		margin := time.Duration(rng.IntN(2)) * time.Minute
+		actions := decide(manifest, nil, []Change{ch}, local, ctime, skew, margin, 0o111)
 
 		laterHere := here && localCtime.After(time.Unix(0, ch.Changed).Add(-skew))
 		changedHere := !held || localSize != baseline.Size || !localMod.Equal(baseline.ModTime)
@@ -464,5 +467,207 @@ func TestAFillSendsAFileMadeAgainOverItsOwnOlderDeletion(t *testing.T) {
 	store.mu.Unlock()
 	if strings.Join(sent, ",") != "made-again.txt" {
 		t.Errorf("the fill sent %v, want only the file made here after its deletion", sent)
+	}
+}
+
+// A directory removed here is dropped from the cache as one, with what the
+// record held under it. Left, the empty skeleton a chown -R copied into the
+// cache would come back here as directories the container made. It is not
+// dropped while it is here again, nor while it holds a file the container made
+// that write-back has not carried here yet.
+func TestADirectoryRemovedHereIsDroppedFromTheCache(t *testing.T) {
+	root := t.TempDir()
+	writeLocal(t, root, "again/new", "made in it after it was removed")
+	writeLocal(t, root, "busy-sibling", "x")
+	store := &fakeStore{changes: []Change{{Path: "/busy/made-there", Size: 3, ModTime: time.Now().UnixNano()}}}
+	c := cacheWith(t, store)
+	c.shares.set(wbShare, root, &shareState{Report: Report{Done: true}}, map[string]Baseline{
+		"/gone/a":     {Size: 1, ModTime: time.Unix(5, 0)},
+		"/gone/sub/b": {Size: 1, ModTime: time.Unix(5, 0)},
+		"/kept":       {Size: 1, ModTime: time.Unix(5, 0)},
+	})
+	for _, d := range []string{"/gone", "/again", "/busy"} {
+		c.Observe(Event{Share: wbShare, Path: d, Op: OpRemove, Dir: true})
+	}
+	c.flushNow(t.Context())
+
+	store.mu.Lock()
+	dropped := slices.Clone(store.dropped)
+	store.mu.Unlock()
+	if !slices.Contains(dropped, "/gone") {
+		t.Errorf("dropped %v, want the removed directory", dropped)
+	}
+	for _, d := range []string{"/again", "/busy"} {
+		if slices.Contains(dropped, d) {
+			t.Errorf("dropped %s: it is here again, or holds the container's work", d)
+		}
+	}
+	rec := c.shares.recordedSet(wbShare)
+	if rec["/gone/a"] || rec["/gone/sub/b"] || !rec["/kept"] {
+		t.Errorf("the record is %v after the drop, want only /kept", rec)
+	}
+}
+
+// An empty directory the cache still has where this machine removed a
+// directory it had sent files from is that directory's skeleton, and is not
+// made here again. One the record knows nothing about is the container's.
+func TestASkeletonOfADirectoryRemovedHereIsNotMadeAgain(t *testing.T) {
+	recorded := map[string]bool{"/removed/sub/file.txt": true}
+	changes := []Change{
+		{Path: "/removed", Dir: true, Changed: 1},
+		{Path: "/removed/sub", Dir: true, Changed: 1},
+		{Path: "/made-there", Dir: true, Changed: 1},
+		// fuse-overlayfs may mark a directory the container made as opaque.
+		{Path: "/made-opaque", Opaque: true, Changed: 1},
+		{Path: "/removed", Opaque: true, Changed: 1},
+	}
+	actions := decide(nil, recorded, changes, localFrom(nil), nil, 0, 0, 0)
+	var made []string
+	for _, a := range actions {
+		if a.kind != kindMkdir {
+			t.Errorf("decided %+v, want only directories made", a)
+		}
+		made = append(made, a.Path)
+	}
+	slices.Sort(made)
+	if !slices.Equal(made, []string{"/made-opaque", "/made-there"}) {
+		t.Errorf("made %v, want the container's two directories and no skeleton", made)
+	}
+}
+
+// Settle is bounded by its context even while the per-connection loop is in
+// the middle of a round, whose context nobody cancels until Settle returns.
+func TestSettleIsBoundedWhileAnotherRoundRuns(t *testing.T) {
+	root := t.TempDir()
+	store := &faultStore{}
+	store.add("/slow.txt", "held up")
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	store.pullFn = func(context.Context, []string, func(string) error) error {
+		once.Do(func() { close(started) })
+		<-release
+		return nil
+	}
+	c, _, _ := wbCache(t, store, root)
+	go c.writeBackRound(context.Background())
+	<-started
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		c.Settle(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Settle waited on a round past its context")
+	}
+}
+
+// What decides a file the cache never held is the change time on both sides,
+// never a modification time a tool set. A cp -p or a tar in the container
+// leaves a file with an old mtime and a new ctime, and it is still the later
+// change; a future mtime on an old change does not make it win.
+func TestModificationTimesAToolSetDoNotDecide(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().Truncate(time.Second)
+	writeLocal(t, root, "copied.txt", "here, changed an hour ago")
+	writeLocal(t, root, "stamped.txt", "here, changed a minute ago")
+	setTime(t, root, "copied.txt", now.Add(-time.Hour))
+	setTime(t, root, "stamped.txt", now.Add(-time.Minute))
+
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	store := &faultStore{
+		content: map[string]string{"/copied.txt": "cp -p in the container", "/stamped.txt": "tar in the container"},
+		changes: []Change{
+			{Path: "/copied.txt", Size: int64(len("cp -p in the container")), ModTime: old.UnixNano(), Changed: now.UnixNano()},
+			{Path: "/stamped.txt", Size: int64(len("tar in the container")), ModTime: future.UnixNano(), Changed: now.Add(-2 * time.Hour).UnixNano()},
+		},
+		mtime: old,
+	}
+	c, _, clk := wbCache(t, store, root)
+	rounds(t, c, clk, 2)
+
+	if got, _ := os.ReadFile(filepath.Join(root, "copied.txt")); string(got) != "cp -p in the container" {
+		t.Errorf("copied.txt holds %q, want the container's later change despite its old mtime", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "stamped.txt")); string(got) != "here, changed a minute ago" {
+		t.Errorf("stamped.txt holds %q, want this machine's later change despite the container's future mtime", got)
+	}
+}
+
+// The skew is known to within the link's latency, so a container change must
+// be later than this machine's by more than half the round trip to delete or
+// overwrite a file the cache never held. In doubt, this machine wins.
+func TestAContainerChangeWithinTheMarginLoses(t *testing.T) {
+	at := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	local := localFrom(map[string]stub{"/f": {size: 1, mod: at}, "/g": {size: 1, mod: at}})
+	ctimes := ctimesFrom(map[string]time.Time{"/f": at, "/g": at})
+	changes := []Change{
+		{Path: "/f", Deleted: true, Changed: at.Add(50 * time.Millisecond).UnixNano()},
+		{Path: "/g", Deleted: true, Changed: at.Add(time.Second).UnixNano()},
+	}
+	actions := decide(nil, nil, changes, local, ctimes, 0, 100*time.Millisecond, 0)
+	byPath := map[string]action{}
+	for _, a := range actions {
+		byPath[a.Path] = a
+	}
+	if a := byPath["/f"]; a.kind != kindConflict || a.Wins {
+		t.Errorf("a deletion 50ms later with a 100ms margin decided %+v, want the file kept", a)
+	}
+	if a := byPath["/g"]; a.kind != kindDelete {
+		t.Errorf("a deletion a second later decided %+v, want it deleted", a)
+	}
+}
+
+// fillKeeper is a store whose far end keeps the consumer's version of named
+// files when a fill batch carries them (FillApplier).
+type fillKeeper struct {
+	*faultStore
+	theirs map[string]bool
+}
+
+func (f fillKeeper) ApplyFill(ctx context.Context, share, root string, entries []Entry) ([]string, []string, error) {
+	var kept []string
+	var rest []Entry
+	for _, e := range entries {
+		if f.theirs["/"+e.Path] {
+			kept = append(kept, "/"+e.Path)
+			continue
+		}
+		rest = append(rest, e)
+	}
+	skipped, err := f.Apply(ctx, share, root, rest)
+	return skipped, kept, err
+}
+
+// A file the far end kept as the consumer had it is not in the cache as this
+// machine sent it, so it has no baseline and no record: write-back decides it,
+// and a baseline of this machine's file would make the consumer's change look
+// like the fill's own copy.
+func TestAFillBatchTheConsumerKeptIsNotRecorded(t *testing.T) {
+	root := t.TempDir()
+	writeLocal(t, root, "d.txt", "d from here")
+	writeLocal(t, root, "a.txt", "a from here")
+	store := fillKeeper{faultStore: &faultStore{}, theirs: map[string]bool{"/d.txt": true}}
+	c := &Cache{Store: func() (Store, bool) { return store, true }, Ctx: t.Context(), ChangeTime: modTimeAsChangeTime}
+	t.Cleanup(c.Stop)
+	c.Attach(wbShare, root, ShareOptions{Policy: PolicyEager})
+	eventually(t, "the fill to finish", func() bool {
+		r := c.Reports()
+		return len(r) == 1 && r[0].Done
+	})
+
+	base := c.shares.baselines(wbShare)
+	rec := c.shares.recordedSet(wbShare)
+	if _, ok := base["/d.txt"]; ok || rec["/d.txt"] {
+		t.Errorf("a file the consumer kept has a baseline or a record: %v %v", base, rec)
+	}
+	if _, ok := base["/a.txt"]; !ok {
+		t.Errorf("a file the fill landed has no baseline: %v", base)
 	}
 }

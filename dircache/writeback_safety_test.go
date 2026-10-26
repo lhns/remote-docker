@@ -266,7 +266,10 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 		"/other.go": {Size: 3, ModTime: time.Unix(5, 0)},
 	}}}
 	store := &faultStore{}
-	store.changes = []Change{{Path: "/main.go", Size: 9, ModTime: time.Now().UnixNano()}}
+	store.changes = []Change{{Path: "/main.go", Size: 9, ModTime: time.Now().Add(-time.Hour).UnixNano()}}
+	// Changed an hour before the edit here, so this machine wrote last however
+	// coarse the clock: a time taken just after writing a file can read as no
+	// later than the file on Windows.
 	logs := &syncBuffer{}
 	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
 	c := &Cache{
@@ -303,7 +306,7 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(root, "main.go")); string(got) != "edited here since the restart" {
 		t.Errorf("main.go holds %q; the user's later edit should win a conflict", got)
 	}
-	if n := strings.Count(logs.String(), "a file changed in both places"); n != 1 {
+	if n := strings.Count(logs.String(), "a container's change was not carried back"); n != 1 {
 		t.Errorf("the conflict was said %d times, want once:\n%s", n, logs.String())
 	}
 }

@@ -392,6 +392,10 @@ nothing:
    the upper entry's ctime: of the file, of a whiteout, of the earliest opaque
    marker file (never the directory's own, which moves with every later write
    in it), as `Change.Changed` on the workspace clock, less the measured skew.
+   The skew is taken against the midpoint of the `workspace-info` round trip,
+   not its arrival, which would favour the container by the one-way latency;
+   and a container change must be later by more than half the round trip to
+   delete or overwrite a file the cache never held. In doubt, this machine wins.
    This machine's side is its ctime: `Stat_t` on Linux and macOS, NTFS
    `ChangeTime` through `GetFileInformationByHandleEx(FileBasicInfo)` on
    Windows, supplied as `dircache.Cache.ChangeTime` because `dircache` takes
@@ -411,14 +415,15 @@ nothing:
 
 | piece | answer |
 |---|---|
-| a replaced or removed directory | candidates are what the fill sent under it and every path here under it, listed once per removal (`writeBacks.walked`); each confirmed with `OpPresent` and decided with the earliest removal above it; a directory is removed only while empty, deepest first |
-| an empty directory | the agent reports an upper directory with no entries at all; the client makes it if absent. Not "absent from the lower": that is an NFS stat per directory a `chown -R` copied up |
+| a replaced or removed directory | candidates are what the fill sent under it and every path here under it, listed once per removal (`writeBacks.walked`); each confirmed with `OpPresent`, a thousand paths per request, and decided with the earliest removal above it; a directory is removed only while empty, deepest first |
+| an empty directory | the agent reports an upper directory with no entries at all; the client makes it if absent, unless the record has a path under it. An `Opaque` directory absent here is made too: fuse-overlayfs may mark a directory the container made as hiding the lower, which then never reads as empty (`test/union-probe.sh` section 14 records which): that is the skeleton of a directory removed here. Not "absent from the lower": that is an NFS stat per directory a `chown -R` copied up |
+| a directory removed here | dropped from the cache as one (the watcher reports its removal; files were all invalidation saw before), with the record under it, so the union hides it instead of keeping the empty skeleton a `chown -R` or the fill copied up. Not while it is here again, and not while it holds a file the container made that write-back has not carried yet |
 | the mode | only the execute bit: the share reports every other bit wide (ADR 0046), so a copy-up differs from the file here in all of them. `ShareOptions.Exec` is `0111` less the share's file mask, and 0 on Windows, where modes are neither compared nor carried. Applied as `chmod +x` would: execute where readable |
 | a file both sides changed | change times where both are known, else mtimes as before: the same comparison invalidation makes, so the two never disagree |
 | invalidation | `withoutLaterConsumerChanges` asks what the container changed, fresh, per flush, and leaves to write-back a path the container changed after this machine's ctime. Deletions are not deferred |
-| the fill | `withoutConsumerChanges` covers paths the cache never held too: never sent over a container change not carried back, except a copy of the file here, or a deletion older than the file here (the whiteout this machine's own deletion left, for a file made here again while nothing ran) |
+| the fill | `withoutConsumerChanges` covers paths the cache never held too: never sent over a container change not carried back, except a copy of the file here, or a deletion older than the file here (the whiteout this machine's own deletion left, for a file made here again while nothing ran). And the agent leaves out, and names in `Reply.Kept`, a file the cache layer holds that the client did not put there (`Request.Fill`): a prefetch batch is often set off by the container's copy-up of the file it is writing, and landed it overwrote that write with this machine's older version (`integration.sh` 15h, found in CI 2026-10-26). The client's own check reads an answer up to two seconds old and cannot see a write still in progress |
 | the agent | `live.applied` compares the ctime as well, so a chmod or chown the container makes on a file the client sent is its change |
-| the wire | `Hello.Times` announces, `Request.Times` asks; `Change.Changed` (`t`), `Change.Dir` (`i`), `Change.Mode` (`x`). An older client never asks and never sees a `Dir` it would fetch as a file |
+| the wire | `Hello.Times` announces, `Request.Times` asks; `Change.Changed` (`t`), `Change.Dir` (`i`), `Change.Mode` (`x`), and under it `Request.Fill` (`f`) and `Reply.Kept` (`kp`). An older client never asks and never sees a `Dir` it would fetch as a file |
 
 **The completeness gate is gone, and the fill gate with it.** A file the cache
 holds is decided by its manifest; one it never held that this machine has, by
@@ -431,7 +436,9 @@ it remains for `remote status` only.
 **A closing session runs write-back to quiescence first.** `Session.Close`
 stops serving the endpoint, sends the pending invalidations, and calls
 `Cache.Settle`: rounds until one carries nothing, the backoff skipped, within
-60s (`settleTimeout`). What is left is logged with the share, the pending count
+60s (`settleTimeout`). Rounds take a lock that honours the context, so a round
+the per-connection loop is in the middle of, on a context nobody cancels until
+`Settle` returns, cannot hold `Close` past the bound. What is left is logged with the share, the pending count
 and the first path, and stays in the cache layer for the next session. A
 connection released while idle is opened again for it (ADR 0027). `remote stop`
 waits up to 90s for the process to exit. `Cache.Stop` sends the invalidation
@@ -439,8 +446,14 @@ queue rather than dropping it.
 
 **Known gaps**, accepted:
 
-- An empty directory a container copied up (a `chmod` or `chown` of the
-  directory) and that is then deleted here is made here again.
+- An empty directory a container copied up that is deleted here while the
+  watcher did not see it (the client was not running), and that held nothing
+  this machine sent, is made here again.
+- Something here that moves a file's ctime without changing it (a `chmod -R`, a
+  backup tool, a checkout rewriting the same bytes) makes it the later change,
+  and an earlier container change to it loses. It is listed in `remote status`.
+- When `Changes` fails, an invalidation sends the edit as it did before times
+  existed.
 - A file whose size and mtime match the file here but whose content differs (a
   tool writing a fixed mtime over a same-sized file) reads as a copy.
 - When this machine wins for a file the cache never held, the container keeps

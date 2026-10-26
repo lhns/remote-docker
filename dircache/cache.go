@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,16 @@ type Store interface {
 // implies; a Store without it, or whose answer fails, deletes nothing that way.
 type Presenter interface {
 	Present(ctx context.Context, share string, paths []string) ([]string, error)
+}
+
+// FillApplier is a Store that can apply a fill batch without overwriting what
+// the consumer made: an entry the consumer has its own version of is left as it
+// is and named in kept. The prefetch uses it where the Store has it, because a
+// batch is often set off by the consumer's own copy-up of the file it is
+// writing, and landing it would lose that write (ADR 0044). Invalidation uses
+// Apply: an edit here is decided by the change times before it is sent.
+type FillApplier interface {
+	ApplyFill(ctx context.Context, share, root string, entries []Entry) (skipped, kept []string, err error)
 }
 
 // ErrCannotPresent is a Presenter whose far end cannot answer at all, such as an
@@ -146,8 +157,11 @@ type Cache struct {
 	inval  invalidator
 
 	// rounds keeps write-back rounds one at a time: the per-connection loop
-	// and the round Settle runs when the session closes.
-	rounds sync.Mutex
+	// and the round Settle runs when the session closes. A channel rather than
+	// a mutex, so waiting for it honours the caller's context: the loop may be
+	// mid-round on a context nobody cancels until Settle has returned.
+	roundsOnce sync.Once
+	rounds     chan struct{}
 
 	// bw is the bandwidth measured on this cache's own batches, in bytes per
 	// second, and zero until a batch large enough has gone.
@@ -320,11 +334,24 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	ctx, cancel := context.WithTimeout(c.Ctx, batchTimeout)
 	defer cancel()
 	started := time.Now()
-	skipped, err := store.Apply(ctx, share, root, entries)
+	var skipped, kept []string
+	var err error
+	if fa, ok := store.(FillApplier); ok {
+		skipped, kept, err = fa.ApplyFill(ctx, share, root, entries)
+	} else {
+		skipped, err = store.Apply(ctx, share, root, entries)
+	}
 	if err != nil {
 		return err
 	}
 	c.observeBandwidth(bytes, time.Since(started))
+
+	// What the far end kept as the consumer had it is the consumer's change,
+	// which write-back decides; the fill holds no copy of it.
+	if len(kept) > 0 {
+		entries = withoutSkipped(entries, kept)
+		c.unrecord(share, kept)
+	}
 
 	// What the far end left out is not in the cache, so it is neither recorded
 	// nor compared against: a file the consumer later makes there is the
@@ -446,7 +473,7 @@ func (c *Cache) fillsOwn(root, p string, ch Change, sent map[string]Baseline) bo
 		return !held
 	case ch.Deleted:
 		ours, ok := c.localChangeTime(root, p)
-		return ok && !time.Unix(0, ch.Changed).Add(-c.skew()).After(ours)
+		return ok && !time.Unix(0, ch.Changed).Add(-c.skew()).After(ours.Add(c.margin()))
 	case held:
 		return base.carries(ch)
 	}
@@ -712,6 +739,23 @@ func (f *shares) recordedPaths(share string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return keys(f.recorded[share])
+}
+
+// recordedUnder is the paths given, and every recorded path under one of them:
+// a directory dropped from the cache takes its files out of the record too.
+func (f *shares) recordedUnder(share string, paths []string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Clone(paths)
+	for p := range f.recorded[share] {
+		for _, d := range paths {
+			if strings.HasPrefix(p, strings.TrimSuffix(d, "/")+"/") {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // recordedSet is a COPY of a share's record, for a write-back round to decide

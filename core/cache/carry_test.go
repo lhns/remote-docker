@@ -110,3 +110,16 @@ func TestTheTimesFieldsAreNegotiatedAndRoundTrip(t *testing.T) {
 		t.Errorf("round trip lost a field: %s -> %+v", data, back)
 	}
 }
+
+// A fill batch says so only when asked, and what the agent kept round-trips.
+func TestFillAndKeptRoundTrip(t *testing.T) {
+	plain, _ := json.Marshal(Request{Op: OpApply, Export: "/m/00112233445566ff"})
+	if strings.Contains(string(plain), `"f"`) {
+		t.Errorf("an apply that is no fill says it is: %s", plain)
+	}
+	data, _ := json.Marshal(Reply{Kept: []string{"/d.txt"}})
+	var back Reply
+	if err := json.Unmarshal(data, &back); err != nil || len(back.Kept) != 1 || back.Kept[0] != "/d.txt" {
+		t.Errorf("round trip lost Kept: %s -> %+v (%v)", data, back, err)
+	}
+}

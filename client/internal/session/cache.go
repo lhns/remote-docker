@@ -589,6 +589,34 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 	return reply.Skipped, nil
 }
 
+// ApplyFill is Apply for a prefetch batch (dircache.FillApplier): the workspace
+// leaves a file the container has its own version of and names it in kept. A
+// workspace without Times cannot, and gets an ordinary Apply.
+func (c *cacheChannel) ApplyFill(ctx context.Context, export, root string, entries []dircache.Entry) (skipped, kept []string, err error) {
+	if !c.times {
+		skipped, err = c.Apply(ctx, export, root, entries)
+		return skipped, nil, err
+	}
+	body, err := tarOf(root, entries, c.codec)
+	if err != nil {
+		return nil, nil, err
+	}
+	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
+		return c.do(ctx, cache.Request{
+			Op:     cache.OpApply,
+			Export: export,
+			Bytes:  int64(len(body)),
+			Codec:  c.codec,
+			Carry:  c.carry,
+			Fill:   true,
+		}, bytes.NewReader(body))
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return reply.Skipped, reply.Kept, nil
+}
+
 // Drop removes paths from a share's cache, in as many requests as the frame
 // cap needs.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {

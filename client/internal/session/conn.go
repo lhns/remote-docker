@@ -60,7 +60,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	s.rtt.Store(int64(time.Since(started)))
+	elapsed := time.Since(started)
+	s.rtt.Store(int64(elapsed))
 
 	live := &liveConn{
 		ssh:      client,
@@ -70,7 +71,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	}
 	hold = nil
 	if info.Now != 0 {
-		live.clockSkew = time.Duration(info.Now - time.Now().UnixNano())
+		live.clockSkew = skewOf(info.Now, started, elapsed)
 	}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	live.guard = &rewrite.Guard{Exported: func(volume string) bool { return s.exportsVolume(live.clientID, volume) }}
@@ -307,6 +308,16 @@ func (s *Session) shareCacheFor(ctx context.Context, l *liveConn) (rewrite.Cache
 
 // skew is the workspace's clock minus this machine's; zero from an agent that
 // reports no clock.
+// skewOf is the workspace's clock minus this machine's, from the time the
+// workspace stamped on its answer. The stamp was taken somewhere between the
+// request leaving and the answer arriving, so it is compared with the MIDPOINT:
+// taken at receipt, the skew would be off by the whole one-way latency in the
+// container's favour, and a container change would look later than it was
+// (ADR 0044).
+func skewOf(workspaceNow int64, sent time.Time, elapsed time.Duration) time.Duration {
+	return time.Duration(workspaceNow - sent.Add(elapsed/2).UnixNano())
+}
+
 func (s *Session) skew() time.Duration {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil || live.info.Now == 0 {

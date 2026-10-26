@@ -99,3 +99,20 @@ func TestExecBits(t *testing.T) {
 		}
 	}
 }
+
+// The workspace stamps its clock somewhere between the request leaving and
+// the answer arriving, so the skew is taken against the midpoint. Against the
+// arrival it would be off by the whole one-way latency, in the container's
+// favour.
+func TestSkewIsTakenAtTheMidpointOfTheRoundTrip(t *testing.T) {
+	sent := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	rtt := 200 * time.Millisecond
+	// Clocks that agree: the workspace answered half way through.
+	if got := skewOf(sent.Add(rtt/2).UnixNano(), sent, rtt); got != 0 {
+		t.Errorf("agreeing clocks give a skew of %v, want 0", got)
+	}
+	// A workspace an hour ahead.
+	if got := skewOf(sent.Add(time.Hour+rtt/2).UnixNano(), sent, rtt); got != time.Hour {
+		t.Errorf("a workspace an hour ahead gives %v", got)
+	}
+}

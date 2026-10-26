@@ -76,8 +76,8 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 			t.Errorf("%s was not batched", path)
 			continue
 		}
-		if got != wantDeleted {
-			t.Errorf("%s deleted = %v, want %v", path, got, wantDeleted)
+		if got.gone != wantDeleted {
+			t.Errorf("%s deleted = %v, want %v", path, got.gone, wantDeleted)
 		}
 	}
 }

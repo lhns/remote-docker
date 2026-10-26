@@ -2186,6 +2186,9 @@ share_diagnostics() {
         grep -iE "cache|watch|write-back" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
         tail -12 | sed 's/^/        client: /'
+    # The client 15h restarts, once it has.
+    grep -iE "cache|union|fuse|writ|chang|collect|kept|container" "$WORK/parity-up.log" 2>/dev/null |
+        tail -20 | sed 's/^/        parity client: /'
     # The background session's own log, which is where sections 16 and later log.
     grep -viE "poking" "$WORK/state/logs/remote-docker.log" 2>/dev/null |
         tail -25 | sed 's/^/        session: /'
@@ -2932,6 +2935,25 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "chown -R failed in the container: [$(cat "$WORK/parity-chown.log")]"
         fi
 
+        # The chown left lib/ copied into the cache layer. Removed here, it is
+        # removed from the container's view too, and nothing brings an empty
+        # skeleton of it back here.
+        rm -rf "${PARDIR:?}/lib"
+        if wait_gone dockert itest-parity /w/lib 20; then
+            ok "a directory removed here after a chown -R is gone in the container"
+        else
+            bad "lib is still in the container after it was removed here: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        # Two write-back rounds, which is when a skeleton would come back.
+        sleep 10
+        if [ ! -e "$PARDIR/lib" ]; then
+            ok "and it stays gone here"
+        else
+            bad "lib came back here after it was removed: [$(find "$PARDIR/lib" 2>&1 | tr '\n' ' ')]"
+            share_diagnostics
+        fi
+
         dockert exec itest-parity sh -c 'echo "from the container" >/w/existing.txt' >/dev/null 2>&1
         if seen=$(wait_for_content "$PARDIR/existing.txt" "from the container" 30); then
             ok "an existing file rewritten in the container arrives"
@@ -3028,6 +3050,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
                     ok "an incomplete cache still carries back what the container wrote"
                 else
                     bad "with a partial cache, the container's writes did not arrive: [$seen]"
+                    # Which side lost it: the container's own view, and what is here.
+                    echo "        in the container: $(dockert exec itest-budget sh -c 'for f in /w/*; do echo "$f=[$(cat "$f")] $(stat -c "%s %y %z" "$f")"; done' 2>&1 | tr '\n' ' ')"
+                    echo "        here: $(for f in "$BUDDIR"/*; do echo "$f=[$(cat "$f")] $(stat -c '%s %y %z' "$f")"; done | tr '\n' ' ')"
                     share_diagnostics
                 fi
             else

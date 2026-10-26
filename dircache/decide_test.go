@@ -69,7 +69,7 @@ func TestDecide(t *testing.T) {
 		{Path: "/created.go", Size: 5, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := decide(manifest, nil, changes, local, nil, 0, 0)
+	actions := decide(manifest, nil, changes, local, nil, 0, 0, 0)
 
 	for path, want := range map[string]kind{
 		"/theirs.go":            kindWrite,
@@ -108,7 +108,7 @@ func TestDecideDeletedHereChangedThere(t *testing.T) {
 	missing := func(string) (fs.FileInfo, bool) { return nil, false }
 	changes := []Change{{Path: "/gone.go", Size: 20, ModTime: laterHere.UnixNano()}}
 
-	actions := decide(manifest, nil, changes, missing, nil, 0, 0)
+	actions := decide(manifest, nil, changes, missing, nil, 0, 0, 0)
 
 	if len(actions) != 1 || actions[0].kind != kindConflict || !actions[0].Wins {
 		t.Errorf("decided %+v, want one conflict the container's version wins", actions)
@@ -123,7 +123,7 @@ func TestDecideCarriesANewFileWithNothingSent(t *testing.T) {
 		{Path: "/made-there.go", Size: 1, ModTime: sentAt.UnixNano()},
 		{Path: "/deleted-here.go", Size: 1, ModTime: sentAt.UnixNano()},
 	}
-	got := decide(nil, map[string]bool{"/deleted-here.go": true}, changes, localFrom(nil), nil, 0, 0)
+	got := decide(nil, map[string]bool{"/deleted-here.go": true}, changes, localFrom(nil), nil, 0, 0, 0)
 
 	if k, ok := kindOf(got, "/made-there.go"); !ok || k != kindWrite {
 		t.Errorf("/made-there.go = %v %v, want a write", k, ok)
@@ -146,12 +146,12 @@ func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
 		{Path: "/both.go", Size: 20, ModTime: laterHere.Add(skew).UnixNano()},
 	}
 
-	uncorrected := decide(manifest, nil, changes, local, nil, 0, 0)
+	uncorrected := decide(manifest, nil, changes, local, nil, 0, 0, 0)
 	if len(uncorrected) != 1 || !uncorrected[0].Wins {
 		t.Fatalf("without the offset the container should look newer: %+v", uncorrected)
 	}
 
-	corrected := decide(manifest, nil, changes, local, nil, skew, 0)
+	corrected := decide(manifest, nil, changes, local, nil, skew, 0, 0)
 	if len(corrected) != 1 || corrected[0].Wins {
 		t.Errorf("with the offset applied this machine wrote last: %+v", corrected)
 	}
@@ -202,7 +202,7 @@ func TestDecideAFileTheCacheNeverHeldByWhoWroteLast(t *testing.T) {
 		{Path: "/no-ctime.go", Size: 20, ModTime: laterHere.UnixNano(), Changed: laterHere.UnixNano()},
 	}
 
-	actions := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0)
+	actions := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0, 0)
 	for path, want := range map[string]struct {
 		kind kind
 		wins bool
@@ -261,7 +261,7 @@ func TestDecideACopyAndTheExecuteBit(t *testing.T) {
 		{Path: "/yours.sh", Size: 7, ModTime: sentAt.UnixNano(), Changed: at, Mode: 0o777},
 	}
 
-	actions := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0o111)
+	actions := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0, 0o111)
 	byPath := map[string]action{}
 	for _, a := range actions {
 		byPath[a.Path] = a
@@ -279,7 +279,7 @@ func TestDecideACopyAndTheExecuteBit(t *testing.T) {
 		t.Errorf("a chmod older than this machine's change decided %+v, want yours kept", a)
 	}
 
-	windows := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0)
+	windows := decide(map[string]Baseline{}, nil, changes, local, ctimes, 0, 0, 0)
 	for _, a := range windows {
 		if a.kind != kindAdopt {
 			t.Errorf("with no execute bit to carry, %s decided %v, want only copies", a.Path, a.kind)
@@ -339,7 +339,7 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 		{Path: "/written.go", Size: 20, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := decide(manifest, nil, changes, local, nil, 0, 0)
+	actions := decide(manifest, nil, changes, local, nil, 0, 0, 0)
 
 	if _, ok := kindOf(actions, "/filled.go"); ok {
 		t.Error("the fill's own copy was decided to be a container write")
@@ -359,7 +359,7 @@ func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
 		{Path: "/same-size.go", Size: 10, ModTime: laterHere.UnixNano()},
 	}
 
-	if got, ok := kindOf(decide(manifest, nil, changes, local, nil, 0, 0), "/same-size.go"); !ok || got != kindWrite {
+	if got, ok := kindOf(decide(manifest, nil, changes, local, nil, 0, 0, 0), "/same-size.go"); !ok || got != kindWrite {
 		t.Errorf("/same-size.go = %v %v, want a write", got, ok)
 	}
 }

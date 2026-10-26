@@ -96,6 +96,10 @@ func (c *Cache) Settle(ctx context.Context) {
 		if carried > 0 && ctx.Err() == nil {
 			continue
 		}
+		if last == nil && ctx.Err() != nil {
+			c.log().Warn("write-back did not finish before the session closed; a round was still running, and what is left stays in the workspace for the next session")
+			return
+		}
 		for share, r := range last {
 			if r.pending == 0 {
 				continue
@@ -129,9 +133,16 @@ func (c *Cache) writeBackRound(ctx context.Context) { c.round(ctx, false) }
 // otherwise be reported in full to an idle session every few seconds. force
 // skips the backoff. It answers how many changes landed, and each share's last
 // pass.
+// A round that cannot start before ctx ends carries nothing, and says nothing
+// about any share.
 func (c *Cache) round(ctx context.Context, force bool) (int, map[string]passResult) {
-	c.rounds.Lock()
-	defer c.rounds.Unlock()
+	c.roundsOnce.Do(func() { c.rounds = make(chan struct{}, 1) })
+	select {
+	case c.rounds <- struct{}{}:
+	case <-ctx.Done():
+		return 0, nil
+	}
+	defer func() { <-c.rounds }()
 
 	carried, last := 0, map[string]passResult{}
 	for _, share := range c.shares.all() {
@@ -177,28 +188,38 @@ func (c *Cache) confirmedAbsent(ctx context.Context, store Store, share string, 
 	if !ok {
 		return nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, c.budget())
-	defer cancel()
-	here, err := pr.Present(callCtx, share, candidates)
-	if errors.Is(err, ErrCannotPresent) {
-		return nil
-	}
-	if err != nil {
-		c.quiet(ctx, "asking which paths a container still has", "share", share, "err", err)
-		return nil
-	}
-	present := make(map[string]bool, len(here))
-	for _, p := range here {
-		present[p] = true
-	}
+	// In chunks, each under its own deadline: rm -rf node_modules && mkdir
+	// node_modules makes every file under it a candidate. A chunk that fails
+	// keeps its paths, and the ones after it, for the next round.
 	var gone []string
-	for _, p := range candidates {
-		if !present[p] {
-			gone = append(gone, p)
+	for chunk := range slices.Chunk(candidates, presentChunk) {
+		callCtx, cancel := context.WithTimeout(ctx, c.budget())
+		here, err := pr.Present(callCtx, share, chunk)
+		cancel()
+		if errors.Is(err, ErrCannotPresent) {
+			return gone
+		}
+		if err != nil {
+			c.quiet(ctx, "asking which paths a container still has", "share", share, "err", err)
+			return gone
+		}
+		present := make(map[string]bool, len(here))
+		for _, p := range here {
+			present[p] = true
+		}
+		for _, p := range chunk {
+			if !present[p] {
+				gone = append(gone, p)
+			}
 		}
 	}
 	return gone
 }
+
+// presentChunk is how many paths one Present asks about: well inside a frame
+// (cache.MaxFrame) for paths of any ordinary length, and a few thousand stats
+// on the far end.
+const presentChunk = 1000
 
 // writeBackShare collects one share's changes and applies them here.
 func (c *Cache) writeBackShare(ctx context.Context, share string, force bool) passResult {
@@ -271,7 +292,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string, force bool) pa
 	changes = c.dropClashes(ctx, share, names, manifest, changes)
 	changes = append(changes, c.impliedDeletions(ctx, store, share, r, manifest, reported)...)
 	c.shares.wb.forget(share, reported, changes)
-	actions := decide(manifest, recorded, changes, localAtRoot(r), c.ctimeAtRoot(r), c.skew(), c.shares.exec(share))
+	actions := decide(manifest, recorded, changes, localAtRoot(r), c.ctimeAtRoot(r), c.skew(), c.margin(), c.shares.exec(share))
 	actions = append(actions, decideLinks(manifest, changes, linkAtRoot(r))...)
 
 	pass := &writePass{
@@ -494,6 +515,16 @@ func (c *Cache) skew() time.Duration {
 		return 0
 	}
 	return c.Skew()
+}
+
+// margin is how much later than this machine a consumer's change must be to
+// win over a file the cache never held: half the measured round trip, which is
+// how far the skew can be off. In doubt, this machine wins.
+func (c *Cache) margin() time.Duration {
+	if c.Link == nil {
+		return 0
+	}
+	return c.Link().RTT / 2
 }
 
 // localAtRoot answers what this machine currently has at a share-relative path.

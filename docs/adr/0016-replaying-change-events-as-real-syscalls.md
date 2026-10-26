@@ -197,6 +197,13 @@ bind mount keeps the later one.
 - Without a change time on either side (an older workspace, a ctime this
   machine cannot read), the edit is sent as it always was. A deletion here is
   sent as before.
+- A directory removed here is now sent too, as one drop of the directory:
+  the watcher already reported its removal and the cache ignored it, so an
+  empty copy of it in the cache layer outlived it (ADR 0044). Not while it is
+  here again, nor while it holds a container file not yet carried here.
+- The container must be later by more than half the round trip for an edit to
+  be held back: the skew is known only that well, and in doubt this machine
+  wins.
 
 ## Consequences
 

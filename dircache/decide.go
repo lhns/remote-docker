@@ -26,6 +26,7 @@ package dircache
 import (
 	"cmp"
 	"io/fs"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -225,7 +226,10 @@ const (
 // for days is the common case; its deletions are kept.
 //
 // skew is the workspace's clock minus this machine's, measured once per
-// session, applied to every comparison of the two clocks.
+// session, applied to every comparison of the two clocks. margin is how much
+// later the consumer must be before a file the cache never held is deleted or
+// overwritten here: the skew is known to within the link's latency, and in
+// doubt this machine wins.
 //
 // exec is the execute bits the consumer sees as they are here, after the
 // share's mask (ADR 0046); zero where this machine has none, which is Windows,
@@ -240,16 +244,43 @@ func decide(
 	changes []Change,
 	local localAt,
 	ctime ctimeAt,
-	skew time.Duration,
+	skew, margin time.Duration,
 	exec fs.FileMode,
 ) []action {
 	var actions []action
 	seen := make(map[string]seenState, len(changes))
+	// held says whether the record has a path at p or under it: a directory
+	// that held files this machine sent, and that is gone here, was removed
+	// here, and an empty one the cache still has is its skeleton, not one the
+	// consumer made. Built on first use.
+	var holding map[string]bool
+	held := func(p string) bool {
+		if holding == nil {
+			holding = map[string]bool{}
+			for r := range recorded {
+				for d := r; d != "/" && d != "."; d = path.Dir(d) {
+					holding[d] = true
+				}
+			}
+		}
+		return holding[p]
+	}
 	for _, change := range changes {
 		// A replaced directory and a link are not files to compare: the first
 		// is expanded into deletions before this (replacedDeletions) and the
 		// second is decided by decideLinks.
-		if change.Opaque || change.Link != "" {
+		if change.Link != "" {
+			continue
+		}
+		if change.Opaque {
+			// fuse-overlayfs may mark a directory the container MADE as one
+			// that hides the lower (test/union-probe.sh section 14), so it
+			// comes as Opaque rather than as an empty Dir. Either way the
+			// container has a directory there, and one this machine lacks is
+			// made, unless it is the skeleton of one removed here.
+			if _, here := local(change.Path); !here && !held(change.Path) {
+				actions = append(actions, action{Path: change.Path, kind: kindMkdir})
+			}
 			continue
 		}
 		p := change.Path
@@ -258,9 +289,10 @@ func decide(
 		st := seenOf(info, here)
 
 		// lastWriter compares the consumer's time with this machine's change
-		// time, reading the latter only when a decision needs it. ok is false
+		// time, reading the latter only when a decision needs it, and calls
+		// the consumer last only when it is later by more than by. ok is false
 		// when either is not known.
-		lastWriter := func(theirs int64) (containerLast, ok bool) {
+		lastWriter := func(theirs int64, by time.Duration) (containerLast, ok bool) {
 			if theirs == 0 || ctime == nil {
 				return false, false
 			}
@@ -269,7 +301,7 @@ func decide(
 				return false, false
 			}
 			st.Ctime = ours
-			return time.Unix(0, theirs).Add(-skew).After(ours), true
+			return time.Unix(0, theirs).Add(-skew).After(ours.Add(by)), true
 		}
 		add := func(a action) {
 			a.Path = p
@@ -281,7 +313,9 @@ func decide(
 		case change.Dir:
 			switch {
 			case !here:
-				add(action{kind: kindMkdir})
+				if !held(p) {
+					add(action{kind: kindMkdir})
+				}
 			case !info.IsDir():
 				keep(whyFileHere)
 			}
@@ -293,13 +327,13 @@ func decide(
 			}
 			// A directory the consumer removed, emptied first by the deletions
 			// its removal implies; removing it never takes a file.
-			if last, ok := lastWriter(change.Changed); ok && last {
+			if last, ok := lastWriter(change.Changed, margin); ok && last {
 				add(action{kind: kindDelete, Dir: true})
 			}
 
 		case here && !change.Deleted && sameContent(change, info):
 			if flip := execFlip(change, info, exec); flip != 0 {
-				last, ok := lastWriter(change.Changed)
+				last, ok := lastWriter(change.Changed, margin)
 				switch {
 				case !ok:
 					keep(whyNoChangeTime)
@@ -323,7 +357,7 @@ func decide(
 			}
 
 		case !sent && change.Deleted:
-			last, ok := lastWriter(change.Changed)
+			last, ok := lastWriter(change.Changed, margin)
 			switch {
 			case change.Changed == 0:
 				keep(whyOldWorkspace)
@@ -340,7 +374,7 @@ func decide(
 			// time, or from an older consumer its modification time, against
 			// this machine's change time.
 			theirs := cmp.Or(change.Changed, change.ModTime)
-			last, ok := lastWriter(theirs)
+			last, ok := lastWriter(theirs, margin)
 			switch {
 			case !ok:
 				keep(whyNoChangeTime)
@@ -364,7 +398,7 @@ func decide(
 // decideHeld is the table for a file the cache holds, each side compared
 // against the baseline the fill sent.
 func decideHeld(change Change, base Baseline, info fs.FileInfo, here bool,
-	lastWriter func(int64) (bool, bool), skew time.Duration, exec fs.FileMode, add func(action)) {
+	lastWriter func(int64, time.Duration) (bool, bool), skew time.Duration, exec fs.FileMode, add func(action)) {
 	youChanged := !here || info.Size() != base.Size || !info.ModTime().Equal(base.ModTime)
 
 	if change.Deleted {
@@ -398,7 +432,7 @@ func decideHeld(change Change, base Baseline, info fs.FileInfo, here bool,
 	// applied rather than pretending the two clocks agree. The change times are
 	// what invalidation decided by too (Cache.invalidate), so the two never
 	// disagree about one file.
-	wins, ok := lastWriter(change.Changed)
+	wins, ok := lastWriter(change.Changed, 0)
 	if !ok {
 		wins = time.Unix(0, change.ModTime).Add(-skew).After(info.ModTime())
 	}

@@ -489,7 +489,9 @@ premise of the project, and it applies to building it too. So:
   size and mtime as the file here, either side rounded to the second) is not a
   change, or a `chown -R` entrypoint rewrites the tree. A time that is not known
   NEVER writes or deletes: an older workspace's deletions are kept, a ctime here
-  that cannot be read keeps the file. The side that lost is listed in
+  that cannot be read keeps the file, and the container must be later by more
+  than half the round trip (the skew, taken at the round trip's midpoint, is
+  known no better): in doubt this machine wins. The side that lost is listed in
   `remote status` (`SkipKept`), decided again every round. There is no
   completeness gate and no fill gate any more; do not bring either back to
   "be safe", since a session closing mid-fill then loses the container's work.
@@ -554,7 +556,11 @@ premise of the project, and it applies to building it too. So:
   of what this machine has under it (walked once per removal), each only if the
   merged view no longer has it (`impliedDeletions`, `OpPresent`) and through
   `decide`, so a path changed here since is kept. A directory goes only while
-  empty, deepest first. `Hello.Carry` and `Request.Carry` negotiate all of
+  empty, deepest first. A directory removed HERE is dropped from the cache as
+  one, or the empty skeleton a `chown -R` copied up is reported as a directory
+  the container made and comes back here every round; an empty directory the
+  record has paths under is never made here for the same reason.
+  `Hello.Carry` and `Request.Carry` negotiate all of
   this, and `Hello.Times` and `Request.Times` the times, modes and empty
   directories: the client asks only if the agent announced, so an old agent is
   never sent the field and never sends a link or a directory an old client
