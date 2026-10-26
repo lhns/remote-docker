@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +46,12 @@ type cacheChannel struct {
 	// ignore the field and the client would take a skipped entry for a landed
 	// one.
 	carry bool
+
+	// times says the workspace reports change times, modes and empty
+	// directories when asked (cache.Hello.Times). Without them a deletion of a
+	// file the cache never held is kept, and status says the workspace is too
+	// old.
+	times bool
 
 	// dead is set when the stream can no longer be trusted: it was closed, an
 	// exchange timed out, or a read or write on it failed. A request that is
@@ -97,6 +105,7 @@ func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel,
 	}
 	c.owner = reply.Hello.Owner
 	c.carry = reply.Hello.Carry
+	c.times = reply.Hello.Times
 	return c, nil
 }
 
@@ -321,7 +330,7 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 // dircache's field for field (ADR 0021).
 func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.Change, error) {
 	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
-		return c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export, Carry: c.carry}, nil)
+		return c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export, Carry: c.carry, Times: c.times}, nil)
 	})
 	if reply.Unknown {
 		return nil, dircache.ErrShareGone
@@ -338,6 +347,9 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.C
 			Deleted: ch.Deleted,
 			Opaque:  ch.Opaque,
 			Link:    ch.Link,
+			Changed: ch.Changed,
+			Dir:     ch.Dir,
+			Mode:    fs.FileMode(ch.Mode).Perm(),
 		})
 	}
 	return changes, nil
@@ -642,7 +654,22 @@ func (s *Session) attachShare(export, localPath string, mode workspace.Mode, wor
 	s.cache.Attach(export, localPath, dircache.ShareOptions{
 		Policy:    policy,
 		Ephemeral: mode.Write == workspace.WriteEphemeral,
+		Exec:      execBits(runtime.GOOS, words.FMask, s.opts.Config.ShareFileMask),
 	})
+}
+
+// execBits is the execute bits a share's container sees as this machine's
+// file has them (dircache.ShareOptions.Exec): the share reports a file's
+// execute bit and every other bit wide, less its file mask (ADR 0046). None on
+// Windows, whose share reports every file executable.
+func execBits(goos string, mask workspace.Mask, session fs.FileMode) fs.FileMode {
+	if goos == "windows" {
+		return 0
+	}
+	if !mask.Set {
+		mask.Bits = session
+	}
+	return 0o111 &^ mask.Bits
 }
 
 // policyOf is the fill policy a share's prefetch word stands for.

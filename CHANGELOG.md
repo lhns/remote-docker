@@ -8,6 +8,30 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`write=back` (Docker's `delegated`) lost changes to files that already
+  existed on your machine.** When a container changed, deleted or replaced a
+  file or directory that was there before it started, the change silently
+  never arrived, and with prefetch off, which is the default, that was nearly
+  every file. A change made just before the client stopped was left behind
+  too, and so was everything while a prefetch had not finished or ran out of
+  room. Now a `write=back` share carries back what the container does, as a
+  bind mount would: rewrites, deletions, replaced and new empty directories and
+  `chmod +x` all arrive. When a file changed in both places, whichever side
+  changed it last wins, and when your version is kept, `remote status` names
+  the container's change. Stopping the client first carries back what is still
+  on its way, for up to a minute. An entrypoint's `chown -R` changes nothing on
+  your machine.
+- **An edit on your machine could overwrite a newer write from the
+  container** when the two came within a fraction of a second. The later one
+  now wins.
+- Upgrade both the client and the workspace. With only the client upgraded,
+  changed files come back, but deletions made in a container are kept, and
+  `remote status` says the workspace needs updating.
+
 ## 0.16.0 — 2026-10-23
 
 ### New

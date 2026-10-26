@@ -42,7 +42,7 @@ func TestWriteBackRetriesAFileAnotherProgramHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.writeBackShare(t.Context(), share)
+	c.writeBackShare(t.Context(), share, false)
 
 	got, _ := os.ReadFile(local)
 	if string(got) != "before\n" {
@@ -60,7 +60,7 @@ func TestWriteBackRetriesAFileAnotherProgramHolds(t *testing.T) {
 	// The failed round is backed off from, which a test does not wait out.
 	clk.advance(time.Hour)
 	store.files["/main.go"] = File{Path: "/main.go", ModTime: changedAt, Mode: 0o644, Body: strings.NewReader("after\n")}
-	c.writeBackShare(t.Context(), share)
+	c.writeBackShare(t.Context(), share, false)
 
 	got, _ = os.ReadFile(local)
 	if string(got) != "after\n" {

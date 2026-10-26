@@ -51,6 +51,8 @@ ADR 0045.
 | the tree's amplification bound, cap, shape independence | unit, `dircache/sim_test.go` |
 | the walk yields to reads | unit, `dircache/prefetch_test.go` |
 | `ephemeral` is never asked for changes | unit, `dircache/prefetch_test.go` |
+| `write=back` carries back like a bind mount, last writer wins by change time | unit, `dircache/writeback_parity_test.go` (a property test among them); end to end in `integration.sh` 15h and `machine.yml` from 2026-10-26, prefetch off |
+| copy-up keeps mtime, a whiteout and an opaque marker keep the deletion's ctime | assumed until `test/union-probe.sh` section 14 has printed it |
 | the six corners parse and map | unit, `core/workspace`, `client/internal/rewrite` |
 | every union corner end to end | measured, `integration.sh` 15e, `per-user-dind.sh` 7c, `two-clients.sh` 9 (2026-09-04) |
 | landing a batch with no network in it | measured, `test/union-probe.sh`: 3,000 files through the union in 1.07s, 2,800 files/s (2026-09-04) |

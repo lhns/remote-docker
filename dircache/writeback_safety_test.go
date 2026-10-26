@@ -139,7 +139,8 @@ func TestASkippedChangeIsNotReadAsADeletionNextRound(t *testing.T) {
 	}
 }
 
-// "Your file is kept" is said once per path, not every round.
+// "Your file is kept" is said once per path, not every round, and listed in
+// status for as long as it is kept.
 func TestAConflictIsSaidOncePerPath(t *testing.T) {
 	root := t.TempDir()
 	writeLocal(t, root, "f", "edited here")
@@ -151,8 +152,11 @@ func TestAConflictIsSaidOncePerPath(t *testing.T) {
 
 	rounds(t, c, clk, 4)
 
-	if n := strings.Count(logs.String(), "a file changed in both places"); n != 1 {
+	if n := strings.Count(logs.String(), "a container's change was not carried back"); n != 1 {
 		t.Errorf("the conflict was said %d times in 4 rounds, want once:\n%s", n, logs.String())
+	}
+	if sk := c.Reports()[0].WriteBack.Skipped; len(sk) != 1 || sk[0].Path != "/f" || sk[0].Kind != SkipKept {
+		t.Errorf("status lists %+v, want /f kept", sk)
 	}
 }
 

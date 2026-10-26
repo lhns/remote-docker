@@ -54,6 +54,8 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		Owner: true,
 		// Opaque directories, links and skipped entries (ADR 0044).
 		Carry: true,
+		// Change times, modes and empty directories (ADR 0044).
+		Times: true,
 	}
 	if err := enc.Encode(cache.Reply{Hello: hello}); err != nil {
 		_ = session.Exit(1)
@@ -163,7 +165,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
-		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export, req.Carry)
+		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export, req.Carry, req.Times)
 		if err != nil {
 			return refused(err), nil
 		}

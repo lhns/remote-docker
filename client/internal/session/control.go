@@ -309,19 +309,56 @@ func (s *Session) Stopped() <-chan struct{} { return s.stopped }
 // Close tears the session down.
 func (s *Session) Close() error {
 	s.closeWatcher()
-	// After the watcher, so no event can arm the timer again.
-	if s.cache != nil {
-		s.cache.Stop()
-	}
-	s.once.Do(func() {
-		s.cancel()
+	s.closing.Do(func() {
+		// Serving ends first: `remote stop` waits for the endpoint to go
+		// quiet, and nothing should start in a session that is finishing.
 		if s.listener != nil {
 			_ = s.listener.Close()
 		}
+		// After the watcher, so no event can arm the invalidation timer again.
+		if s.cache != nil {
+			s.settleWriteBack()
+			s.cache.Stop()
+		}
+	})
+	s.once.Do(func() {
+		s.cancel()
 		s.gate.close()
 		s.wg.Wait()
 	})
 	return nil
+}
+
+// settleTimeout bounds write-back's last round when a session closes. Long
+// enough for a job's output over a slow link; what is left after it stays in
+// the workspace, and the next session carries it back.
+const settleTimeout = 60 * time.Second
+
+// settleWriteBack carries back what a container changed before the session
+// goes (ADR 0044, ADR 0027). A connection released while idle is opened again
+// for it: the changes are in the workspace's cache layer whether or not a
+// connection is up, and a stop that skipped them would leave a job's last
+// output there. The lease keeps the idle sweep from releasing the connection
+// under the round, and the context is the session's own, never the caller's.
+func (s *Session) settleWriteBack() {
+	if !s.cache.WritesBack() {
+		return
+	}
+	// A machine workspace let go of stops (ADR 0026), and its unions go with
+	// it: dialling would boot it only to find nothing to carry.
+	if _, held := s.gate.currentLive(); !held && s.opts.Config.Machine != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, settleTimeout)
+	defer cancel()
+	_, done, err := s.gate.acquire(ctx)
+	if err != nil {
+		s.log().Warn("could not reach the workspace to carry back the last changes; they stay there for the next session",
+			"err", err)
+		return
+	}
+	defer done()
+	s.cache.Settle(ctx)
 }
 
 // humanBytes formats a byte count for reading at a glance.

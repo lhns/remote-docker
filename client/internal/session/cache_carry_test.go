@@ -119,3 +119,25 @@ func TestReplacingADeadCacheChannelClosesIt(t *testing.T) {
 		t.Error("the dead channel was replaced and left open")
 	}
 }
+
+// Times are asked for only when announced, and arrive as dircache's: an agent
+// without them would ignore the request, and every deletion of a file the cache
+// never held would read as having no time (ADR 0044).
+func TestTimesAreAskedForOnlyWhenTheAgentAnnouncedThem(t *testing.T) {
+	for _, times := range []bool{false, true} {
+		stream := newScripted(`{"c":[{"p":"/a.sh","s":3,"m":9,"t":11,"x":493},{"p":"/made","i":true,"t":12}]}` + "\n")
+		c := channelOver(stream)
+		c.times = times
+
+		changes, err := c.Changes(t.Context(), "/m/1111111111111111")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(stream.written), `"t":true`); got != times {
+			t.Errorf("times=%v: the request %s asked for times = %v", times, stream.written, got)
+		}
+		if len(changes) != 2 || changes[0].Changed != 11 || changes[0].Mode != 0o755 || !changes[1].Dir || changes[1].Changed != 12 {
+			t.Errorf("times=%v: changes = %+v, want the change time, the mode and the directory", times, changes)
+		}
+	}
+}

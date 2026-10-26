@@ -1,6 +1,7 @@
 package dircache
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"path"
@@ -109,31 +110,46 @@ func (i *invalidator) stop() {
 	i.pending = nil
 }
 
-// flush applies what has accumulated.
-func (c *Cache) flush() {
-	c.inval.mu.Lock()
-	pending := c.inval.pending
-	c.inval.pending, c.inval.timer = nil, nil
-	c.inval.mu.Unlock()
+// take hands over what has accumulated, and cancels the timer that would have.
+func (i *invalidator) take() map[string]map[string]bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.timer != nil {
+		i.timer.Stop()
+		i.timer = nil
+	}
+	pending := i.pending
+	i.pending = nil
+	return pending
+}
 
+// flush applies what has accumulated, when the timer fires.
+func (c *Cache) flush() { c.flushNow(cmp.Or(c.Ctx, context.Background())) }
+
+// flushNow applies what has accumulated, within ctx.
+func (c *Cache) flushNow(ctx context.Context) {
+	pending := c.inval.take()
+	if c.Store == nil {
+		return
+	}
 	for share, paths := range pending {
 		root, ok := c.shares.root(share)
 		if !ok {
 			continue
 		}
-		c.invalidate(share, root, paths)
+		c.invalidate(ctx, share, root, paths)
 	}
 }
 
 // invalidate sends one share's changes: the removals as a drop, the rest as a
 // batch of their current contents.
-func (c *Cache) invalidate(share, root string, paths map[string]bool) {
+func (c *Cache) invalidate(ctx context.Context, share, root string, paths map[string]bool) {
 	store, ok := c.Store()
 	if !ok {
 		// Nowhere to send it. The cache is now behind, which the next
 		// reconcile settles; until then the share is stale in exactly the way
 		// this file exists to prevent, so it is worth saying.
-		c.quiet(c.Ctx, "a cache could not be told about a change", "share", share)
+		c.quiet(ctx, "a cache could not be told about a change", "share", share)
 		return
 	}
 
@@ -163,8 +179,10 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 		changed = append(changed, entry)
 	}
 
-	ctx, cancel := context.WithTimeout(c.Ctx, invalidateTimeout)
+	ctx, cancel := context.WithTimeout(ctx, invalidateTimeout)
 	defer cancel()
+
+	changed = c.withoutLaterConsumerChanges(ctx, share, root, store, changed)
 
 	if len(dropped) > 0 {
 		if err := store.Drop(ctx, share, dropped); err != nil {
@@ -192,6 +210,60 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 		c.shares.noteSent(share, root, batch)
 		c.saveRecord(share)
 	}
+}
+
+// withoutLaterConsumerChanges is entries less the paths the consumer changed
+// AFTER this machine did. Sending one would overwrite the later version in the
+// cache with the earlier, which a bind mount never does; write-back carries it
+// here instead, by the same change times (decide). An edit here reaches the
+// cache 150ms after it is made, and a container writing in that window is the
+// case this exists for.
+//
+// Only by times both sides know. Without the consumer's change time (an older
+// workspace) or this machine's, the edit goes as it always did. The consumer's
+// change that loses is said once.
+func (c *Cache) withoutLaterConsumerChanges(ctx context.Context, share, root string, store Store, entries []Entry) []Entry {
+	if len(entries) == 0 || c.shares.ephemeral(share) || c.ChangeTime == nil {
+		return entries
+	}
+	changed, err := c.consumerChanged(ctx, share, store, true)
+	if err != nil || len(changed) == 0 {
+		return entries
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return entries
+	}
+	defer func() { _ = r.Close() }()
+
+	sent := c.shares.sentOf(share, entries)
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		p := slashed(e.Path)
+		ch, listed := changed[p]
+		if !listed || ch.Changed == 0 || ch.Opaque || ch.Dir || c.fillsOwn(root, p, ch, sent) {
+			out = append(out, e)
+			continue
+		}
+		ours, known := c.ChangeTime(r, relPath(p))
+		if !known {
+			out = append(out, e)
+			continue
+		}
+		if time.Unix(0, ch.Changed).Add(-c.skew()).After(ours) {
+			if c.shares.wb.conflictNew(share, p, "the container wrote it after you; write-back carries its version") {
+				c.log().Warn("a file changed here and in the container, which wrote it last; its version is carried back rather than replaced by yours",
+					"path", strings.TrimPrefix(p, "/"))
+			}
+			continue
+		}
+		if c.shares.wb.conflictNew(share, p, "you wrote it after the container") {
+			c.log().Warn("a file changed in the container and here, which wrote it last; the container's version is replaced by yours",
+				"path", strings.TrimPrefix(p, "/"))
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // withoutSkipped is the entries of a batch the far end did take.

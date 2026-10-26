@@ -99,7 +99,7 @@ func TestWriteBackShareDoesNotDeleteThroughALink(t *testing.T) {
 			c.shares.set(id, share, &shareState{Report: Report{Done: true}, Cached: true}, nil)
 			c.shares.noteSent(id, share, []Entry{{Path: "link/victim.txt", Size: 4}})
 
-			c.writeBackShare(t.Context(), id)
+			c.writeBackShare(t.Context(), id, false)
 
 			if _, err := os.Stat(victim); err != nil {
 				t.Errorf("a delete under a link removed a file outside the share: %v", err)

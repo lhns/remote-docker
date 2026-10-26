@@ -76,3 +76,37 @@ func TestTheCarryFieldsRoundTrip(t *testing.T) {
 		t.Errorf("a request asking for Carry is refused: %v", err)
 	}
 }
+
+// The times are negotiated like Carry: an older agent's greeting announces
+// none, a request that did not ask names none, and what a new agent sends
+// round-trips (ADR 0044).
+func TestTheTimesFieldsAreNegotiatedAndRoundTrip(t *testing.T) {
+	var greeting Reply
+	if err := json.Unmarshal([]byte(`{"hello":{"v":1,"z":["zstd"],"o":true,"w":true}}`), &greeting); err != nil {
+		t.Fatal(err)
+	}
+	if greeting.Hello.Times {
+		t.Errorf("an older agent's greeting decodes with Times set: %+v", greeting.Hello)
+	}
+
+	plain, _ := json.Marshal(Request{Op: OpChanges, Export: "/m/00112233445566ff", Carry: true})
+	if strings.Contains(string(plain), `"t"`) {
+		t.Errorf("a request that did not ask for times names them: %s", plain)
+	}
+
+	data, err := json.Marshal(Reply{
+		Hello:   &Hello{Version: Version, Times: true},
+		Changes: []Change{{Path: "/a", Size: 1, ModTime: 2, Changed: 3, Mode: 0o755}, {Path: "/d", Dir: true, Changed: 4}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Reply
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !back.Hello.Times || back.Changes[0].Changed != 3 || back.Changes[0].Mode != 0o755 ||
+		!back.Changes[1].Dir || back.Changes[1].Changed != 4 {
+		t.Errorf("round trip lost a field: %s -> %+v", data, back)
+	}
+}

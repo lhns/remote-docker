@@ -56,7 +56,7 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 	defer done()
 
 	return extract(root, decoded, carry, func(name string, info os.FileInfo) {
-		l.noteApplied(name, info.Size(), info.ModTime())
+		l.noteApplied(name, info.Size(), info.ModTime(), ctimeOf(info))
 	})
 }
 

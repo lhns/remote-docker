@@ -26,7 +26,7 @@ func TestAttachWithoutPrefetchWritesBack(t *testing.T) {
 	c := cacheWith(t, store)
 	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyOff})
 
-	c.writeBackShare(t.Context(), "/m/1111111111111111")
+	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 
 	got, err := os.ReadFile(filepath.Join(root, "out.txt"))
 	if err != nil {

@@ -2,11 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-07; amended 2026-10-14 (watching per share), 2026-10-15 (one
-  directory mounted several ways)
+  directory mounted several ways), 2026-10-26 (invalidation defers to
+  write-back)
 - Current answer: an edit here is replayed in the workspace as a real syscall
   on the file through the export, never one that mutates it. A deletion
   cannot be replayed faithfully; `coarse` pokes its directory instead. Watching is per share (`off`, `partial`, `coarse`), at the strongest any
-  mount of the share asked for, with `REMOTE_DOCKER_WATCH` the default.
+  mount of the share asked for, with `REMOTE_DOCKER_WATCH` the default. On a
+  union, the watcher's events also invalidate the cache, and an edit is not
+  sent over a container write made after it: write-back carries that one here.
 
 ## Context
 
@@ -176,6 +179,24 @@ Owning the NFS server closes it:
 
 Docker Desktop instead has its FUSE client lie to a well-known PID; owning both
 ends is a better position than one end and a marker.
+
+### An edit does not overwrite a later container write (amended 2026-10-26)
+
+On a union the same events invalidate the cache (ADR 0044), batched for 150ms.
+An edit reached the cache however recent the container's own write to that
+file was: a container writing in those 150ms lost its write, silently, where a
+bind mount keeps the later one.
+
+- `Cache.invalidate` now asks the workspace what the container changed, fresh
+  on every flush, and leaves out a path the container changed after this
+  machine last did, by the container's `Change.Changed` less the measured skew
+  against this machine's ctime. Write-back then carries the container's
+  version here by the same comparison, so the two never disagree.
+- An edit made after the container's change is sent as before, and the
+  container's version it replaces is said once.
+- Without a change time on either side (an older workspace, a ctime this
+  machine cannot read), the edit is sent as it always was. A deletion here is
+  sent as before.
 
 ## Consequences
 

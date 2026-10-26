@@ -624,12 +624,32 @@ time in ADR 0045's table.
 **`write=back` and `write=ephemeral` are write capture**
 ([ADR 0044](docs/adr/0044-a-delegated-share-is-a-cache.md)). The share becomes a
 union on the workspace: the live mount underneath, a local layer on top that
-the container writes into. `back` carries those writes here within seconds and
-reports a conflict by path when a file changed in both places; `ephemeral`
-never carries them anywhere, which keeps a build directory off this machine.
-Both are proven end to end in CI; conflict handling only by unit tests.
-**Neither is faster today**: a cold union reads no faster than a plain mount,
-and scattered reads are slower. Large writes are local.
+the container writes into. `ephemeral` never carries those writes anywhere,
+which keeps a build directory off this machine. **Neither is faster today**: a
+cold union reads no faster than a plain mount, and scattered reads are slower.
+Large writes are local.
+
+**`write=back` carries back what the container does, as a bind mount would,
+within seconds.** A file it writes, rewrites or deletes, a directory it makes,
+removes or replaces, and `chmod +x` all arrive here, for files that were here
+before the container as much as for new ones. When a file changed in both
+places, the side that changed it last wins, by each file's change time, which
+no tool can set back the way `tar` or `npm` set modification times. When this
+machine wrote last, its version is kept and the container's change is listed
+in `remote status`:
+
+```
+write-back    /home/alice/project: 1 container change(s) not carried back, as you changed it here after the container did; your version is kept: index.json
+```
+
+A copy is not a change: an entrypoint's `chown -R`, which copies every file
+into the union with its time unchanged, changes nothing here. Stopping the
+client (`remote stop`, Ctrl-C, SIGTERM, the idle exit) first carries back what
+is still on its way, for up to a minute. Deletions and replaced directories
+need the workspace updated as well as the client; an older workspace cannot
+say when the container deleted a file, so those files are kept, and status
+says so. Proven end to end in CI with prefetch off; conflicts between both
+sides only by unit tests.
 
 **`write=back` keeps going, and says when it cannot.** A full disk, a dropped
 connection or a client restart only delays it: it backs off from 5 seconds to a
@@ -646,10 +666,7 @@ write-back  /home/alice/other: stalled since 12:30:00, writing back what a conta
 write-back    /home/alice/other: 1 file(s) this machine cannot hold are left until they change: bad?name
 ```
 
-A directory the container removes or replaces is removed or replaced here for
-the files the cache was filled with; a file the cache never held is left where
-it is, which with `prefetch` off or `tree` is most of a large tree. Symbolic
-links the container makes arrive as symbolic links, with the target as written,
+Symbolic links the container makes arrive as symbolic links, with the target as written,
 by the rule the share itself follows
 ([What differs from a bind mount](#what-differs-from-a-bind-mount)): on Windows
 an account without Developer Mode cannot create one, and the link is listed in
@@ -1474,6 +1491,21 @@ git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
 `fsck`. Not answered: a file over 4 GiB, which no step writes, and creating a
 symlink from an ordinary Windows account, since the runner is elevated.
 
+A `write=back` share differs from a bind mount in more ways, because what the
+container writes lands in the workspace first and is carried here after
+([ADR 0044](docs/adr/0044-a-delegated-share-is-a-cache.md)):
+
+| behaviour | on a `write=back` share | why |
+|---|---|---|
+| timing | a container's write reaches this machine within about 5 seconds, not at once, and another container mounting the directory `write=through` sees it only then | write-back polls the workspace |
+| a file changed in both places | the side that changed it last wins; this machine's version kept is listed in `remote status`, and no conflict copy is made | the change times on both sides decide |
+| hard links | become separate files here | each name is carried back on its own |
+| names this machine cannot hold | listed in `remote status` and left out: on Windows a name NTFS refuses, a name differing only in case from one here, and a symlink without Developer Mode | the same rules as the share itself |
+| sockets, fifos and devices | not carried | what crosses is content, as on any share |
+| locks | a `flock` or `fcntl` lock in the container does not lock this machine's file, and the reverse | the container locks its copy in the union |
+| modes | only the execute bit is carried; ownership never is | the share reports every other bit wide (ADR 0046) |
+| `write=ephemeral` | nothing is ever carried back | by design |
+
 ### What cannot be bind mounted
 
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
@@ -1574,7 +1606,10 @@ Beyond that:
 - **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
   option newer than the [3.10 floor](#running-a-workspace) would pass CI and fail
   every mount on an older workspace. A table guards it, not a test run.
-- **Write-back conflicts** are unit tested only.
+- **Write-back conflicts** are unit tested only, beyond one case end to end
+  (a container write, then a later edit here, kept and named). That last writer
+  wins rests on what fuse-overlayfs keeps of a file's times, which
+  `test/union-probe.sh` records rather than asserts.
 - **The Windows MSI** is installed and uninstalled on a runner when the
   installer changes. No MSI from a real release has been installed by anybody,
   none is signed, and no release zip has been unpacked on a machine that did not

@@ -137,7 +137,7 @@ func TestWriteBackRefusesARecordedFileDeletedHere(t *testing.T) {
 	c.Record = &fakeRecord{filled: map[string]map[string]Baseline{"/m/1111111111111111": recorded("/stale.go")}}
 	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
-	c.writeBackShare(t.Context(), "/m/1111111111111111")
+	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 
 	if _, err := os.Stat(filepath.Join(root, "stale.go")); err == nil {
 		t.Error("a file deleted here was brought back from the cache")
@@ -164,7 +164,7 @@ func TestWriteBackReadsTheRecordBeforeTheChanges(t *testing.T) {
 	c.editRecord(share, []string{"/stale.go"}, true)
 	store.onChanges = func() { c.unrecord(share, []string{"/stale.go"}) }
 
-	c.writeBackShare(t.Context(), share)
+	c.writeBackShare(t.Context(), share, false)
 
 	if _, err := os.Stat(filepath.Join(root, "stale.go")); err == nil {
 		t.Error("a file taken out of the record mid-round was brought back")

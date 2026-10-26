@@ -30,7 +30,7 @@ func TestAnOverlayMarkerFileIsNeverReportedAsTheContainersFile(t *testing.T) {
 	}
 
 	for _, carry := range []bool{false, true} {
-		changes, err := changesIn(&live{}, upper, "/m/aaaa", carry)
+		changes, err := changesIn(&live{}, upper, "/m/aaaa", carry, false)
 		if err != nil {
 			t.Fatalf("changesIn: %v", err)
 		}
@@ -80,12 +80,12 @@ func TestALinkIsReportedWithItsTargetOnlyWhenAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := changesIn(&live{}, upper, "/m/aaaa", false)
+	changes, err := changesIn(&live{}, upper, "/m/aaaa", false, false)
 	if err != nil || len(changes) != 0 {
 		t.Errorf("a client that did not ask was told %+v (%v)", changes, err)
 	}
 
-	changes, err = changesIn(&live{}, upper, "/m/aaaa", true)
+	changes, err = changesIn(&live{}, upper, "/m/aaaa", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

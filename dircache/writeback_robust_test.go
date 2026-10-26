@@ -131,10 +131,11 @@ func wbCache(t *testing.T, store Store, root string) (*Cache, *syncBuffer, *fake
 	logs := &syncBuffer{}
 	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
 	c := &Cache{
-		Store: func() (Store, bool) { return store, true },
-		Ctx:   t.Context(),
-		Log:   slog.New(slog.NewTextHandler(logs, nil)),
-		now:   clk.Now,
+		Store:      func() (Store, bool) { return store, true },
+		Ctx:        t.Context(),
+		Log:        slog.New(slog.NewTextHandler(logs, nil)),
+		now:        clk.Now,
+		ChangeTime: modTimeAsChangeTime,
 	}
 	t.Cleanup(c.Stop)
 	c.shares.set(wbShare, root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
