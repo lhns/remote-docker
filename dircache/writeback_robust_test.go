@@ -263,7 +263,7 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 			attempts++
 			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 
 	rounds(t, c, clk, 5)
@@ -301,7 +301,7 @@ func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 		if full {
 			return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 
 	rounds(t, c, clk, 4)
@@ -443,7 +443,7 @@ func TestWriteBackEventuallyLandsEverythingWhateverFailedFirst(t *testing.T) {
 				if faulty && rng.IntN(4) == 0 {
 					return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 				}
-				return writeUnder(r, f, nil)
+				return writeUnder(r, f, nil, 0)
 			}
 
 			rounds(t, c, clk, 15)

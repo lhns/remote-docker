@@ -243,7 +243,7 @@ func TestFilesThatKeepFailingDoNotStarveTheRest(t *testing.T) {
 		if f.Path < fmt.Sprintf("/f%05d", writeBackRoundFiles) {
 			return errors.New("held open by another program")
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 
 	rounds(t, c, clk, 4)

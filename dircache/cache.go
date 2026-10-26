@@ -433,43 +433,58 @@ func (c *Cache) rememberChanges(share string, changes []Change) map[string]Chang
 	return byPath
 }
 
-// withoutConsumerChanges is entries less the paths the consumer changed and
-// write-back has not carried back, each said once as a conflict. The fill must
-// never overwrite one: write-back decides which side is kept (ADR 0044).
-//
-// A change that is the fill's own copy (the agent cannot always tell, after it
-// restarts) is not the consumer's, and is judged by the baseline as decide
-// does; a copy of a file the cache never held (a chown -R) has the size and time
-// of the file here, and sending over it loses nothing.
-//
-// Never for an ephemeral share: nothing is carried back from one, so there is no
-// rule to protect, and the edit here is the version the container should get.
+// withoutConsumerChanges is entries less the consumer's own changes to them,
+// each said once as a conflict. The fill must never overwrite one: write-back
+// decides which side is kept (ADR 0044).
 func (c *Cache) withoutConsumerChanges(share, root string, store Store, entries []Entry) ([]Entry, error) {
-	if c.shares.ephemeral(share) {
-		return entries, nil
-	}
-	changed, err := c.consumerChanged(c.Ctx, share, store, false)
+	theirs, err := c.consumersOwn(c.Ctx, share, root, store, entries, false)
 	if err != nil {
 		return nil, err
 	}
-	if len(changed) == 0 {
-		return entries, nil
-	}
-	sent := c.shares.sentOf(share, entries)
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
-		p := slashed(e.Path)
-		ch, listed := changed[p]
-		if !listed || ch.Opaque || ch.Dir || c.fillsOwn(root, p, ch, sent) {
-			out = append(out, e)
+		if _, t := theirs[slashed(e.Path)]; t {
+			c.sayOnce(share, e.Path, "changed in the container and here before write-back carried it",
+				"a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept")
 			continue
 		}
-		if c.shares.wb.conflictNew(share, p, "changed in the container and here before write-back carried it") {
-			c.log().Warn("a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept",
-				"path", strings.TrimPrefix(e.Path, "/"))
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// consumersOwn is what the consumer changed among entries, by path: a listed
+// file that is not the copy this machine has or sent (fillsOwn). A copy of a
+// file the cache never held (a chown -R) has the size and time of the file
+// here, and sending over it loses nothing. fresh is consumerChanged's.
+//
+// Nothing for an ephemeral share: nothing is carried back from one, so there is
+// no rule to protect, and the edit here is the version the container should get.
+func (c *Cache) consumersOwn(ctx context.Context, share, root string, store Store, entries []Entry, fresh bool) (map[string]Change, error) {
+	if len(entries) == 0 || c.shares.ephemeral(share) {
+		return nil, nil
+	}
+	changed, err := c.consumerChanged(ctx, share, store, fresh)
+	if err != nil || len(changed) == 0 {
+		return nil, err
+	}
+	sent := c.shares.sentOf(share, entries)
+	out := map[string]Change{}
+	for _, e := range entries {
+		p := slashed(e.Path)
+		if ch, listed := changed[p]; listed && !ch.Opaque && !ch.Dir && !c.fillsOwn(root, p, ch, sent) {
+			out[p] = ch
 		}
 	}
 	return out, nil
+}
+
+// sayOnce logs msg about a path the first time it is said for this reason
+// (writeBacks.conflictNew).
+func (c *Cache) sayOnce(share, p, why, msg string, args ...any) {
+	if c.shares.wb.conflictNew(share, p, why) {
+		c.log().Warn(msg, append([]any{"path", strings.TrimPrefix(p, "/")}, args...)...)
+	}
 }
 
 // fillsOwn reports whether sending this machine's file over a listed change
@@ -488,7 +503,7 @@ func (c *Cache) fillsOwn(root, p string, ch Change, sent map[string]Baseline) bo
 		return !held
 	case ch.Deleted:
 		ours, ok := c.localChangeTime(root, p)
-		return ok && !time.Unix(0, ch.Changed).Add(-c.skew()).After(ours.Add(c.margin()))
+		return ok && !consumerLater(ch.Changed, ours, c.skew(), c.margin())
 	case held:
 		return base.carries(ch)
 	}

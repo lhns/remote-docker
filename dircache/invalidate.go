@@ -249,10 +249,9 @@ func (c *Cache) droppableDirs(ctx context.Context, share, root string, store Sto
 	var out []string
 	for _, d := range gone {
 		if p, holds := c.holdsConsumerWork(root, d, changed, sent); holds {
-			if c.shares.wb.conflictNew(share, d, "removed here while the container has work in it") {
-				c.log().Warn("a directory removed here holds a file the container made that is not carried back yet; the directory is left to write-back",
-					"path", strings.TrimPrefix(d, "/"), "file", strings.TrimPrefix(p, "/"))
-			}
+			c.sayOnce(share, d, "removed here while the container has work in it",
+				"a directory removed here holds a file the container made that is not carried back yet; the directory is left to write-back",
+				"file", strings.TrimPrefix(p, "/"))
 			continue
 		}
 		out = append(out, d)
@@ -286,11 +285,11 @@ func (c *Cache) holdsConsumerWork(root, dir string, changed map[string]Change, s
 // workspace) or this machine's, the edit goes as it always did. The consumer's
 // change that loses is said once.
 func (c *Cache) withoutLaterConsumerChanges(ctx context.Context, share, root string, store Store, entries []Entry) []Entry {
-	if len(entries) == 0 || c.shares.ephemeral(share) || c.ChangeTime == nil {
+	if c.ChangeTime == nil {
 		return entries
 	}
-	changed, err := c.consumerChanged(ctx, share, store, true)
-	if err != nil || len(changed) == 0 {
+	theirs, err := c.consumersOwn(ctx, share, root, store, entries, true)
+	if err != nil || len(theirs) == 0 {
 		return entries
 	}
 	r, err := os.OpenRoot(root)
@@ -299,12 +298,11 @@ func (c *Cache) withoutLaterConsumerChanges(ctx context.Context, share, root str
 	}
 	defer func() { _ = r.Close() }()
 
-	sent := c.shares.sentOf(share, entries)
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		p := slashed(e.Path)
-		ch, listed := changed[p]
-		if !listed || ch.Changed == 0 || ch.Opaque || ch.Dir || c.fillsOwn(root, p, ch, sent) {
+		ch, t := theirs[p]
+		if !t || ch.Changed == 0 {
 			out = append(out, e)
 			continue
 		}
@@ -313,17 +311,13 @@ func (c *Cache) withoutLaterConsumerChanges(ctx context.Context, share, root str
 			out = append(out, e)
 			continue
 		}
-		if time.Unix(0, ch.Changed).Add(-c.skew()).After(ours.Add(c.margin())) {
-			if c.shares.wb.conflictNew(share, p, "the container wrote it after you; write-back carries its version") {
-				c.log().Warn("a file changed here and in the container, which wrote it last; its version is carried back rather than replaced by yours",
-					"path", strings.TrimPrefix(p, "/"))
-			}
+		if consumerLater(ch.Changed, ours, c.skew(), c.margin()) {
+			c.sayOnce(share, p, "the container wrote it after you; write-back carries its version",
+				"a file changed here and in the container, which wrote it last; its version is carried back rather than replaced by yours")
 			continue
 		}
-		if c.shares.wb.conflictNew(share, p, "you wrote it after the container") {
-			c.log().Warn("a file changed in the container and here, which wrote it last; the container's version is replaced by yours",
-				"path", strings.TrimPrefix(p, "/"))
-		}
+		c.sayOnce(share, p, "you wrote it after the container",
+			"a file changed in the container and here, which wrote it last; the container's version is replaced by yours")
 		out = append(out, e)
 	}
 	return out

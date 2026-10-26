@@ -304,7 +304,7 @@ func decide(
 				return false, false
 			}
 			st.Ctime = ours
-			return time.Unix(0, theirs).Add(-skew).After(ours.Add(by)), true
+			return consumerLater(theirs, ours, skew, by), true
 		}
 		add := func(a action) {
 			a.Path = p
@@ -444,6 +444,12 @@ func decideHeld(change Change, base Baseline, info fs.FileInfo, here bool,
 		a.Exec = execFlip(change, info, exec)
 	}
 	add(a)
+}
+
+// consumerLater reports whether the consumer's time, on its own clock, is later
+// than this machine's by more than by, once the measured skew is taken off.
+func consumerLater(theirs int64, ours time.Time, skew, by time.Duration) bool {
+	return time.Unix(0, theirs).Add(-skew).After(ours.Add(by))
 }
 
 // execFlip is the execute bit to give the file here so it matches the

@@ -167,7 +167,7 @@ func TestLandLinkKeepsTheTargetVerbatim(t *testing.T) {
 	}
 
 	// And a write through the link it made still goes nowhere.
-	err := writeUnder(r, File{Path: "/bin/tool/escaped", Mode: 0o644, Body: strings.NewReader("x")}, nil)
+	err := writeUnder(r, File{Path: "/bin/tool/escaped", Mode: 0o644, Body: strings.NewReader("x")}, nil, 0)
 	if err == nil {
 		t.Error("a write through a link out of the share succeeded")
 	}
@@ -274,7 +274,7 @@ func TestASkippedFileIsTriedAgainWhenItChanges(t *testing.T) {
 		if refuse {
 			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 	rounds(t, c, clk, 3)
 	if attempts != 1 {

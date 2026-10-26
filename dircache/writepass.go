@@ -163,10 +163,8 @@ func (p *writePass) removeDir(a action) {
 	}
 	if err := p.r.Remove(rel); err != nil {
 		if !emptyDir(p.r, rel) {
-			if p.c.shares.wb.conflictNew(p.share, a.Path, "a directory the container removed still holds files here") {
-				p.c.log().Warn("the container removed a directory that still holds files here; they and the directory are kept",
-					"path", strings.TrimPrefix(a.Path, "/"))
-			}
+			p.c.sayOnce(p.share, a.Path, "a directory the container removed still holds files here",
+				"the container removed a directory that still holds files here; they and the directory are kept")
 			return
 		}
 		p.failed(a.Path, err)
@@ -353,7 +351,7 @@ func (p *writePass) land(f File, guard func() bool) error {
 	if err := p.names.clash(rel); err != nil {
 		return err
 	}
-	err := writeUnderExec(p.r, f, guard, p.action[f.Path].Exec)
+	err := writeUnder(p.r, f, guard, p.action[f.Path].Exec)
 	p.names.wrote(rel, err == nil)
 	return err
 }
@@ -388,10 +386,8 @@ func (p *writePass) stillAsSeen(a action) bool {
 // decided about it. It is looked at again next round, by decide, with the new state; it
 // is not a failure, and is said once.
 func (p *writePass) changedHere(path string) {
-	if p.c.shares.wb.conflictNew(p.share, path, "changed here while write-back was running") {
-		p.c.log().Warn("a file changed here while write-back was running; it was left as it is and is looked at again",
-			"path", strings.TrimPrefix(path, "/"))
-	}
+	p.c.sayOnce(p.share, path, "changed here while write-back was running",
+		"a file changed here while write-back was running; it was left as it is and is looked at again")
 }
 
 // failed sorts a failed write or delete: a path this machine can never hold is
