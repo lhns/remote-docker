@@ -32,7 +32,7 @@ func TestAFillLeavesWhatTheContainerMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.noteApplied("/ours.txt", info.Size(), info.ModTime(), ctimeOf(info))
+	l.noteApplied("/ours.txt", applied{size: info.Size(), modTime: info.ModTime(), ctime: ctimeOf(info)})
 
 	up, err := os.OpenRoot(upper)
 	if err != nil {

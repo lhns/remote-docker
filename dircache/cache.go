@@ -25,10 +25,13 @@ type Store interface {
 	// share's cache. The Store reads them: it owns the encoding, and the
 	// length it has to declare depends on it.
 	//
-	// It names the paths of entries the far end could not write and left out,
-	// where the rest of the batch landed. Those are not in the cache, and a
-	// Store whose far end fails the whole batch instead returns none.
-	Apply(ctx context.Context, share, root string, entries []Entry) (skipped []string, err error)
+	// With fill, an entry the consumer has its own version of is left as it is
+	// and named in Applied.Kept. The prefetch asks, because a batch is often set
+	// off by the consumer's own copy-up of the file it is writing, and landing
+	// it would lose that write (ADR 0044); invalidation does not, since an edit
+	// here is decided by the change times before it is sent. A Store that
+	// cannot tell applies the entry like any other.
+	Apply(ctx context.Context, share, root string, entries []Entry, fill bool) (Applied, error)
 
 	// Drop removes paths from a share's cache. Any number: a Store that has a
 	// request size to respect splits internally.
@@ -52,14 +55,29 @@ type Presenter interface {
 	Present(ctx context.Context, share string, paths []string) ([]string, error)
 }
 
-// FillApplier is a Store that can apply a fill batch without overwriting what
-// the consumer made: an entry the consumer has its own version of is left as it
-// is and named in kept. The prefetch uses it where the Store has it, because a
-// batch is often set off by the consumer's own copy-up of the file it is
-// writing, and landing it would lose that write (ADR 0044). Invalidation uses
-// Apply: an edit here is decided by the change times before it is sent.
-type FillApplier interface {
-	ApplyFill(ctx context.Context, share, root string, entries []Entry) (skipped, kept []string, err error)
+// Applied is what one batch did.
+type Applied struct {
+	// Read is each file as the Store read it here. The baseline is recorded
+	// from it and never from a later stat, which may describe a version
+	// written since: the copy that landed would then read as the consumer's
+	// change (ADR 0044). A file the Store could not read is not in it.
+	Read []Read
+
+	// Skipped names the entries the far end could not write and left out,
+	// where the rest of the batch landed. A Store whose far end fails the
+	// whole batch returns an error instead.
+	Skipped []string
+
+	// Kept names the entries left as the consumer had them, under fill.
+	Kept []string
+}
+
+// Read is one file as a Store read it: the size and modification time it had
+// here at that moment. Path is as in Entry.
+type Read struct {
+	Path    string
+	Size    int64
+	ModTime time.Time
 }
 
 // ErrCannotPresent is a Presenter whose far end cannot answer at all, such as an
@@ -334,42 +352,39 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	ctx, cancel := context.WithTimeout(c.Ctx, batchTimeout)
 	defer cancel()
 	started := time.Now()
-	var skipped, kept []string
-	var err error
-	if fa, ok := store.(FillApplier); ok {
-		skipped, kept, err = fa.ApplyFill(ctx, share, root, entries)
-	} else {
-		skipped, err = store.Apply(ctx, share, root, entries)
-	}
+	applied, err := store.Apply(ctx, share, root, entries, true)
 	if err != nil {
 		return err
 	}
 	c.observeBandwidth(bytes, time.Since(started))
 
-	// What the far end kept as the consumer had it is the consumer's change,
-	// which write-back decides; the fill holds no copy of it.
-	if len(kept) > 0 {
-		entries = withoutSkipped(entries, kept)
-		c.unrecord(share, kept)
-	}
-
-	// What the far end left out is not in the cache, so it is neither recorded
-	// nor compared against: a file the consumer later makes there is the
-	// consumer's, and not the fill's.
-	landed := entries
-	if len(skipped) > 0 {
-		landed = withoutSkipped(entries, skipped)
-		c.unrecord(share, skipped)
+	if len(applied.Skipped) > 0 {
 		c.log().Warn("the workspace could not take some files into a share's cache; they are read live",
-			"share", share, "files", len(skipped), "first", strings.TrimPrefix(skipped[0], "/"))
+			"share", share, "files", len(applied.Skipped), "first", strings.TrimPrefix(applied.Skipped[0], "/"))
 	}
-
 	c.shares.mu.Lock()
-	state.Sent += len(landed)
+	state.Sent += len(withoutSkipped(entries, slices.Concat(applied.Skipped, applied.Kept)))
 	c.shares.mu.Unlock()
-	c.shares.noteSent(share, root, landed)
-	c.saveRecord(share)
+	c.noteApplied(share, applied)
 	return nil
+}
+
+// noteApplied records what a batch put in a share's cache. What the far end
+// left out is not in the cache, and what it kept is the consumer's change,
+// which write-back decides: neither is recorded or compared against. The rest
+// has the baseline of the version the Store read.
+func (c *Cache) noteApplied(share string, applied Applied) {
+	read := applied.Read
+	if notOurs := slices.Concat(applied.Skipped, applied.Kept); len(notOurs) > 0 {
+		c.unrecord(share, notOurs)
+		left := make(map[string]bool, len(notOurs))
+		for _, p := range notOurs {
+			left[slashed(p)] = true
+		}
+		read = slices.DeleteFunc(slices.Clone(read), func(r Read) bool { return left[slashed(r.Path)] })
+	}
+	c.shares.noteSent(share, read)
+	c.saveRecord(share)
 }
 
 // changedAnswer is one answer to what the consumer changed.
@@ -816,13 +831,9 @@ func (f *shares) forget(share string) {
 	}
 }
 
-// noteSent records what a batch put in a share's cache.
-//
-// Read from disk again rather than taken from the walk: what matters is the
-// file as it was SENT, and one rewritten between the walk and the read would
-// otherwise be recorded as something it never was, which write-back would later
-// read as the consumer having changed it.
-func (f *shares) noteSent(share, root string, entries []Entry) {
+// noteSent records the baseline of each file a batch landed, as the Store read
+// it (Applied.Read).
+func (f *shares) noteSent(share string, read []Read) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -830,16 +841,16 @@ func (f *shares) noteSent(share, root string, entries []Entry) {
 	if manifest == nil {
 		return
 	}
-	for _, e := range entries {
-		if b, ok := baselineOf(root, e.Path); ok {
-			// A file carried back from the consumer and then sent again
-			// unchanged (the watcher sees the landing as a local change) is
-			// still the consumer's.
-			if old, had := manifest["/"+e.Path]; had && old.Consumer != 0 && old.sameFile(b) {
-				b.Consumer = old.Consumer
-			}
-			manifest["/"+e.Path] = b
+	for _, r := range read {
+		p := slashed(r.Path)
+		b := Baseline{Size: r.Size, ModTime: r.ModTime}
+		// A file carried back from the consumer and then sent again
+		// unchanged (the watcher sees the landing as a local change) is
+		// still the consumer's.
+		if old, had := manifest[p]; had && old.Consumer != 0 && old.sameFile(b) {
+			b.Consumer = old.Consumer
 		}
+		manifest[p] = b
 	}
 }
 

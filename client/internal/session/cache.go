@@ -568,11 +568,13 @@ func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port 
 
 // Apply puts one batch of files, read from root, into a share's cache, and
 // names the paths the workspace could not take and left out. An agent that does
-// not skip fails the batch instead, so there is nothing to name then.
-func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry) ([]string, error) {
-	body, err := tarOf(root, entries, c.codec)
+// not skip fails the batch instead, so there is nothing to name then. With fill
+// the workspace leaves a file the container has its own version of and names it
+// in Kept; a workspace without Times cannot, and applies it like any other.
+func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry, fill bool) (dircache.Applied, error) {
+	body, read, err := tarOf(root, entries, c.codec)
 	if err != nil {
-		return nil, err
+		return dircache.Applied{}, err
 	}
 	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
 		return c.do(ctx, cache.Request{
@@ -581,40 +583,13 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 			Bytes:  int64(len(body)),
 			Codec:  c.codec,
 			Carry:  c.carry,
+			Fill:   fill && c.times,
 		}, bytes.NewReader(body))
 	})
 	if err != nil {
-		return nil, err
+		return dircache.Applied{}, err
 	}
-	return reply.Skipped, nil
-}
-
-// ApplyFill is Apply for a prefetch batch (dircache.FillApplier): the workspace
-// leaves a file the container has its own version of and names it in kept. A
-// workspace without Times cannot, and gets an ordinary Apply.
-func (c *cacheChannel) ApplyFill(ctx context.Context, export, root string, entries []dircache.Entry) (skipped, kept []string, err error) {
-	if !c.times {
-		skipped, err = c.Apply(ctx, export, root, entries)
-		return skipped, nil, err
-	}
-	body, err := tarOf(root, entries, c.codec)
-	if err != nil {
-		return nil, nil, err
-	}
-	reply, err := c.forShare(ctx, export, func() (cache.Reply, error) {
-		return c.do(ctx, cache.Request{
-			Op:     cache.OpApply,
-			Export: export,
-			Bytes:  int64(len(body)),
-			Codec:  c.codec,
-			Carry:  c.carry,
-			Fill:   true,
-		}, bytes.NewReader(body))
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return reply.Skipped, reply.Kept, nil
+	return dircache.Applied{Read: read, Skipped: reply.Skipped, Kept: reply.Kept}, nil
 }
 
 // Drop removes paths from a share's cache, in as many requests as the frame
@@ -727,36 +702,40 @@ func prefetchWord(p dircache.Policy) workspace.Prefetch {
 // leaving room for the rest of the line and JSON escaping.
 const pathsPerFrame = cache.MaxFrame / 2
 
-// tarOf builds the batch in memory, since a payload is framed by its length.
-func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) {
+// tarOf builds the batch in memory, since a payload is framed by its length,
+// and answers with each file as it was read.
+func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, []dircache.Read, error) {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		names = append(names, e.Path)
 	}
 
 	var buf bytes.Buffer
-	if codec != cache.CodecZstd {
-		// Not `return buf.Bytes(), WriteTar(...)`: that returns an empty slice.
-		if err := cache.WriteTar(cache.TarFilesFrom(root, names), &buf); err != nil {
-			return nil, err
+	var w io.Writer = &buf
+	var zw *zstd.Encoder
+	if codec == cache.CodecZstd {
+		// The frame length describes the encoded bytes.
+		var err error
+		if zw, err = zstd.NewWriter(&buf); err != nil {
+			return nil, nil, err
 		}
-		return buf.Bytes(), nil
+		w = zw
 	}
-
-	// The frame length describes the encoded bytes.
-	zw, err := zstd.NewWriter(&buf)
+	carried, err := cache.WriteTar(cache.TarFilesFrom(root, names), w)
+	if zw != nil {
+		// Closed before the buffer is read, or the payload ends early.
+		if cerr := zw.Close(); err == nil {
+			err = cerr
+		}
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := cache.WriteTar(cache.TarFilesFrom(root, names), zw); err != nil {
-		_ = zw.Close()
-		return nil, err
+	read := make([]dircache.Read, 0, len(carried))
+	for _, r := range carried {
+		read = append(read, dircache.Read{Path: r.Name, Size: r.Size, ModTime: r.ModTime})
 	}
-	// Closed before the buffer is read, or the payload ends early.
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), read, nil
 }
 
 // chunkPaths splits a path list into requests that each fit one frame.

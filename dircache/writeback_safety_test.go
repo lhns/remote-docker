@@ -67,13 +67,13 @@ func TestAFileTheClientWroteIntoAReplacedDirectoryIsNeverDeleted(t *testing.T) {
 		return here, nil
 	}
 	c, _, clk := wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/kept"}, {Path: "D/new"}, {Path: "D/old"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/kept"}, {Path: "D/new"}, {Path: "D/old"}}))
 
 	rounds(t, c, clk, 4)
 
 	// A restart: a new process, which knows only the record.
 	c, _, clk = wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/kept"}, {Path: "D/new"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/kept"}, {Path: "D/new"}}))
 	rounds(t, c, clk, 3)
 
 	for _, keep := range []string{"D/kept", "D/new"} {
@@ -100,7 +100,7 @@ func TestNothingIsDeletedUnderADirectoryWhenThePresenceCannotBeAsked(t *testing.
 	writeLocal(t, root, "D/old", "x")
 	store := &faultStore{changes: []Change{{Path: "/D", Opaque: true}}}
 	c, _, clk := wbCache(t, noPresenter{store}, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/old"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/old"}}))
 
 	rounds(t, c, clk, 2)
 	if !exists(root, "D/old") {
@@ -111,7 +111,7 @@ func TestNothingIsDeletedUnderADirectoryWhenThePresenceCannotBeAsked(t *testing.
 		return nil, errors.New("the channel reset")
 	}}
 	c, _, clk = wbCache(t, failing, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/old"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/old"}}))
 	rounds(t, c, clk, 2)
 	if !exists(root, "D/old") {
 		t.Error("a file was deleted although asking whether it exists failed")
@@ -127,7 +127,7 @@ func TestASkippedChangeIsNotReadAsADeletionNextRound(t *testing.T) {
 	store := &faultStore{}
 	store.changes = []Change{{Path: "/D", Opaque: true}, {Path: "/D/F", Link: "../elsewhere"}}
 	c, _, clk := wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/F"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/F"}}))
 	c.makeLink = func(*os.Root, string, string) error {
 		return &os.LinkError{Op: "symlink", Err: errNoSymlink}
 	}
@@ -147,7 +147,7 @@ func TestAConflictIsSaidOncePerPath(t *testing.T) {
 	store := &faultStore{changes: []Change{{Path: "/f", Deleted: true}}}
 	c, logs, clk := wbCache(t, store, root)
 	// Sent with a size and time this file no longer has: changed here since.
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "f"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "f"}}))
 	c.shares.manifests[wbShare]["/f"] = Baseline{Size: 1, ModTime: time.Unix(1, 0)}
 
 	rounds(t, c, clk, 4)
@@ -169,7 +169,7 @@ func TestAFileChangedHereWhileThePassRanIsNotOverwritten(t *testing.T) {
 	store.add("/a.txt", "the container's version")
 	store.add("/n.txt", "the container's new file")
 	c, _, clk := wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "a.txt"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "a.txt"}}))
 
 	store.pullFn = func(_ context.Context, paths []string, deliver func(string) error) error {
 		// The user edits one file and creates the other while the pull runs.
@@ -410,7 +410,7 @@ func TestAStoreThatCannotPresentIsNotLoggedEveryRound(t *testing.T) {
 		return nil, ErrCannotPresent
 	}}
 	c, logs, clk := wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/old"}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "D/old"}}))
 
 	rounds(t, c, clk, 3)
 	if !exists(root, "D/old") {

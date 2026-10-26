@@ -206,7 +206,7 @@ func TestWriteBackCarriesAReplacedDirectoryAndALink(t *testing.T) {
 		Change{Path: "/bin/tool", Link: "../tools/new"})
 
 	c, _, clk := wbCache(t, store, root)
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "tools/old", Size: 3}, {Path: "tools/sub/deep", Size: 3}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "tools/old", Size: 3}, {Path: "tools/sub/deep", Size: 3}}))
 	c.makeLink = func(r *os.Root, rel, target string) error { return r.Mkdir("linked", 0o755) }
 	rounds(t, c, clk, 1)
 

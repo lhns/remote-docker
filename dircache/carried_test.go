@@ -27,7 +27,7 @@ func TestACarriedFileIsNotDeletedByTheDirectoryItIsIn(t *testing.T) {
 
 	// The watcher sends the landed file to the cache, which is the file's content
 	// again: it keeps the consumer's mark.
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "burst/f1", Size: int64(len("made in the container"))}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "burst/f1", Size: int64(len("made in the container"))}}))
 
 	// The agent no longer lists it as a change, but the directory is still opaque.
 	store.mu.Lock()
@@ -52,7 +52,7 @@ func TestTheConsumersMarkIsKeptWhenAFileIsSentAgainUnchanged(t *testing.T) {
 	b.Consumer = 42
 	c.shares.manifests[wbShare]["/a"] = b
 
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "a", Size: 1}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "a", Size: 1}}))
 	if got := c.shares.baselines(wbShare)["/a"].Consumer; got != 42 {
 		t.Errorf("consumer mark = %d after an unchanged send, want it kept", got)
 	}
@@ -62,7 +62,7 @@ func TestTheConsumersMarkIsKeptWhenAFileIsSentAgainUnchanged(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(root, "a"), later, later); err != nil {
 		t.Fatal(err)
 	}
-	c.shares.noteSent(wbShare, root, []Entry{{Path: "a", Size: 1}})
+	c.shares.noteSent(wbShare, readHere(root, []Entry{{Path: "a", Size: 1}}))
 	if got := c.shares.baselines(wbShare)["/a"].Consumer; got != 0 {
 		t.Errorf("consumer mark = %d after the file changed here, want it dropped", got)
 	}

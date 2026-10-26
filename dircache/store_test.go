@@ -2,6 +2,7 @@ package dircache
 
 import (
 	"context"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -26,14 +27,25 @@ type fakeStore struct {
 	files map[string]File
 }
 
-func (f *fakeStore) Apply(_ context.Context, _, _ string, entries []Entry) ([]string, error) {
+func (f *fakeStore) Apply(_ context.Context, _, root string, entries []Entry, _ bool) (Applied, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.applyErr != nil {
-		return nil, f.applyErr
+		return Applied{}, f.applyErr
 	}
 	f.applied = append(f.applied, entries...)
-	return nil, nil
+	return Applied{Read: readHere(root, entries)}, nil
+}
+
+// readHere is each entry as a Store reads it from root.
+func readHere(root string, entries []Entry) []Read {
+	var out []Read
+	for _, e := range entries {
+		if info, err := os.Stat(localPath(root, e.Path)); err == nil {
+			out = append(out, Read{Path: e.Path, Size: info.Size(), ModTime: info.ModTime()})
+		}
+	}
+	return out
 }
 
 func (f *fakeStore) Drop(_ context.Context, _ string, paths []string) error {

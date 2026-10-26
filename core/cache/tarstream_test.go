@@ -29,7 +29,7 @@ func TestWriteTarPreservesNameAndTime(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := WriteTar(TarFilesFrom(root, []string{"/pkg/lib.go"}), &buf); err != nil {
+	if _, err := WriteTar(TarFilesFrom(root, []string{"/pkg/lib.go"}), &buf); err != nil {
 		t.Fatalf("WriteTar: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestWriteTarSkipsWhatItCannotRead(t *testing.T) {
 
 	var buf bytes.Buffer
 	files := TarFilesFrom(root, []string{"/gone.go", "/here.go"})
-	if err := WriteTar(files, &buf); err != nil {
+	if _, err := WriteTar(files, &buf); err != nil {
 		t.Fatalf("a missing file failed the whole archive: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestWriteTarSkipsWhatIsNotRegular(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := WriteTar(TarFilesFrom(root, []string{"/adir"}), &buf); err != nil {
+	if _, err := WriteTar(TarFilesFrom(root, []string{"/adir"}), &buf); err != nil {
 		t.Fatalf("WriteTar: %v", err)
 	}
 	if _, err := tar.NewReader(&buf).Next(); err != io.EOF {
@@ -158,5 +158,40 @@ func TestWriteTarNamingNamesAnUnreadableFileAndKeepsTheRest(t *testing.T) {
 	}
 	if _, err := tr.Next(); err != io.EOF {
 		t.Errorf("the archive holds more than good: %v", err)
+	}
+}
+
+// A tar carries a time to the second, so what lands is the time here rounded;
+// the answer is the time as it was read, which is the version the entry holds.
+// Write-back tells the copy it sent by both (ADR 0044).
+func TestWriteTarCarriesTheSecondAndReportsWhatItRead(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "a.go")
+	if err := os.WriteFile(full, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 9, 2, 10, 30, 0, 700_000_000, time.UTC)
+	if err := os.Chtimes(full, when, when); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	read, err := WriteTar(TarFilesFrom(root, []string{"a.go", "missing.go"}), &buf)
+	if err != nil {
+		t.Fatalf("WriteTar: %v", err)
+	}
+	if len(read) != 1 || read[0].Name != "a.go" || read[0].Size != info.Size() || !read[0].ModTime.Equal(info.ModTime()) {
+		t.Errorf("read = %+v, want a.go as it was stat'ed (%d bytes, %v)", read, info.Size(), info.ModTime())
+	}
+	header, err := tar.NewReader(&buf).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := info.ModTime().Round(time.Second); !header.ModTime.Equal(want) {
+		t.Errorf("the entry's time is %v, want %v, the time here to the second", header.ModTime, want)
 	}
 }

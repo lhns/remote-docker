@@ -38,7 +38,9 @@
   (`Change.Mode`) come back too, all three negotiated by `Hello.Times`.
   Write-back no longer waits for the fill or a complete cache, a closing
   session runs it to quiescence first (60s bound), and an edit here is never
-  sent over a later container write.
+  sent over a later container write. This machine's own copy in the layer is
+  recognised by its baseline alone: the file as it was read into the batch,
+  its time compared to the second as a tar carries it.
 
 ## What forced it
 
@@ -338,8 +340,9 @@ stopped for that share until a new container prepared it.
 
 The upper holds the container's writes **and the fill's own copies**, since
 the fill goes through the union too. The manifest separates them: what the fill
-sent, with each file's size and time as it was **here**. An entry matching its
-baseline is the fill's copy; anything else is the container's.
+sent, with each file's size and time as it was **read into the batch**. An
+entry matching its baseline is the fill's copy; anything else is the
+container's.
 
 | your file vs manifest | cached file vs manifest | outcome |
 |---|---|---|
@@ -355,10 +358,11 @@ baseline is the fill's copy; anything else is the container's.
 
 - A clock is needed for last writer wins only; the offset between the machines
   is measured through `workspace-info`. Every conflict is reported by path.
-- The fill's copies are filtered on **both** ends. The client's check is the
-  rule; wrong there, a file is written back with the bytes it already has and
-  settles next round. The agent's record of what it applied keeps the reply
-  proportional; without it a fully cached tree is listed every five seconds.
+- The fill's copies are filtered on **both** ends, and the client's check is
+  the rule: the agent's record of what it applied is lost when the agent
+  restarts, and only keeps the reply proportional; without it a fully cached
+  tree is listed every five seconds. See "This machine's copy is never the
+  container's change" for what the client's check rests on.
 - Write-back does not wait for the fill, nor for a complete cache (amended
   2026-10-26, below). Until then nothing was written back from an incomplete
   cache, because a file the fill never sent looked exactly like one the
@@ -422,16 +426,15 @@ nothing:
 | a file both sides changed | change times where both are known, else mtimes as before: the same comparison invalidation makes, so the two never disagree |
 | invalidation | `withoutLaterConsumerChanges` asks what the container changed, fresh, per flush, and leaves to write-back a path the container changed after this machine's ctime. Deletions are not deferred |
 | the fill | `withoutConsumerChanges` covers paths the cache never held too: never sent over a container change not carried back, except a copy of the file here, or a deletion older than the file here (the whiteout this machine's own deletion left, for a file made here again while nothing ran). And the agent leaves out, and names in `Reply.Kept`, a file the cache layer holds that the client did not put there (`Request.Fill`): a prefetch batch is often set off by the container's copy-up of the file it is writing, and landed it overwrote that write with this machine's older version (`integration.sh` 15h, found in CI 2026-10-26). The client's own check reads an answer up to two seconds old and cannot see a write still in progress |
-| the agent | `live.applied` compares the ctime as well, so a chmod or chown the container makes on a file the client sent is its change |
+| the agent | `live.applied` compares the ctime as well, so a chmod or chown the container makes on a file the client sent is its change; recorded from the layer's own stat, as `Changes` reads it |
 | the wire | `Hello.Times` announces, `Request.Times` asks; `Change.Changed` (`t`), `Change.Dir` (`i`), `Change.Mode` (`x`), and under it `Request.Fill` (`f`) and `Reply.Kept` (`kp`). An older client never asks and never sees a `Dir` it would fetch as a file |
 
 **The completeness gate is gone, and the fill gate with it.** A file the cache
 holds is decided by its manifest; one it never held that this machine has, by
 steps 1 and 2; one this machine lacks is the container's unless the record
 says it was deleted here; and the fill records a batch before it sends it, so
-its own copies are never the container's (the agent filters them as they land,
-and step 1 catches them after an agent restart). Nothing else read `Cached`:
-it remains for `remote status` only.
+its own copies are never the container's (the baseline recognises them,
+below). Nothing else read `Cached`: it remains for `remote status` only.
 
 **A closing session runs write-back to quiescence first.** `Session.Close`
 stops serving the endpoint, sends the pending invalidations, and calls
@@ -464,6 +467,22 @@ queue rather than dropping it.
 - Costs: one `Changes` per invalidation flush, the fill asking `Changes` once
   per two seconds of batches on a first fill too, and one walk of a directory
   here per removal of it.
+
+### This machine's copy is never the container's change (amended 2026-10-26)
+
+A copy this machine sent was read back as the container's change, and a
+deletion or an edit here lost to it (`integration.sh` 15e, found in CI
+2026-10-26: a file deleted here came back). The first two rows are the client's
+check failing, each enough alone once the agent's filter missed the file; the
+third is a way the filter can miss it:
+
+| fault | effect | now |
+|---|---|---|
+| a tar carries the time to the second, so the copy lands with the time here rounded, and `carries` compared it exactly | every copy with a sub-second time read as the container's once this machine had changed the file: deleted here, "the container changed it" brought it back | `carries` compares as `sameContent` does: equal, or equal to the second (`copiedTime`) |
+| the baseline was a stat taken after the batch landed | a file rewritten while it was sent got the rewrite's baseline, the copy of the earlier version read as the container's, and write-back carried it over the rewrite | the baseline is the file as the Store read it into the tar (`Applied.Read`, from `cache.WriteTar`); a rewrite since is a change here, and the watcher sends it again |
+| the agent recorded a landed file by a stat through the merged mount, and `Changes` compares the cache layer's own stat, ctime included | a file whose two ctimes differ is reported as the container's for as long as it is cached | recorded by the layer's stat; whether the FUSE mount reports the layer's ctime is recorded by `test/union-probe.sh` section 14 |
+
+No wire change: `Applied.Read` is what the client's own tar holds.
 
 ### Write-back never stops for good (amended 2026-10-21)
 

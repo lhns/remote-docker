@@ -3,6 +3,8 @@ package session
 import (
 	"bufio"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,12 +92,19 @@ func TestApplyReturnsWhatTheWorkspaceSkipped(t *testing.T) {
 	c := channelOver(stream)
 	c.carry = true
 
-	skipped, err := c.Apply(t.Context(), "/m/1111111111111111", root, nil)
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := c.Apply(t.Context(), "/m/1111111111111111", root, []dircache.Entry{{Path: "a.go", Size: 1}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skipped) != 1 || skipped[0] != "/b.go" {
+	if skipped := applied.Skipped; len(skipped) != 1 || skipped[0] != "/b.go" {
 		t.Errorf("skipped = %v, want /b.go", skipped)
+	}
+	// The baseline is recorded from the file as it was read into the batch.
+	if len(applied.Read) != 1 || applied.Read[0].Path != "a.go" || applied.Read[0].Size != 1 {
+		t.Errorf("read = %+v, want a.go as it was read", applied.Read)
 	}
 	if !strings.Contains(string(stream.written), `"y":true`) {
 		t.Errorf("the apply %s did not ask the workspace to skip", stream.written)

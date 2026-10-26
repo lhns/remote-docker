@@ -207,22 +207,17 @@ func (c *Cache) invalidate(ctx context.Context, share, root string, paths map[st
 	}
 	for _, batch := range batches(changed) {
 		c.record(share, batch)
-		skipped, err := store.Apply(ctx, share, root, batch)
+		applied, err := store.Apply(ctx, share, root, batch, false)
 		if err != nil {
 			c.quiet(ctx, "updating a cache", "share", share, "err", err)
 			continue
-		}
-		if len(skipped) > 0 {
-			c.unrecord(share, skipped)
-			batch = withoutSkipped(batch, skipped)
 		}
 		// The manifest means "what this client put in the cache", and a file
 		// created here after the fill is exactly that. Left out, it is in the
 		// cache and in nobody's record: write-back cannot tell it from the
 		// consumer's own file, and a later deletion of it has nothing to
 		// reconcile against.
-		c.shares.noteSent(share, root, batch)
-		c.saveRecord(share)
+		c.noteApplied(share, applied)
 	}
 }
 

@@ -53,8 +53,8 @@ func (b Baseline) sameFile(o Baseline) bool {
 	return b.Size == o.Size && b.ModTime.Equal(o.ModTime)
 }
 
-// carries reports whether a change is exactly the version this baseline stands
-// for: a copy of the fill's, or one already carried back.
+// carries reports whether a change is the version this baseline stands for: the
+// copy this machine sent, or one already carried back.
 func (b Baseline) carries(c Change) bool {
 	if c.Size != b.Size {
 		return false
@@ -62,20 +62,23 @@ func (b Baseline) carries(c Change) bool {
 	if b.Consumer != 0 && c.ModTime == b.Consumer {
 		return true
 	}
-	return time.Unix(0, c.ModTime).Equal(b.ModTime)
+	return copiedTime(c.ModTime, b.ModTime)
 }
 
 // sameContent reports whether a change has the size and modification time of
 // the file this machine has, which is how a COPY looks: a chown -R copies every
 // file into the cache layer with its time kept (test/union-probe.sh section
-// 14), and the fill's own copies are this machine's files. Either side may hold
-// the time rounded to the second, because a tar carries it so.
+// 14), and the fill's own copies are this machine's files.
 func sameContent(c Change, info fs.FileInfo) bool {
-	if c.Size != info.Size() {
-		return false
-	}
-	theirs, ours := time.Unix(0, c.ModTime), info.ModTime()
-	return theirs.Equal(ours) || theirs.Equal(ours.Round(time.Second)) || theirs.Round(time.Second).Equal(ours)
+	return c.Size == info.Size() && copiedTime(c.ModTime, info.ModTime())
+}
+
+// copiedTime reports whether the consumer's modification time is a copy of
+// ours. Either side may hold it rounded to the second, because a tar carries
+// it so: every file this machine sends lands that way.
+func copiedTime(theirs int64, ours time.Time) bool {
+	t := time.Unix(0, theirs)
+	return t.Equal(ours) || t.Equal(ours.Round(time.Second)) || t.Round(time.Second).Equal(ours)
 }
 
 // kind is what to do about one path.

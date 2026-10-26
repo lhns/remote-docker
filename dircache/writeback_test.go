@@ -165,7 +165,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 
 	c := cacheWith(t, store)
 	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-	c.shares.noteSent("/m/1111111111111111", root, []Entry{{Path: "main.go", Size: 7}})
+	c.shares.noteSent("/m/1111111111111111", readHere(root, []Entry{{Path: "main.go", Size: 7}}))
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 

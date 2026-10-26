@@ -97,7 +97,7 @@ func TestWriteBackShareDoesNotDeleteThroughALink(t *testing.T) {
 			c := cacheWith(t, store)
 			const id = "/m/1111111111111111"
 			c.shares.set(id, share, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-			c.shares.noteSent(id, share, []Entry{{Path: "link/victim.txt", Size: 4}})
+			c.shares.noteSent(id, readHere(share, []Entry{{Path: "link/victim.txt", Size: 4}}))
 
 			c.writeBackShare(t.Context(), id, false)
 

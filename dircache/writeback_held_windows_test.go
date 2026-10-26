@@ -36,7 +36,7 @@ func TestWriteBackRetriesAFileAnotherProgramHolds(t *testing.T) {
 	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
 	c.now = clk.Now
 	c.shares.set(share, root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-	c.shares.noteSent(share, root, []Entry{{Path: "main.go", Size: 7}})
+	c.shares.noteSent(share, readHere(root, []Entry{{Path: "main.go", Size: 7}}))
 
 	held, err := os.Open(local) // Go opens without FILE_SHARE_DELETE
 	if err != nil {
