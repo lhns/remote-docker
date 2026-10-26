@@ -25,10 +25,12 @@ func TestWriteBackStatusNamesWhatIsStalledAndWhatWasLeftBehind(t *testing.T) {
 			{Path: "/node_modules/.bin/tsserver", Why: "privilege not held", Kind: dircache.SkipLink},
 			{Path: "/license", Why: "differs only in case", Kind: dircache.SkipClash},
 			{Path: "/x/.wh..wh..opq", Why: "an overlay marker, never a file of yours", Kind: dircache.SkipMarker},
+			{Path: "/out.txt", Why: "you changed it here after the container did; your version is kept", Kind: dircache.SkipKept},
+			{Path: "/index.json", Why: "you changed it here after the container did; your version is kept", Kind: dircache.SkipKept},
 		}}},
 	}
 
-	out := strings.Join(writeBackLines(reports, true, true), "\n")
+	out := strings.Join(writeBackLines(reports, workspaceSays{known: true, carries: true, times: true}), "\n")
 
 	for _, want := range []string{
 		"a-fine: ok",
@@ -38,6 +40,7 @@ func TestWriteBackStatusNamesWhatIsStalledAndWhatWasLeftBehind(t *testing.T) {
 		"2 link(s) not carried back, which this account may not create here: node_modules/.bin/tsc, node_modules/.bin/tsserver",
 		"1 file(s) differ only in case from one already here and are left: license",
 		"1 overlay marker(s) in the tree, safe to delete: x/.wh..wh..opq",
+		"2 container change(s) not carried back, as you changed it here after the container did; your version is kept: out.txt, index.json",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status is missing %q:\n%s", want, out)
@@ -56,16 +59,22 @@ func TestWriteBackStatusNamesWhatIsStalledAndWhatWasLeftBehind(t *testing.T) {
 func TestWriteBackStatusSaysWhenTheWorkspaceCannotCarryLinks(t *testing.T) {
 	reports := func() []dircache.Report { return []dircache.Report{{Local: "/home/alice/p"}} }
 
-	if out := strings.Join(writeBackLines(reports(), true, false), "\n"); !strings.Contains(out, "too old to carry links") ||
+	if out := strings.Join(writeBackLines(reports(), workspaceSays{known: true, times: true}), "\n"); !strings.Contains(out, "too old to carry links") ||
 		!strings.Contains(out, "fix: update the workspace") {
 		t.Errorf("an agent without Carry: %q", out)
 	}
-	for _, tc := range []struct{ known, carries bool }{{true, true}, {false, false}} {
-		if out := strings.Join(writeBackLines(reports(), tc.known, tc.carries), "\n"); strings.Contains(out, "too old") {
-			t.Errorf("known=%v carries=%v said the workspace is too old: %q", tc.known, tc.carries, out)
+	// Without change times a deletion of a file the cache never held is kept
+	// (ADR 0044), and status says the remedy.
+	if out := strings.Join(writeBackLines(reports(), workspaceSays{known: true, carries: true}), "\n"); !strings.Contains(out, "too old to say when a container deleted a file") ||
+		!strings.Contains(out, "fix: update the workspace") {
+		t.Errorf("an agent without Times: %q", out)
+	}
+	for _, says := range []workspaceSays{{known: true, carries: true, times: true}, {}} {
+		if out := strings.Join(writeBackLines(reports(), says), "\n"); strings.Contains(out, "too old") {
+			t.Errorf("%+v said the workspace is too old: %q", says, out)
 		}
 	}
-	if out := writeBackLines(nil, true, false); len(out) != 0 {
+	if out := writeBackLines(nil, workspaceSays{known: true}); len(out) != 0 {
 		t.Errorf("no share carries writes back, yet status says %v", out)
 	}
 }

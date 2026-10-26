@@ -174,20 +174,24 @@ func (l *live) failed() error {
 	return l.exit
 }
 
-// applied is one file as the client's stream left it.
+// applied is one file as the client's stream left it. ctime is its change
+// time where the platform says, so a chmod or chown the container makes on a
+// file the client sent is the container's change and not the client's (ADR
+// 0044).
 type applied struct {
 	size    int64
 	modTime time.Time
+	ctime   int64
 }
 
 // noteApplied records what was just written through the union.
-func (l *live) noteApplied(name string, size int64, modTime time.Time) {
+func (l *live) noteApplied(name string, size int64, modTime time.Time, ctime int64) {
 	l.appliedMu.Lock()
 	defer l.appliedMu.Unlock()
 	if l.applied == nil {
 		l.applied = map[string]applied{}
 	}
-	l.applied[name] = applied{size: size, modTime: modTime}
+	l.applied[name] = applied{size: size, modTime: modTime, ctime: ctime}
 }
 
 // forgetApplied drops a path, so a file the client removed and the container
@@ -198,12 +202,14 @@ func (l *live) forgetApplied(name string) {
 	delete(l.applied, name)
 }
 
-// isApplied reports whether an entry is exactly what the client last wrote.
-func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
+// isApplied reports whether an entry is exactly what the client last wrote. A
+// ctime either side does not know is not compared.
+func (l *live) isApplied(name string, size int64, modTime time.Time, ctime int64) bool {
 	l.appliedMu.Lock()
 	defer l.appliedMu.Unlock()
 	a, ok := l.applied[name]
-	return ok && a.size == size && a.modTime.Equal(modTime)
+	return ok && a.size == size && a.modTime.Equal(modTime) &&
+		(a.ctime == 0 || ctime == 0 || a.ctime == ctime)
 }
 
 // share is the live union for one of a machine's shares, if this manager has

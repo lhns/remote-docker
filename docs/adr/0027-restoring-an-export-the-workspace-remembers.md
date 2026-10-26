@@ -1,12 +1,15 @@
 # 0027 — Restoring an export the workspace remembers
 
 - Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
-- Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15, 2026-10-21
+- Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15, 2026-10-21,
+  2026-10-26
 - Current answer: restore lazily, from a MOUNT or a share ROOT HANDLE that
   misses, through the checks below, and at connect for a recorded union the
   workspace reports mounted. Never from a lookup. A restored share is attached
   to the cache with its recorded words, and the fill record carries the
-  baselines write-back compares against.
+  baselines write-back compares against. A session that closes carries back
+  what its containers changed first, opening the connection again if the idle
+  sweep had released it, within 60s.
 
 ## Context
 
@@ -136,6 +139,32 @@ digest is an identity rather than a security boundary.
   paths keep their field, so an older client reads the file as before.
 - **The file version stays 1** through both: `readBound` drops a record whose
   version differs, so a bump would make every restore fail after an upgrade.
+
+## A closing session carries back first (amended 2026-10-26)
+
+Restoring covers a change the container made while no client ran; it is
+carried back by the next session. A change made in the seconds before a client
+stops was not: the write-back loop returned on cancel, `Session.Close` ran no
+round, and a job that wrote its output and stopped the client left it in the
+workspace for a later session, or for none.
+
+- `Session.Close` stops serving the endpoint, then `settleWriteBack`: the
+  pending invalidations are sent and `dircache.Cache.Settle` runs rounds until
+  one carries nothing, skipping any backoff (ADR 0044). `remote stop`, SIGTERM
+  and the idle expiry all reach it, since all three end in `Close`.
+- **A released connection is opened again for it**, with a lease, so the idle
+  sweep cannot release it under the round. The changes are in the workspace's
+  cache layer whether or not a connection is up, so a session released while
+  idle and then stopped would otherwise skip them.
+- **Bounded at 60s** (`settleTimeout`), on the session's own context, never
+  the caller's. What is left is logged with the share, the count and the first
+  path, and the next session carries it back. `remote stop` waits up to 90s for
+  the process.
+- A session with nothing that writes back (no share, or only `write=ephemeral`
+  ones) closes without reaching for the workspace, and so does one whose
+  released connection was to a machine workspace (ADR 0026): with nothing
+  holding it the machine stops, a restart unmounts every union, and dialling
+  would boot it only to find nothing to carry.
 
 ## Where
 

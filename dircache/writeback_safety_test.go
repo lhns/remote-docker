@@ -139,7 +139,8 @@ func TestASkippedChangeIsNotReadAsADeletionNextRound(t *testing.T) {
 	}
 }
 
-// "Your file is kept" is said once per path, not every round.
+// "Your file is kept" is said once per path, not every round, and listed in
+// status for as long as it is kept.
 func TestAConflictIsSaidOncePerPath(t *testing.T) {
 	root := t.TempDir()
 	writeLocal(t, root, "f", "edited here")
@@ -151,8 +152,11 @@ func TestAConflictIsSaidOncePerPath(t *testing.T) {
 
 	rounds(t, c, clk, 4)
 
-	if n := strings.Count(logs.String(), "a file changed in both places"); n != 1 {
+	if n := strings.Count(logs.String(), "a container's change was not carried back"); n != 1 {
 		t.Errorf("the conflict was said %d times in 4 rounds, want once:\n%s", n, logs.String())
+	}
+	if sk := c.Reports()[0].WriteBack.Skipped; len(sk) != 1 || sk[0].Path != "/f" || sk[0].Kind != SkipKept {
+		t.Errorf("status lists %+v, want /f kept", sk)
 	}
 }
 
@@ -262,7 +266,10 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 		"/other.go": {Size: 3, ModTime: time.Unix(5, 0)},
 	}}}
 	store := &faultStore{}
-	store.changes = []Change{{Path: "/main.go", Size: 9, ModTime: time.Now().UnixNano()}}
+	store.changes = []Change{{Path: "/main.go", Size: 9, ModTime: time.Now().Add(-time.Hour).UnixNano()}}
+	// Changed an hour before the edit here, so this machine wrote last however
+	// coarse the clock: a time taken just after writing a file can read as no
+	// later than the file on Windows.
 	logs := &syncBuffer{}
 	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
 	c := &Cache{
@@ -299,7 +306,7 @@ func TestAResumedFillDoesNotSendAPathTheConsumerChanged(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(root, "main.go")); string(got) != "edited here since the restart" {
 		t.Errorf("main.go holds %q; the user's later edit should win a conflict", got)
 	}
-	if n := strings.Count(logs.String(), "a file changed in both places"); n != 1 {
+	if n := strings.Count(logs.String(), "a container's change was not carried back"); n != 1 {
 		t.Errorf("the conflict was said %d times, want once:\n%s", n, logs.String())
 	}
 }

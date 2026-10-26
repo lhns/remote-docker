@@ -28,6 +28,7 @@
 #   a daemon per account cannot be reached at all     10
 #   a dead union cannot be told from its leftover dir  12
 #   an agent restart cannot adopt a live mount         12
+#   write-back's times are not what parity rests on    14    recorded
 #
 # THE VERDICT (ADR 0044): the kernel union is out, because an overlay whose
 # lower is NFS is readable only from the mount namespace that created it;
@@ -692,6 +693,85 @@ if command -v fuse-overlayfs >/dev/null 2>&1; then
     sudo umount "$WH/merged" 2>/dev/null
 else
     info "fuse-overlayfs is not available; section 13 is unanswered"
+fi
+
+echo
+echo "== 14. what write-back reads when it behaves like a bind mount =="
+# Write-back decides a file the cache never held by its times (ADR 0044): a
+# copy is not a change when size and mtime match this machine's, and otherwise
+# the upper entry's ctime against this machine's says who wrote last. Each of
+# those rests on something fuse-overlayfs does over an NFS lower, RECORDED here
+# and not asserted: copy-up keeps the lower's mtime, a chown -R copies every
+# file up, and a whiteout and an opaque marker keep the ctime of the deletion
+# rather than of later writes beside them.
+if command -v fuse-overlayfs >/dev/null 2>&1; then
+    PB=$WORK/parity
+    mkdir -p "$EXPORT_DIR/parity/tree/sub" "$EXPORT_DIR/parity/repl" "$PB/upper" "$PB/work" "$PB/merged"
+    echo kept >"$EXPORT_DIR/parity/old.txt"
+    touch -d '2020-01-02 03:04:05.123456789' "$EXPORT_DIR/parity/old.txt"
+    echo victim >"$EXPORT_DIR/parity/victim.txt"
+    printf '#!/bin/sh\n' >"$EXPORT_DIR/parity/script.sh"
+    chmod 0644 "$EXPORT_DIR/parity/script.sh"
+    for f in a b c; do
+        echo "$f" >"$EXPORT_DIR/parity/tree/$f"
+        echo "$f" >"$EXPORT_DIR/parity/tree/sub/$f"
+    done
+    echo old >"$EXPORT_DIR/parity/repl/old"
+    # A lower of its own: section 9 unmounted the shared one. Mounted as
+    # section 1 mounts it, so copy-up reads through NFS as a share does.
+    PLOWER=$WORK/parity-lower
+    mkdir -p "$PLOWER"
+    if ! sudo mount -t nfs 127.0.0.1:"$EXPORT_DIR" "$PLOWER" \
+        -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2,actimeo=1,noatime 2>"$WORK/parity-nfs.err"; then
+        info "could not mount the export again for section 14: $(cat "$WORK/parity-nfs.err")"
+    fi
+    LOWER=$PLOWER
+    report "the lower as fuse-overlayfs will see it" ls -la "$LOWER/parity"
+    if sudo fuse-overlayfs -o "lowerdir=$LOWER/parity,upperdir=$PB/upper,workdir=$PB/work" \
+        "$PB/merged" 2>"$WORK/parity.err"; then
+        sudo chown 1000:1000 "$PB/merged/old.txt"
+        report "copy-up by chown: mtime, mode and ctime, lower then upper" \
+            sudo stat -c '%n mtime=%y mode=%a ctime=%z' "$LOWER/parity/old.txt" "$PB/upper/old.txt"
+        if [ "$(sudo stat -c %y "$LOWER/parity/old.txt")" = "$(sudo stat -c %y "$PB/upper/old.txt" 2>/dev/null)" ]; then
+            info "RECORDED: copy-up keeps the lower's mtime to the nanosecond"
+        else
+            info "RECORDED: copy-up does NOT keep the lower's mtime exactly"
+        fi
+
+        sudo chown -R 1000:1000 "$PB/merged/tree"
+        report "the upper after chown -R of tree" sudo find "$PB/upper/tree" -printf '%y %m %p\n'
+        info "RECORDED: chown -R copied up $(sudo find "$PB/upper/tree" -type f | wc -l) of $(find "$EXPORT_DIR/parity/tree" -type f | wc -l) files"
+
+        sudo chmod +x "$PB/merged/script.sh"
+        report "chmod +x copies up with the new mode, lower then upper" \
+            sudo stat -c '%n mode=%a mtime=%y' "$LOWER/parity/script.sh" "$PB/upper/script.sh"
+
+        sudo mkdir "$PB/merged/emptydir"
+        report "a directory made through the union" sudo find "$PB/upper/emptydir" -printf '%y %m %p\n'
+        report "its extended attributes (opaque or not)" \
+            sudo sh -c "command -v getfattr >/dev/null || apt-get install -y -qq attr >/dev/null 2>&1; getfattr -d -m - $PB/upper/emptydir 2>&1"
+
+        # The deletion and the replace first, then writes beside them later:
+        # the times write-back reads must be the first ones.
+        sudo rm "$PB/merged/victim.txt"
+        sudo sh -c "rm -rf $PB/merged/repl && mkdir $PB/merged/repl"
+        sleep 2
+        sudo sh -c "echo later >$PB/merged/repl/new && echo later >$PB/merged/written-later.txt"
+        report "the whiteout, the opaque directory and its markers, and a later write" \
+            sudo sh -c "cd $PB/upper && stat -c '%n %F ctime=%z' .wh.victim.txt victim.txt repl repl/.wh..wh..opq repl/.wh..opq repl/new written-later.txt 2>&1"
+        marker=$(sudo sh -c "stat -c %Z $PB/upper/repl/.wh..wh..opq $PB/upper/repl/.wh..opq 2>/dev/null | sort -n | head -1")
+        later=$(sudo stat -c %Z "$PB/upper/repl/new" 2>/dev/null)
+        if [ -n "$marker" ] && [ -n "$later" ] && [ "$marker" -lt "$later" ]; then
+            info "RECORDED: an opaque marker keeps the ctime of the replace ($marker), before a later write in it ($later)"
+        else
+            info "RECORDED: no opaque marker ctime earlier than a later write (marker [$marker], later [$later])"
+        fi
+        sudo umount "$PB/merged" 2>/dev/null
+    else
+        info "fuse-overlayfs would not mount for section 14: $(cat "$WORK/parity.err")"
+    fi
+else
+    info "fuse-overlayfs is not available; section 14 is unanswered"
 fi
 
 echo "The answers above decide the design, not the pass count: section 4 says"

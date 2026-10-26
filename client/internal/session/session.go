@@ -153,6 +153,10 @@ type Session struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
+
+	// closing stops serving the endpoint and runs write-back's last round,
+	// once, at the start of Close.
+	closing sync.Once
 }
 
 // liveConn is everything that exists only while connected.
@@ -251,6 +255,8 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			Log:     opts.Log,
 			Ctx:     runCtx,
 			Link:    s.link,
+
+			ChangeTime: changeTime,
 		}
 		s.registry.OnRead = s.cache.Touch
 		s.nfs = nfsserve.New(s.registry, opts.Log)

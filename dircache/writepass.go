@@ -5,8 +5,10 @@ package dircache
 // between them, are in writeback.go.
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,16 +49,25 @@ type writePass struct {
 	wrote map[string]bool
 }
 
-// run carries one pass out and reports whether another should follow at once.
-func (p *writePass) run(store Store, actions []action) bool {
-	// Deletions and links first: they cost no round trip, and a deletion that
-	// waits behind a slow fetch is a file the person sees twice.
+// run carries one pass out and says what it did.
+func (p *writePass) run(store Store, actions []action) passResult {
+	// Deletions, links, directories and modes first: they cost no round trip,
+	// and a deletion that waits behind a slow fetch is a file the person sees
+	// twice.
 	for _, path := range deletes(actions) {
 		p.remove(path)
 	}
-	for _, a := range ofKind(actions, kindLink) {
-		p.link(a)
+	for _, a := range actions {
+		switch a.kind {
+		case kindLink:
+			p.link(a)
+		case kindMkdir:
+			p.mkdir(a)
+		case kindChmod:
+			p.chmod(a)
+		}
 	}
+	p.adopt(ofKind(actions, kindAdopt))
 
 	// Those that have failed least go first, so files that never land cannot
 	// take every slot of the pass and starve the ones behind them.
@@ -77,27 +88,46 @@ func (p *writePass) run(store Store, actions []action) bool {
 		}
 	}
 
+	res := passResult{landed: p.landed, pending: max(moving(actions)-p.landed, 0), first: cmp.Or(p.softFirst, p.fetchFirst)}
 	// A pass that landed something backs off only the shortest wait whatever
 	// else failed: one file that never lands must not slow every other to once
 	// a minute.
 	switch {
 	case p.aborted:
-		return false
+		return res
 	case p.fetchErr != nil:
 		p.c.stall(p.ctx, p.share, p.root, "fetching what a container wrote", p.fetchErr, p.fetchFirst, p.soft, p.landed > 0)
-		return false
+		return res
 	case p.soft > 0:
 		p.c.stall(p.ctx, p.share, p.root, "writing back "+strconv.Itoa(p.soft)+" file(s) that could not be written yet",
 			p.softErr, p.softFirst, p.soft, p.landed > 0)
-		return false
+		return res
 	}
 	p.c.recovered(p.ctx, p.share, p.root)
-	return more && p.landed > 0
+	res.more = more && p.landed > 0
+	return res
 }
 
-// remove deletes a file the consumer deleted.
+// moving counts the actions that change something here, which is what a pass
+// is to land: not a version kept here, and not a baseline adopted.
+func moving(actions []action) int {
+	n := 0
+	for _, a := range actions {
+		if a.kind != kindAdopt && (a.kind != kindConflict || a.Wins) {
+			n++
+		}
+	}
+	return n
+}
+
+// remove deletes a file the consumer deleted, or a directory it removed.
 func (p *writePass) remove(path string) {
-	if !p.stillAsSeen(p.action[path]) {
+	a := p.action[path]
+	if a.Dir {
+		p.removeDir(a)
+		return
+	}
+	if !p.stillAsSeen(a) {
 		p.changedHere(path)
 		return
 	}
@@ -107,11 +137,117 @@ func (p *writePass) remove(path string) {
 		p.names.removed(rel)
 	}
 	if err == nil || errors.Is(err, os.ErrNotExist) {
-		p.commit([]action{p.action[path]}, nil, []string{path})
+		p.commit([]action{a}, nil, []string{path})
 		p.landed++
 		return
 	}
 	p.failed(path, err)
+}
+
+// removeDir removes a directory the consumer removed, and only while it is
+// empty: the deletions under it run first, deepest first, and anything still in
+// it is this machine's and stays, with the directory.
+func (p *writePass) removeDir(a action) {
+	rel := relPath(a.Path)
+	info, err := p.r.Lstat(rel)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		p.settled(a.Path)
+		return
+	case err != nil:
+		p.failed(a.Path, err)
+		return
+	case !info.IsDir():
+		p.changedHere(a.Path)
+		return
+	}
+	if err := p.r.Remove(rel); err != nil {
+		if !emptyDir(p.r, rel) {
+			if p.c.shares.wb.conflictNew(p.share, a.Path, "a directory the container removed still holds files here") {
+				p.c.log().Warn("the container removed a directory that still holds files here; they and the directory are kept",
+					"path", strings.TrimPrefix(a.Path, "/"))
+			}
+			return
+		}
+		p.failed(a.Path, err)
+		return
+	}
+	p.names.removed(rel)
+	p.settled(a.Path)
+}
+
+// mkdir makes a directory the consumer made.
+func (p *writePass) mkdir(a action) {
+	if !p.stillAsSeen(a) {
+		p.changedHere(a.Path)
+		return
+	}
+	rel := relPath(a.Path)
+	err := p.r.MkdirAll(rel, 0o755)
+	p.names.wrote(rel, err == nil)
+	if err != nil {
+		p.failed(a.Path, err)
+		return
+	}
+	p.settled(a.Path)
+}
+
+// chmod gives a file here the execute bit the consumer gave it. A filesystem
+// that does not keep the bit (a FAT volume) is said once and left, or every
+// round would set it again.
+func (p *writePass) chmod(a action) {
+	if !p.stillAsSeen(a) {
+		p.changedHere(a.Path)
+		return
+	}
+	rel := relPath(a.Path)
+	info, err := p.r.Stat(rel)
+	if err == nil {
+		err = p.r.Chmod(rel, withExec(info.Mode().Perm(), a.Exec))
+	}
+	if err != nil {
+		p.failed(a.Path, err)
+		return
+	}
+	if now, err := p.r.Stat(rel); err == nil && (now.Mode()&0o111 != 0) != (a.Exec > 0) {
+		p.c.skipped(p.ctx, p.share, p.change[a.Path], Skipped{Why: "this filesystem does not keep an execute bit"})
+		return
+	}
+	p.settled(a.Path)
+}
+
+// adopt records the consumer's copies of files this machine has as baselines,
+// in one save of the record: a chown -R makes one of every file.
+func (p *writePass) adopt(acts []action) {
+	var still []action
+	var paths []string
+	for _, a := range acts {
+		if p.stillAsSeen(a) {
+			still = append(still, a)
+			paths = append(paths, a.Path)
+		}
+	}
+	if len(still) > 0 {
+		p.commit(still, paths, nil)
+	}
+}
+
+// settled records a change that landed and needs no baseline: a directory, or
+// a mode.
+func (p *writePass) settled(path string) {
+	p.c.shares.wb.landed(p.share, []string{path})
+	p.landed++
+}
+
+// emptyDir reports whether a directory under r has no entries.
+func emptyDir(r *os.Root, rel string) bool {
+	d, err := r.Open(rel)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(1)
+	return len(names) == 0 && errors.Is(err, io.EOF)
 }
 
 // link makes a link the consumer made.
@@ -217,7 +353,7 @@ func (p *writePass) land(f File, guard func() bool) error {
 	if err := p.names.clash(rel); err != nil {
 		return err
 	}
-	err := writeUnder(p.r, f, guard)
+	err := writeUnderExec(p.r, f, guard, p.action[f.Path].Exec)
 	p.names.wrote(rel, err == nil)
 	return err
 }
@@ -239,7 +375,13 @@ func (p *writePass) stillAsSeen(a action) bool {
 		return err != nil
 	}
 	info, err := p.r.Stat(rel)
-	return a.Seen.same(seenOf(info, err == nil))
+	now := seenOf(info, err == nil)
+	// A decision that read the change time is checked against it too, so a
+	// chmod or a rewrite here keeping size and time is still seen.
+	if !a.Seen.Ctime.IsZero() && now.Here && p.c.ChangeTime != nil {
+		now.Ctime, _ = p.c.ChangeTime(p.r, rel)
+	}
+	return a.Seen.same(now)
 }
 
 // changedHere leaves a path alone because it changed on this machine since write-back

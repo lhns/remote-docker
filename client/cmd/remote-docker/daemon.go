@@ -21,10 +21,13 @@ import (
 // A background session is `remote start --foreground`, spawned detached with
 // its output in a log.
 
-// How long to wait for an endpoint to start or stop answering.
+// How long to wait for an endpoint to start or stop answering, and for a
+// stopped session's process to exit. The exit takes longer: a closing session
+// first carries back what its containers wrote, for up to a minute (ADR 0044).
 const (
 	startTimeout = 20 * time.Second
 	stopTimeout  = 15 * time.Second
+	exitTimeout  = 90 * time.Second
 )
 
 // waitForEndpoint blocks until the endpoint is reachable, or stops being, and
@@ -204,7 +207,7 @@ func stopSession(endpoint string) error {
 		return fmt.Errorf("the session acknowledged the stop but is still serving %s",
 			proxy.DockerHost(endpoint))
 	}
-	if !waitForExit(st.PID, stopTimeout) {
+	if !waitForExit(st.PID, exitTimeout) {
 		return &lingeringError{endpoint: endpoint, pid: st.PID}
 	}
 	return nil

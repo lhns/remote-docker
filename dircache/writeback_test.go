@@ -13,11 +13,22 @@ import (
 func cacheWith(t *testing.T, store *fakeStore) *Cache {
 	t.Helper()
 	c := &Cache{
-		Store: func() (Store, bool) { return store, true },
-		Ctx:   t.Context(),
+		Store:      func() (Store, bool) { return store, true },
+		Ctx:        t.Context(),
+		ChangeTime: modTimeAsChangeTime,
 	}
 	t.Cleanup(c.Stop)
 	return c
+}
+
+// modTimeAsChangeTime stands in for this machine's ctime in a test, which sets
+// a file's time where it needs one and cannot set a ctime at all.
+func modTimeAsChangeTime(r *os.Root, rel string) (time.Time, bool) {
+	info, err := r.Stat(rel)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
 }
 
 // The store names the paths that come back, and a store is not this machine's
@@ -156,7 +167,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
 	c.shares.noteSent("/m/1111111111111111", root, []Entry{{Path: "main.go", Size: 7}})
 
-	c.writeBackShare(t.Context(), "/m/1111111111111111")
+	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 
 	got, err := os.ReadFile(local)
 	if err != nil {
@@ -185,29 +196,30 @@ func TestWriteBackShareStopsWhenTheShareIsGone(t *testing.T) {
 	c := cacheWith(t, store)
 	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{Report: Report{Done: true}, Cached: true}, nil)
 
-	c.writeBackShare(t.Context(), "/m/1111111111111111")
+	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 
 	if _, ok := c.shares.get("/m/1111111111111111"); ok {
 		t.Error("a released share is still polled")
 	}
 }
 
-// Nothing is asked for while the fill is still running: there is no settled
-// baseline to compare against, and a half-filled cache cannot say whether a
-// missing file was never sent or was deleted.
-func TestWriteBackShareWaitsForTheFill(t *testing.T) {
+// Write-back does not wait for the fill. A file the cache holds is decided by
+// its baseline and one it never held by who wrote last, so a fill still running
+// says nothing about the consumer's changes, and a session closing mid-fill
+// must still carry them back (ADR 0044).
+func TestWriteBackShareDoesNotWaitForTheFill(t *testing.T) {
 	store := &fakeStore{
 		changes: []Change{{Path: "/main.go", Size: 1, ModTime: 1}},
 	}
 	c := cacheWith(t, store)
 	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{}, nil)
 
-	c.writeBackShare(t.Context(), "/m/1111111111111111")
+	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if len(store.pulled) != 0 {
-		t.Errorf("pulled %v while the fill was still running", store.pulled)
+	if len(store.pulled) != 1 {
+		t.Errorf("pulled %v while the fill was running, want the container's new file", store.pulled)
 	}
 }
 

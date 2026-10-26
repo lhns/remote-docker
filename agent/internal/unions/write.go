@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -38,26 +39,64 @@ import (
 // With carry, an entry that cannot be written is left out and named in the
 // answer, and the rest of the batch lands (cache.Request.Carry); without it the
 // first such entry fails the batch, as it always did.
-func (m *Manager) Apply(ctx context.Context, account, client, export, codec string, carry bool, body io.Reader) ([]string, error) {
+//
+// With fill, a file the container has its own version of in the cache layer is
+// left as it is and named in kept (cache.Request.Fill). A prefetch batch is
+// often set off by the container's own copy-up of the file it is writing, and
+// landing it would overwrite that write with the older version from the client.
+func (m *Manager) Apply(ctx context.Context, account, client, export, codec string, carry, fill bool, body io.Reader) (skipped, kept []string, err error) {
 	l, root, err := m.mergedRoot(ctx, account, client, export)
 	if err != nil {
 		// The payload still has to be drained, or the next frame is read out
 		// of the middle of a tar. The caller cannot do it: only here is it
 		// known that nothing consumed the body.
 		_, _ = io.Copy(io.Discard, body)
-		return nil, err
+		return nil, nil, err
 	}
 
 	decoded, done, err := decoded(codec, body)
 	if err != nil {
 		_, _ = io.Copy(io.Discard, body)
-		return nil, err
+		return nil, nil, err
 	}
 	defer done()
 
-	return extract(root, decoded, carry, func(name string, info os.FileInfo) {
-		l.noteApplied(name, info.Size(), info.ModTime())
+	var theirs func(string) bool
+	if fill {
+		upper, err := l.relocate(l.spec.Upper())
+		if err != nil {
+			_, _ = io.Copy(io.Discard, decoded)
+			return nil, nil, fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
+		}
+		up, err := os.OpenRoot(upper)
+		if err != nil {
+			_, _ = io.Copy(io.Discard, decoded)
+			return nil, nil, fmt.Errorf("unions: opening the cache layer of %s: %w", export, err)
+		}
+		defer func() { _ = up.Close() }()
+		theirs = containersOwn(up, l)
+	}
+	return extractWith(root, decoded, carry, theirs, func(name string, info os.FileInfo) {
+		l.noteApplied(name, info.Size(), info.ModTime(), ctimeOf(info))
 	})
+}
+
+// containersOwn reports whether the cache layer holds a file or link at a share
+// path that the client did not put there: the container's write, or its copy.
+// A whiteout is not one; whether a deletion is older than the client's file is
+// the client's to decide, by the change times.
+func containersOwn(up *os.Root, l *live) func(string) bool {
+	return func(name string) bool {
+		target, err := within(name)
+		if err != nil {
+			return false
+		}
+		info, err := up.Lstat(target)
+		if err != nil || (!info.Mode().IsRegular() && info.Mode()&fs.ModeSymlink == 0) {
+			return false
+		}
+		return !l.isApplied(name, info.Size(), info.ModTime(), ctimeOf(info))
+	}
 }
 
 // extract writes a tar into the share rooted at root, telling landed about
@@ -73,36 +112,47 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 // hides the live file instead of falling through to it. The tar reader steps
 // past what is unread of the entry, so the batch stays in frame.
 func extract(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
+	skipped, _, err := extractWith(root, body, skip, nil, landed)
+	return skipped, err
+}
+
+// extractWith is extract leaving out, and naming in kept, every regular file
+// theirs claims (nil claims none).
+func extractWith(root string, body io.Reader, skip bool, theirs func(string) bool, landed func(name string, info os.FileInfo)) (skipped, kept []string, err error) {
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		return nil, fmt.Errorf("unions: opening the share: %w", err)
+		return nil, nil, fmt.Errorf("unions: opening the share: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
-	var skipped []string
 	tr := tar.NewReader(body)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return skipped, nil
+			return skipped, kept, nil
 		}
 		if err != nil {
-			return skipped, fmt.Errorf("unions: reading a batch: %w", err)
+			return skipped, kept, fmt.Errorf("unions: reading a batch: %w", err)
+		}
+		name := "/" + strings.TrimPrefix(header.Name, "/")
+		if theirs != nil && header.Typeflag == tar.TypeReg && theirs(name) {
+			kept = append(kept, name)
+			continue
 		}
 		created := false
 		info, err := writeEntry(r, header, tr, &created)
 		if err != nil {
 			if !skip {
-				return nil, err
+				return nil, nil, err
 			}
 			if target, werr := within(header.Name); werr == nil && created {
 				_ = r.Remove(target)
 			}
-			skipped = append(skipped, "/"+strings.TrimPrefix(header.Name, "/"))
+			skipped = append(skipped, name)
 			continue
 		}
 		if info != nil {
-			landed("/"+strings.TrimPrefix(header.Name, "/"), info)
+			landed(name, info)
 		}
 	}
 }

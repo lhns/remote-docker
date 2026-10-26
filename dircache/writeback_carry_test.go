@@ -40,7 +40,7 @@ func TestAReplacedDirectoryDeletesWhatTheFillSentUnderIt(t *testing.T) {
 		{Path: "/tools/new", Size: 3, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := decide(manifest, nil, expandReplaced(manifest, changes), local, 0, true)
+	actions := decide(manifest, nil, expandReplaced(manifest, changes), local, nil, 0, 0, 0)
 
 	want := map[string]kind{
 		"/tools/old":      kindDelete,
@@ -80,7 +80,7 @@ func TestARemovedDirectoryDeletesWhatTheFillSentUnderIt(t *testing.T) {
 	})
 	changes := []Change{{Path: "/gone", Deleted: true}}
 
-	actions := decide(manifest, nil, expandReplaced(manifest, changes), local, 0, true)
+	actions := decide(manifest, nil, expandReplaced(manifest, changes), local, nil, 0, 0, 0)
 
 	var got []string
 	for _, a := range actions {

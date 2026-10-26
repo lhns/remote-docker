@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -40,18 +41,19 @@ const (
 
 // Changes lists what the container did to a share. With carry it also reports
 // replaced directories and links, which a client that did not ask would read as
-// an ordinary change.
-func (m *Manager) Changes(account, client, export string, carry bool) ([]cache.Change, error) {
+// an ordinary change; with times, each entry's ctime and mode and the empty
+// directories (cache.Request.Times).
+func (m *Manager) Changes(account, client, export string, carry, times bool) ([]cache.Change, error) {
 	l, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err
 	}
 
-	return changesIn(l, upper, export, carry)
+	return changesIn(l, upper, export, carry, times)
 }
 
 // changesIn walks one share's cache layer.
-func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error) {
+func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change, error) {
 	// Asked before the walk, because WalkDir reports a root it cannot read
 	// through the same callback as any other entry -- so an upper that is not
 	// there at all comes back as no changes and no error, which is
@@ -59,6 +61,15 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 	// hides is a share whose write-back silently never happens.
 	if _, err := os.Stat(upper); err != nil {
 		return nil, fmt.Errorf("unions: the cache layer of %s cannot be read: %w", export, err)
+	}
+
+	// stamped adds what a client that asked for times is told.
+	stamped := func(ch cache.Change, info fs.FileInfo) cache.Change {
+		if times {
+			ch.Changed = ctimeOf(info)
+			ch.Mode = uint32(info.Mode().Perm())
+		}
+		return ch
 	}
 
 	var out []cache.Change
@@ -82,7 +93,8 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 
 		// An overlay's own marks are never the container's files. Written into
 		// the user's tree they are names the union cannot hold, and the
-		// deletions they stand for would never arrive.
+		// deletions they stand for would never arrive. A mark's ctime is when
+		// the deletion or the replace happened.
 		if strings.HasPrefix(d.Name(), whiteoutPrefix) {
 			if d.IsDir() {
 				return fs.SkipDir
@@ -94,6 +106,9 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 					}
 					opaque[change.Path] = true
 				}
+				if times {
+					change.Changed = ctimeOf(info)
+				}
 				out = append(out, change)
 			}
 			return nil
@@ -104,7 +119,11 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 			// A character device 0:0 is how an overlay records a deletion, and
 			// it is the only way to tell a file the container removed from one
 			// that was never cached.
-			out = append(out, cache.Change{Path: name, Deleted: true})
+			change := cache.Change{Path: name, Deleted: true}
+			if times {
+				change.Changed = ctimeOf(info)
+			}
+			out = append(out, change)
 			return nil
 		case info.IsDir():
 			// A directory in the upper is where a copy-up happened, not a
@@ -112,7 +131,19 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 			// The files inside it are reported on their own.
 			if carry && !opaque[name] && opaqueDir(p) {
 				opaque[name] = true
-				out = append(out, cache.Change{Path: name, Opaque: true})
+				change := cache.Change{Path: name, Opaque: true}
+				if times {
+					change.Changed = markerCtime(p)
+				}
+				out = append(out, change)
+				return nil
+			}
+			// An empty one may be a directory the container made, which
+			// nothing else would ever report. Whether this machine has it is
+			// the client's to say from its own disk: asking the lower here
+			// would be an NFS round trip per directory a chown -R copied up.
+			if times && emptyDir(p) {
+				out = append(out, stamped(cache.Change{Path: name, Dir: true}, info))
 			}
 			return nil
 		case info.Mode()&fs.ModeSymlink != 0:
@@ -125,7 +156,7 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 			if err != nil {
 				return nil
 			}
-			out = append(out, cache.Change{Path: name, Link: target, ModTime: info.ModTime().UnixNano()})
+			out = append(out, stamped(cache.Change{Path: name, Link: target, ModTime: info.ModTime().UnixNano()}, info))
 			return nil
 		case !info.Mode().IsRegular():
 			// A socket or device the container made is not something to carry
@@ -137,21 +168,53 @@ func changesIn(l *live, upper, export string, carry bool) ([]cache.Change, error
 		// Exactly what the client's own stream wrote through this union, so
 		// not a container change at all. Left in, an idle session is told
 		// about the whole cached tree every few seconds forever.
-		if l.isApplied(name, info.Size(), info.ModTime()) {
+		if l.isApplied(name, info.Size(), info.ModTime(), ctimeOf(info)) {
 			return nil
 		}
 
-		out = append(out, cache.Change{
+		out = append(out, stamped(cache.Change{
 			Path:    name,
 			Size:    info.Size(),
 			ModTime: info.ModTime().UnixNano(),
-		})
+		}, info))
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unions: reading what changed in %s: %w", export, err)
 	}
 	return out, nil
+}
+
+// markerCtime is when a directory was replaced: the earliest ctime of the
+// marker files fuse-overlayfs writes into it (test/union-probe.sh section 13).
+// Never the directory's own, which moves with every file the container makes
+// in it afterwards and would make an edit here look older than the replace.
+// 0, not known, when there is no marker to read.
+func markerCtime(dir string) int64 {
+	var earliest int64
+	for _, name := range []string{opaqueMarker, opaqueMarkerDev} {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if c := ctimeOf(info); c != 0 && (earliest == 0 || c < earliest) {
+			earliest = c
+		}
+	}
+	return earliest
+}
+
+// emptyDir reports whether a directory has no entries at all, overlay marks
+// included: one holding only a whiteout is a copy-up, not a directory the
+// container made empty.
+func emptyDir(p string) bool {
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	names, err := f.Readdirnames(1)
+	return len(names) == 0 && errors.Is(err, io.EOF)
 }
 
 // markerChange reads a file named like an overlay mark: .wh.<name> is the

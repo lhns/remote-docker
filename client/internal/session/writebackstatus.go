@@ -19,31 +19,37 @@ func (s *Session) writeBackStatus() []string {
 	if s.cache == nil {
 		return nil
 	}
-	known, carries := s.cacheCarries()
-	return writeBackLines(s.cache.Reports(), known, carries)
+	return writeBackLines(s.cache.Reports(), s.cacheSays())
 }
 
-// cacheCarries says whether the connection's cache channel is open and whether
-// its workspace carries links and replaced directories back.
-func (s *Session) cacheCarries() (known, carries bool) {
+// workspaceSays is what the open cache channel's workspace announced, and
+// whether one is open at all.
+type workspaceSays struct {
+	known   bool
+	carries bool // links and replaced directories (cache.Hello.Carry)
+	times   bool // change times, modes and empty directories (cache.Hello.Times)
+}
+
+// cacheSays says what the connection's cache channel announced.
+func (s *Session) cacheSays() workspaceSays {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil {
-		return false, false
+		return workspaceSays{}
 	}
 	// Status never waits on a channel being opened: that can take the whole
 	// handshake timeout, and an open channel is what it asks about.
 	if !live.cacheMu.TryLock() {
-		return false, false
+		return workspaceSays{}
 	}
 	defer live.cacheMu.Unlock()
 	if live.cacheChan == nil {
-		return false, false
+		return workspaceSays{}
 	}
-	return true, live.cacheChan.carry
+	return workspaceSays{known: true, carries: live.cacheChan.carry, times: live.cacheChan.times}
 }
 
 // writeBackLines is writeBackStatus for a set of reports.
-func writeBackLines(reports []dircache.Report, carryKnown, carries bool) []string {
+func writeBackLines(reports []dircache.Report, says workspaceSays) []string {
 	sort.Slice(reports, func(i, j int) bool { return reports[i].Local < reports[j].Local })
 
 	var out []string
@@ -66,8 +72,12 @@ func writeBackLines(reports []dircache.Report, carryKnown, carries bool) []strin
 		}
 		out = append(out, skippedLines(r.Local, wb.Skipped)...)
 	}
-	if len(out) > 0 && carryKnown && !carries {
+	if len(out) > 0 && says.known && !says.carries {
 		out = append(out, "this workspace is too old to carry links and replaced directories back; "+
+			"fix: update the workspace")
+	}
+	if len(out) > 0 && says.known && !says.times {
+		out = append(out, "this workspace is too old to say when a container deleted a file, so those deletions are kept; "+
 			"fix: update the workspace")
 	}
 	return out
@@ -77,8 +87,11 @@ func writeBackLines(reports []dircache.Report, carryKnown, carries bool) []strin
 // since a person needs to know what to do about each kind.
 func skippedLines(local string, skipped []dircache.Skipped) []string {
 	var names, links, clashes, markers []dircache.Skipped
+	kept := map[string][]dircache.Skipped{}
 	for _, sk := range skipped {
 		switch sk.Kind {
+		case dircache.SkipKept:
+			kept[sk.Why] = append(kept[sk.Why], sk)
 		case dircache.SkipLink:
 			links = append(links, sk)
 		case dircache.SkipClash:
@@ -106,6 +119,17 @@ func skippedLines(local string, skipped []dircache.Skipped) []string {
 	if len(markers) > 0 {
 		out = append(out, fmt.Sprintf("  %s: %d overlay marker(s) in the tree, safe to delete: %s",
 			local, len(markers), listed(markers)))
+	}
+	// One line per reason: a version kept because you wrote later asks nothing
+	// of you, one kept because the workspace is too old asks for an update.
+	whys := make([]string, 0, len(kept))
+	for why := range kept {
+		whys = append(whys, why)
+	}
+	sort.Strings(whys)
+	for _, why := range whys {
+		out = append(out, fmt.Sprintf("  %s: %d container change(s) not carried back, as %s: %s",
+			local, len(kept[why]), why, listed(kept[why])))
 	}
 	return out
 }

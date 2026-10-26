@@ -476,15 +476,36 @@ premise of the project, and it applies to building it too. So:
   anything: a deletion cannot be replayed faithfully over NFS, which is what
   `partial` is about, but it can be applied to a cache exactly, and it is the one
   event the cache must not miss.
-- **Nothing is written back from a cache that is incomplete** (ADR 0044). A file
-  the fill never sent looks exactly like one the container created, and the cost
-  of that confusion is content appearing in somebody's source tree that they
-  never wrote. Every other write-back case is decided by comparing each side
-  against what the fill SENT, so only a file both sides changed needs a clock --
-  and that offset is measured through workspace-info rather than assumed.
-  Every write and delete it makes here goes through one `os.Root` for the
-  share: the workspace names the path, and a link in the share must not lead
-  it out (`writeback_link_test.go`).
+- **Write-back is a bind mount's last writer wins, decided by times no tool
+  can set** (ADR 0044, amended 2026-10-26). A file the cache holds is decided
+  against what the fill SENT, each side against its own baseline. A file it
+  never held (every existing file while prefetch is off) is decided by the
+  cache layer entry's ctime (`Change.Changed`, of the file, of a whiteout, of
+  the earliest opaque MARKER and never the directory's own) less the measured
+  skew, against this machine's ctime (`dircache.Cache.ChangeTime`: `Stat_t` on
+  Linux and macOS, `GetFileInformationByHandleEx` `ChangeTime` on Windows).
+  Never mtimes where a ctime is to be had: `tar`, `cp -p`, rsync and npm set
+  them, and a wrong guess there overwrites somebody's later edit. A copy (same
+  size and mtime as the file here, either side rounded to the second) is not a
+  change, or a `chown -R` entrypoint rewrites the tree. A time that is not known
+  NEVER writes or deletes: an older workspace's deletions are kept, a ctime here
+  that cannot be read keeps the file, and the container must be later by more
+  than half the round trip (the skew, taken at the round trip's midpoint, is
+  known no better): in doubt this machine wins. The side that lost is listed in
+  `remote status` (`SkipKept`), decided again every round. There is no
+  completeness gate and no fill gate any more; do not bring either back to
+  "be safe", since a session closing mid-fill then loses the container's work.
+  Only the execute bit is compared or carried: the share reports every other
+  bit wide (ADR 0046), so comparing the whole mode reads every copy-up as a
+  chmod. Every write and delete it makes here goes through one `os.Root` for
+  the share: the workspace names the path, and a link in the share must not
+  lead it out (`writeback_link_test.go`).
+- **A closing session runs write-back to quiescence first** (ADR 0027, ADR
+  0044, 2026-10-26). `Session.Close` stops serving, then `settleWriteBack`
+  sends the invalidation queue and runs `Cache.Settle` within 60s, reopening a
+  connection the idle sweep released, under a lease and the session's own
+  context. Rounds are serialised (`Cache.rounds`): the per-connection loop can
+  still be ticking. `remote stop` waits 90s for the process for that reason.
 - **Write-back never stops for good, and a failure is classified, never
   final** (ADR 0044, 2026-10-21). The deadline is per store call and a pass
   lands at most 2,000 files in chunks of 200, moving the manifest and the record
@@ -514,9 +535,12 @@ premise of the project, and it applies to building it too. So:
   change reported, including those set aside. Each path's state from decide is
   compared with a fresh stat right before its remove, link or rename
   (`stillAsSeen`, the guard `writeUnder` takes), because a pass runs for
-  minutes. A resumed FILL never sends a path it sent before that the consumer
-  lists as changed; an invalidation still does, since it is the user writing now
-  and leaving it out strands the container on its version. No file starves the
+  minutes. The FILL never sends a path the consumer lists as changed, held or
+  not, unless that change is a copy of what this machine has. An invalidation
+  leaves out only a path the consumer changed AFTER this machine did, by the
+  same change times write-back uses, asked fresh per flush; without a time on
+  either side it sends as it always did, since leaving it out strands the
+  container on its version. No file starves the
   rest (a failed chunk ends only itself, paths that keep failing rank last with
   `wbRanked`), and the agent removes after a failed write only a file the entry
   created (`O_EXCL`), never via a temporary renamed in.
@@ -528,12 +552,19 @@ premise of the project, and it applies to building it too. So:
   it and says once that it is a leftover safe to delete. The agent reports
   `.wh.<name>` as `<name>` deleted and a replaced directory as one
   `Change.Opaque`; the CLIENT expands a whiteout or an opaque directory into
-  deletions of what the fill sent under it and the merged view no longer has
-  (`replacedDeletions` plus `OpPresent`), through `decide`, never of anything
-  the fill did not send. `Hello.Carry` and `Request.Carry` negotiate all of
-  this: the client asks only if the agent announced, so an old agent is never
-  sent the field and never sends a link an old client would read as an empty
-  file. Links keep their target verbatim and are made under the share's
+  deletions of what the fill sent under it and, when the removal has a time,
+  of what this machine has under it (walked once per removal), each only if the
+  merged view no longer has it (`impliedDeletions`, `OpPresent`) and through
+  `decide`, so a path changed here since is kept. A directory goes only while
+  empty, deepest first. A directory removed HERE is dropped from the cache as
+  one, or the empty skeleton a `chown -R` copied up is reported as a directory
+  the container made and comes back here every round; an empty directory the
+  record has paths under is never made here for the same reason.
+  `Hello.Carry` and `Request.Carry` negotiate all of
+  this, and `Hello.Times` and `Request.Times` the times, modes and empty
+  directories: the client asks only if the agent announced, so an old agent is
+  never sent the field and never sends a link or a directory an old client
+  would read as an empty file. Links keep their target verbatim and are made under the share's
   `os.Root` through a temporary and a rename; Windows without privilege (1314)
   skips the link by path, never a copy or a junction.
 - **Never rewrite a named volume**, and never delete a volume without both the
@@ -1709,7 +1740,9 @@ its pure planning function was.
 - **A workspace between versions of the cache channel.** A client that sees no
   `Hello.Carry` carries back no link or replaced directory and says so in
   `remote status`; that is unit tested (`writebackstatus_test.go`,
-  `cache_carry_test.go`) and no suite runs a workspace that old.
+  `cache_carry_test.go`) and no suite runs a workspace that old. The same holds
+  for one without `Hello.Times`: it keeps deletions of files the cache never
+  held and status says so, unit tested only.
   `old-workspace.sh` runs 0.5.1, which refuses write=back outright.
 - **Case collisions and Windows names beyond one runner.** `machine.yml`
   creates `bad?name` from a container and checks `good` and a later file arrive
@@ -1720,7 +1753,26 @@ its pure planning function was.
 - **Write-back's conflict resolution, and the measured clock offset.** All six
   rows of the baseline table are unit tested and the skew correction has its own
   test; no integration suite has ever made a file change in both places at once.
-  Say "unit tested", never "tested".
+  Say "unit tested", never "tested". Since 2026-10-26 the same goes for last
+  writer wins on a file the cache never held, beyond `integration.sh` 15h's one
+  case (a container write, the client killed, an edit here, a restart): the
+  property test in `dircache/writeback_parity_test.go` and the decide table
+  are what cover it. An edit here racing a container write inside the 150ms
+  invalidation window (ADR 0016, 2026-10-26) is unit tested only: no suite can
+  time a host edit into that window.
+- **The premises of bind-mount parity, until CI has printed them.** That
+  copy-up through fuse-overlayfs keeps an NFS lower's mtime to the nanosecond,
+  that `chown -R` copies files up, and that a whiteout and an opaque marker keep
+  the ctime of the deletion are RECORDED by `test/union-probe.sh` section 14,
+  not asserted; the decision rests on them. Read that section's output before
+  claiming any of them. The agent's `Change.Changed` is unit tested on Linux
+  only (`changes_times_linux_test.go`), and a whiteout device there only where
+  the test may `mknod`.
+- **The ctime seam beyond Windows and Linux.** `ctime_test.go` reads a change
+  time and checks it moves on a write on whatever runs the tests: Windows here,
+  Linux in CI. The macOS file (`Stat_t.Ctimespec`) is vetted and never
+  executed, like the rest of macOS, and any other platform keeps every file the
+  cache never held.
 - **A union child that fails after the capability check said ready.** With
   stock dind `unions.Capability` says `no-fuse-overlayfs` and the client refuses
   before `Prepare`, so no suite reaches the path where the child exits (a

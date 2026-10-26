@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-22
+- Date: 2026-09-01, last amended 2026-10-26
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -29,6 +29,16 @@
   A share the workspace calls unknown while its filesystem still has the union
   mounted (an agent restarted under a running container) is prepared again,
   which adopts it, before it is given up.
+  Amended 2026-10-26: write-back carries back every change the container makes,
+  as a bind mount would. A copy (same size and mtime as the file here) is not
+  a change; otherwise the side that changed a file last wins, by the cache
+  layer entry's ctime (`Change.Changed`) against this machine's, and the
+  change that lost is listed in `remote status`. A time that is not known never
+  writes or deletes. Empty directories (`Change.Dir`) and the execute bit
+  (`Change.Mode`) come back too, all three negotiated by `Hello.Times`.
+  Write-back no longer waits for the fill or a complete cache, a closing
+  session runs it to quiescence first (60s bound), and an edit here is never
+  sent over a later container write.
 
 ## What forced it
 
@@ -333,23 +343,127 @@ baseline is the fill's copy; anything else is the container's.
 
 | your file vs manifest | cached file vs manifest | outcome |
 |---|---|---|
+| any | same size and mtime as your file | a copy: nothing comes back but a changed execute bit (2026-10-26) |
 | unchanged | changed | the container wrote it → write it back |
 | changed | unchanged | you wrote it → nothing comes back |
 | unchanged | whiteout | the container deleted it → delete it here |
 | changed | whiteout | conflict; your file is kept |
 | changed | changed | conflict; last writer wins |
-| not in the manifest | anything | left alone |
+| not in the manifest, you have it | changed or whiteout | last writer wins, by change time (2026-10-26) |
+| not in the manifest, you do not | changed | the container's new file → write it here, unless the record says you deleted it |
 | unchanged | identical to the manifest | the fill wrote it; nothing happened |
 
-- Only last-writer-wins needs a clock; the offset between the machines is
-  measured through `workspace-info`. Every conflict is reported by path.
+- A clock is needed for last writer wins only; the offset between the machines
+  is measured through `workspace-info`. Every conflict is reported by path.
 - The fill's copies are filtered on **both** ends. The client's check is the
   rule; wrong there, a file is written back with the bytes it already has and
   settles next round. The agent's record of what it applied keeps the reply
   proportional; without it a fully cached tree is listed every five seconds.
-- **Nothing is written back while the cache is incomplete.** A file the fill
-  never sent looks exactly like one the container created, and the cost is
-  content appearing in somebody's source tree that they never wrote.
+- Write-back does not wait for the fill, nor for a complete cache (amended
+  2026-10-26, below). Until then nothing was written back from an incomplete
+  cache, because a file the fill never sent looked exactly like one the
+  container created; the change times now decide that file.
+
+### Every change comes back, last writer wins (amended 2026-10-26)
+
+`write=back` dropped what the container did to a file the cache never held,
+which while prefetch is off (the default) is every existing file, and said
+nothing:
+
+| the container | before | now |
+|---|---|---|
+| rewrote a file that existed here | dropped (`decide`: unsent and here, left alone) | carried back if the container wrote last |
+| deleted such a file | dropped | deleted here if the container deleted it last |
+| replaced or removed a directory | only files the fill sent went | also every path here under it the container's view confirms gone and nothing here changed after |
+| made an empty directory | never reported | made here (`Change.Dir`) |
+| `chmod +x` on an existing file | the file kept its mode | the execute bit is carried (`Change.Mode`) |
+| anything, with a cache prefetch could not finish | nothing came back from that share | decided like any other |
+| anything in the seconds before the client stopped | left in the workspace | carried back by the round `Close` runs |
+| wrote a file edited here up to 150ms before | the edit was sent over it | the later write wins |
+
+**The rule for a file the cache never held**, in `decide`:
+
+1. **A copy is not a change.** Same size and mtime as the file here (either
+   side may hold the time rounded to the second, as a tar carries it): adopted
+   as a baseline, nothing written. An entrypoint's `chown -R` copies every
+   file into the upper keeping its mtime (`test/union-probe.sh` section 14,
+   recorded); read as the container writing, it would rewrite the tree.
+2. **Last writer wins, by change time on both sides.** The container's side is
+   the upper entry's ctime: of the file, of a whiteout, of the earliest opaque
+   marker file (never the directory's own, which moves with every later write
+   in it), as `Change.Changed` on the workspace clock, less the measured skew.
+   The skew is taken against the midpoint of the `workspace-info` round trip,
+   not its arrival, which would favour the container by the one-way latency;
+   and a container change must be later by more than half the round trip to
+   delete or overwrite a file the cache never held. In doubt, this machine wins.
+   This machine's side is its ctime: `Stat_t` on Linux and macOS, NTFS
+   `ChangeTime` through `GetFileInformationByHandleEx(FileBasicInfo)` on
+   Windows, supplied as `dircache.Cache.ChangeTime` because `dircache` takes
+   no dependency. Neither side's tools can set a ctime; npm, `tar`, `cp -p` and
+   rsync all set mtimes.
+3. **The container wrote last**: written back, or deleted here. **This machine
+   did**: kept, said once, and listed in `remote status` (`SkipKept`), decided
+   again every round rather than set aside.
+4. **A time that is not known never writes or deletes.** From a workspace
+   without `Hello.Times` a changed file falls back to its mtime against the
+   ctime here, which keeps the client-only upgrade useful for a file untouched
+   here for days; its deletions and replaced directories are kept and status
+   says to update the workspace. A ctime this machine cannot read (a file
+   another program holds on Windows) keeps the file.
+5. Every action still passes `stillAsSeen` immediately before it is acted on,
+   now comparing the ctime when the decision read one.
+
+| piece | answer |
+|---|---|
+| a replaced or removed directory | candidates are what the fill sent under it and every path here under it, listed once per removal (`writeBacks.walked`); each confirmed with `OpPresent`, a thousand paths per request, and decided with the earliest removal above it; a directory is removed only while empty, deepest first |
+| an empty directory | the agent reports an upper directory with no entries at all; the client makes it if absent, unless the record has a path under it. An `Opaque` directory absent here is made too: fuse-overlayfs may mark a directory the container made as hiding the lower, which then never reads as empty (`test/union-probe.sh` section 14 records which): that is the skeleton of a directory removed here. Not "absent from the lower": that is an NFS stat per directory a `chown -R` copied up |
+| a directory removed here | dropped from the cache as one (the watcher reports its removal; files were all invalidation saw before), with the record under it, so the union hides it instead of keeping the empty skeleton a `chown -R` or the fill copied up. Not while it is here again, and not while it holds a file the container made that write-back has not carried yet |
+| the mode | only the execute bit: the share reports every other bit wide (ADR 0046), so a copy-up differs from the file here in all of them. `ShareOptions.Exec` is `0111` less the share's file mask, and 0 on Windows, where modes are neither compared nor carried. Applied as `chmod +x` would: execute where readable |
+| a file both sides changed | change times where both are known, else mtimes as before: the same comparison invalidation makes, so the two never disagree |
+| invalidation | `withoutLaterConsumerChanges` asks what the container changed, fresh, per flush, and leaves to write-back a path the container changed after this machine's ctime. Deletions are not deferred |
+| the fill | `withoutConsumerChanges` covers paths the cache never held too: never sent over a container change not carried back, except a copy of the file here, or a deletion older than the file here (the whiteout this machine's own deletion left, for a file made here again while nothing ran). And the agent leaves out, and names in `Reply.Kept`, a file the cache layer holds that the client did not put there (`Request.Fill`): a prefetch batch is often set off by the container's copy-up of the file it is writing, and landed it overwrote that write with this machine's older version (`integration.sh` 15h, found in CI 2026-10-26). The client's own check reads an answer up to two seconds old and cannot see a write still in progress |
+| the agent | `live.applied` compares the ctime as well, so a chmod or chown the container makes on a file the client sent is its change |
+| the wire | `Hello.Times` announces, `Request.Times` asks; `Change.Changed` (`t`), `Change.Dir` (`i`), `Change.Mode` (`x`), and under it `Request.Fill` (`f`) and `Reply.Kept` (`kp`). An older client never asks and never sees a `Dir` it would fetch as a file |
+
+**The completeness gate is gone, and the fill gate with it.** A file the cache
+holds is decided by its manifest; one it never held that this machine has, by
+steps 1 and 2; one this machine lacks is the container's unless the record
+says it was deleted here; and the fill records a batch before it sends it, so
+its own copies are never the container's (the agent filters them as they land,
+and step 1 catches them after an agent restart). Nothing else read `Cached`:
+it remains for `remote status` only.
+
+**A closing session runs write-back to quiescence first.** `Session.Close`
+stops serving the endpoint, sends the pending invalidations, and calls
+`Cache.Settle`: rounds until one carries nothing, the backoff skipped, within
+60s (`settleTimeout`). Rounds take a lock that honours the context, so a round
+the per-connection loop is in the middle of, on a context nobody cancels until
+`Settle` returns, cannot hold `Close` past the bound. What is left is logged with the share, the pending count
+and the first path, and stays in the cache layer for the next session. A
+connection released while idle is opened again for it (ADR 0027). `remote stop`
+waits up to 90s for the process to exit. `Cache.Stop` sends the invalidation
+queue rather than dropping it.
+
+**Known gaps**, accepted:
+
+- An empty directory a container copied up that is deleted here while the
+  watcher did not see it (the client was not running), and that held nothing
+  this machine sent, is made here again.
+- Something here that moves a file's ctime without changing it (a `chmod -R`, a
+  backup tool, a checkout rewriting the same bytes) makes it the later change,
+  and an earlier container change to it loses. It is listed in `remote status`.
+- When `Changes` fails, an invalidation sends the edit as it did before times
+  existed.
+- A file whose size and mtime match the file here but whose content differs (a
+  tool writing a fixed mtime over a same-sized file) reads as a copy.
+- When this machine wins for a file the cache never held, the container keeps
+  its own version until the file changes here again: nothing pushes this
+  machine's version into the cache outside invalidation.
+- A deletion made here is sent as before, even over a container write made in
+  the 150ms before it.
+- Costs: one `Changes` per invalidation flush, the fill asking `Changes` once
+  per two seconds of batches on a first fill too, and one walk of a directory
+  here per removal of it.
 
 ### Write-back never stops for good (amended 2026-10-21)
 
@@ -427,9 +541,10 @@ gone; each deletion then goes through `decide` like any other, so a file
 changed here since is kept and reported. The listing cannot answer this alone:
 the agent hides what the client wrote through the union, so a file the user
 created or edited there is silent in it exactly like one the container deleted.
-A file the fill never sent is deliberately not touched: under `prefetch=tree`
-most of a large tree was never sent, and a directory the container replaced
-leaves what was only ever on this machine, where it was.
+Amended 2026-10-26: a path here the fill never sent is a candidate too, when
+the removal has a time, and is deleted only if this machine has not changed it
+since (above). Until then it was left, which left under `prefetch=off` every
+file of a directory the container replaced.
 
 **Links are carried back by the rule the live share already follows**
 (README, "What differs from a bind mount"; `core-client/nfsserve/symlink.go`):
@@ -457,9 +572,9 @@ misread: a link reported to it would read as an empty file.
 
 **Deliberately not carried back:** a name this machine refuses (named once), a
 case collision on a filesystem that treats the two names as one (named once;
-landing it would replace the other file), a link this account may not make, and
-under `prefetch=tree` or `off` the files a replaced directory hid that the fill
-never sent.
+landing it would replace the other file), a link this account may not make, a
+socket, fifo or device, and a container change older than this machine's last
+change to the file (listed in status).
 
 **A link write-back made is then invalidated like any change.** The watcher sees
 it, `invalidate` stats it (following the link) and sends the target's bytes under
@@ -470,10 +585,18 @@ drop would be a whiteout over the lower's link, so it is left as it was.
 
 **Not decided here.** Whether a connection released while a container still
 writes can lose its tail is open; it is not shown by `integration.sh` 16b (18
-files, no client command, three minutes).
+files, no client command, three minutes). A session closing is decided
+(amended 2026-10-26): its last round runs first, opening the connection again
+if it had been released.
 
 ## What it measured
 
+- **Bind-mount parity, 2026-10-26.** The reproductions are `integration.sh`
+  15h (prefetch off), `test/union-probe.sh` section 14 and the existing-file
+  step of `machine.yml`. Section 14 RECORDS the premises steps 1 and 2 rest on
+  (copy-up keeps the lower's mtime, `chown -R` copies files up, a whiteout and
+  an opaque marker keep the ctime of the deletion); until a CI run has printed
+  them they are assumptions, written down where the answer will appear.
 - **Write-back reproductions, 2026-10-21 (PR 342).** Before the fixes: a
   directory the container replaced left `tools/old` here and wrote
   `tools/.wh..wh..opq` into the tree; a restarted client carried back neither a

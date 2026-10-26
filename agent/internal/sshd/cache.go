@@ -54,6 +54,8 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		Owner: true,
 		// Opaque directories, links and skipped entries (ADR 0044).
 		Carry: true,
+		// Change times, modes and empty directories (ADR 0044).
+		Times: true,
 	}
 	if err := enc.Encode(cache.Reply{Hello: hello}); err != nil {
 		_ = session.Exit(1)
@@ -145,7 +147,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 
 	case cache.OpApply:
 		payload := io.LimitReader(body, req.Bytes)
-		skipped, err := s.cfg.Unions.Apply(ctx, name, account.Client(), req.Export, req.Codec, req.Carry, payload)
+		skipped, kept, err := s.cfg.Unions.Apply(ctx, name, account.Client(), req.Export, req.Codec, req.Carry, req.Fill, payload)
 		// Whatever the extraction did not read, whether it failed half way or a
 		// decoder stopped before the end: the next request follows the payload
 		// on the same stream, and read out of the middle of a tar it is garbage
@@ -154,7 +156,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		if err != nil {
 			return refused(err), nil
 		}
-		return cache.Reply{Skipped: skipped}, nil
+		return cache.Reply{Skipped: skipped, Kept: kept}, nil
 
 	case cache.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, account.Client(), req.Export, req.Paths); err != nil {
@@ -163,7 +165,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
-		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export, req.Carry)
+		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export, req.Carry, req.Times)
 		if err != nil {
 			return refused(err), nil
 		}

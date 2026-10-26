@@ -4,6 +4,8 @@ package dircache
 // so it depends on nothing (ADR 0021): what the consumer did, for write-back,
 // and what happened here, for invalidation.
 
+import "io/fs"
+
 // Change is one thing the consumer did to its copy of a share.
 type Change struct {
 	// Path is within the share: leading slash, forward slashes.
@@ -27,6 +29,19 @@ type Change struct {
 	// Link is the target of a symbolic link the consumer made at Path, kept
 	// verbatim. Size and ModTime are not meaningful for it beyond identity.
 	Link string
+
+	// Changed is when the consumer made this change, in Unix nanoseconds ON
+	// THE CONSUMER'S CLOCK, by a time the consumer cannot set (a ctime): of the
+	// file, of the deletion, of the replace. Last writer wins compares it with
+	// this machine's change time after the measured offset. Zero is not known,
+	// and then nothing is deleted on this change's say-so.
+	Changed int64
+
+	// Dir says the consumer has an empty directory here.
+	Dir bool
+
+	// Mode is the entry's permission bits, meaningful only when Changed is set.
+	Mode fs.FileMode
 }
 
 // Op is what happened to a path on this machine. A bitset: one save can be

@@ -63,6 +63,11 @@ const (
 
 	// SkipMarker is a name the union reserves for its own bookkeeping.
 	SkipMarker
+
+	// SkipKept is a consumer's change that lost to this machine's version, or
+	// whose time could not be told, so this machine's file was kept. Not set
+	// aside: decided again every round, and listed for as long as it is kept.
+	SkipKept
 )
 
 // skip is a path given up on and the change that was refused, so a later
@@ -102,12 +107,23 @@ type wbState struct {
 	skipped map[string]skip
 	said    map[string]string
 	tried   map[string]int
+
+	// walks is what this machine had under each directory the consumer
+	// removed or replaced, listed once for that removal (walked).
+	walks map[string]listing
+}
+
+// listing is one listing of a directory here, for the removal it was made for.
+type listing struct {
+	at    int64
+	paths []string
 }
 
 // same reports whether a change is the one that was refused.
 func (s skip) same(c Change) bool {
 	return s.change.Size == c.Size && s.change.ModTime == c.ModTime &&
-		s.change.Deleted == c.Deleted && s.change.Link == c.Link
+		s.change.Deleted == c.Deleted && s.change.Link == c.Link &&
+		s.change.Changed == c.Changed && s.change.Mode == c.Mode
 }
 
 // backoff is the wait after failures in a row: min, doubling, at most max.
@@ -278,7 +294,7 @@ func (w *writeBacks) unskipped(share string, changes []Change) []Change {
 	}
 	out := make([]Change, 0, len(changes))
 	for _, ch := range changes {
-		if sk, skipped := s.skipped[ch.Path]; skipped && sk.same(ch) {
+		if sk, skipped := s.skipped[ch.Path]; skipped && sk.Kind != SkipKept && sk.same(ch) {
 			continue
 		}
 		out = append(out, ch)
@@ -305,6 +321,64 @@ func (w *writeBacks) forget(share string, pending ...[]Change) {
 	maps.DeleteFunc(s.said, func(p, _ string) bool { return !keep[p] })
 	maps.DeleteFunc(s.tried, func(p string, _ int) bool { return !keep[p] })
 	maps.DeleteFunc(s.skipped, func(p string, _ skip) bool { return !keep[p] })
+	maps.DeleteFunc(s.walks, func(p string, _ listing) bool { return !keep[p] })
+}
+
+// keptNow makes kept the paths this round kept, each with the change that lost,
+// and returns those that are new or kept for a new reason, which is when each
+// is said once. A path kept last round and not this one is no longer listed.
+func (w *writeBacks) keptNow(share string, kept map[string]Skipped, changes map[string]Change) []Skipped {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, ok := w.state[share]
+	if !ok {
+		return nil
+	}
+	if s.skipped == nil {
+		s.skipped = map[string]skip{}
+	}
+	maps.DeleteFunc(s.skipped, func(p string, sk skip) bool {
+		_, still := kept[p]
+		return sk.Kind == SkipKept && !still
+	})
+	var newly []Skipped
+	for p, sk := range kept {
+		ch := changes[p]
+		old, had := s.skipped[p]
+		if had && old.Kind != SkipKept {
+			continue
+		}
+		s.skipped[p] = skip{change: ch, Skipped: sk}
+		if !had || !old.same(ch) || old.Why != sk.Why {
+			newly = append(newly, sk)
+		}
+	}
+	sort.Slice(newly, func(i, j int) bool { return newly[i].Path < newly[j].Path })
+	return newly
+}
+
+// walked is the listing of dir made for the removal at at, listed by list the
+// first time it is asked for.
+func (w *writeBacks) walked(share, dir string, at int64, list func() []string) []string {
+	w.mu.Lock()
+	if s, ok := w.state[share]; ok {
+		if wk, had := s.walks[dir]; had && wk.at == at {
+			w.mu.Unlock()
+			return wk.paths
+		}
+	}
+	w.mu.Unlock()
+
+	paths := list()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s, ok := w.state[share]; ok {
+		if s.walks == nil {
+			s.walks = map[string]listing{}
+		}
+		s.walks[dir] = listing{at: at, paths: paths}
+	}
+	return paths
 }
 
 // report is a share's write-back as status shows it.

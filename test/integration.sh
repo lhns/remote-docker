@@ -2186,6 +2186,9 @@ share_diagnostics() {
         grep -iE "cache|watch|write-back" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
         tail -12 | sed 's/^/        client: /'
+    # The client 15h restarts, once it has.
+    grep -iE "cache|union|fuse|writ|chang|collect|kept|container" "$WORK/parity-up.log" 2>/dev/null |
+        tail -20 | sed 's/^/        parity client: /'
     # The background session's own log, which is where sections 16 and later log.
     grep -viE "poking" "$WORK/state/logs/remote-docker.log" 2>/dev/null |
         tail -25 | sed 's/^/        session: /'
@@ -2870,6 +2873,223 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     docker rm -f itest-wb-burst >/dev/null 2>&1
 else
     bad "no client is running, so write-back could not be tested"
+fi
+
+echo
+echo "== 15h. write=back carries back like a bind mount, prefetch off (ADR 0044) =="
+# With prefetch off the cache holds nothing the container did not write, so
+# every existing file here is one the cache never held. A bind mount carries
+# back what the container does to those too: a rewrite, a deletion, a replaced
+# directory, a new empty directory, an executable bit. Last writer wins, and a
+# container change that lost to a later one here is named in `remote status`.
+# The mount word turns prefetch off against this client's tree default.
+PARDIR="$WORK/wb-parity"
+PAR_MODE="read=cached,write=back,prefetch=off"
+mkdir -p "$PARDIR/dir" "$PARDIR/lib"
+echo "from the runner" >"$PARDIR/existing.txt"
+echo "deleted in the container" >"$PARDIR/gone.txt"
+echo a >"$PARDIR/dir/a"
+echo b >"$PARDIR/dir/b"
+printf '#!/bin/sh\necho ran\n' >"$PARDIR/script.sh"
+chmod 0644 "$PARDIR/script.sh"
+echo "this machine writes it last" >"$PARDIR/kept.txt"
+echo "nobody changes this" >"$PARDIR/lib/untouched.txt"
+
+# par_state lists every file under lib with its time, size and mode, for
+# "nothing changed".
+par_state() { find "$PARDIR/lib" -type f -exec stat -c '%n %Y %s %a' {} + | sort; }
+
+# wait_absent waits for a path to be gone here, and prints what is there if not.
+wait_absent() {
+    local path=$1 secs=$2 _
+    for _ in $(seq 1 "$secs"); do
+        [ ! -e "$path" ] && return 0
+        sleep 1
+    done
+    ls -la "$path" 2>&1
+    return 1
+}
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-parity -v "$PARDIR:/w:$PAR_MODE" \
+        alpine:3 sleep 900 >"$WORK/parity-run.log" 2>&1; then
+        ok "a container starts against a write=back share with prefetch off"
+
+        # An entrypoint's chown -R copies every file into the cache layer
+        # with its size and time unchanged. A copy is not a change: nothing
+        # may be rewritten here for it. Only lib/: a copy is adopted as a file
+        # the cache holds, and the cases below are about files it never held.
+        before=$(par_state)
+        if dockert exec itest-parity chown -R 1000:1000 /w/lib >"$WORK/parity-chown.log" 2>&1; then
+            # Three write-back rounds.
+            sleep 15
+            after=$(par_state)
+            if [ "$before" = "$after" ]; then
+                ok "a chown -R in the container changes nothing here"
+            else
+                bad "a chown -R in the container changed files here:"
+                diff <(echo "$before") <(echo "$after") | sed 's/^/        /'
+                share_diagnostics
+            fi
+        else
+            bad "chown -R failed in the container: [$(cat "$WORK/parity-chown.log")]"
+        fi
+
+        # The chown left lib/ copied into the cache layer. Removed here, it is
+        # removed from the container's view too, and nothing brings an empty
+        # skeleton of it back here.
+        rm -rf "${PARDIR:?}/lib"
+        if wait_gone dockert itest-parity /w/lib 20; then
+            ok "a directory removed here after a chown -R is gone in the container"
+        else
+            bad "lib is still in the container after it was removed here: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        # Two write-back rounds, which is when a skeleton would come back.
+        sleep 10
+        if [ ! -e "$PARDIR/lib" ]; then
+            ok "and it stays gone here"
+        else
+            bad "lib came back here after it was removed: [$(find "$PARDIR/lib" 2>&1 | tr '\n' ' ')]"
+            share_diagnostics
+        fi
+
+        dockert exec itest-parity sh -c 'echo "from the container" >/w/existing.txt' >/dev/null 2>&1
+        if seen=$(wait_for_content "$PARDIR/existing.txt" "from the container" 30); then
+            ok "an existing file rewritten in the container arrives"
+        else
+            bad "existing.txt still holds [$seen] 30s after the container rewrote it"
+            share_diagnostics
+        fi
+
+        dockert exec itest-parity rm /w/gone.txt >/dev/null 2>&1
+        if seen=$(wait_absent "$PARDIR/gone.txt" 30); then
+            ok "an existing file deleted in the container is deleted here"
+        else
+            bad "gone.txt is still here 30s after the container deleted it: [$seen]"
+            share_diagnostics
+        fi
+
+        dockert exec itest-parity sh -c 'rm -rf /w/dir && mkdir /w/dir' >/dev/null 2>&1
+        if seen=$(wait_absent "$PARDIR/dir/a" 30) && seen=$(wait_absent "$PARDIR/dir/b" 10) && [ -d "$PARDIR/dir" ]; then
+            ok "rm -rf dir && mkdir dir in the container removes the files that were in it here"
+        else
+            bad "after the container replaced dir: [$seen], here: [$(ls -la "$PARDIR/dir" 2>&1 | tr '\n' ' ')]"
+            share_diagnostics
+        fi
+
+        dockert exec itest-parity mkdir /w/emptydir >/dev/null 2>&1
+        made=false
+        for _ in $(seq 1 30); do
+            [ -d "$PARDIR/emptydir" ] && made=true && break
+            sleep 1
+        done
+        if [ "$made" = true ]; then
+            ok "an empty directory made in the container arrives"
+        else
+            bad "emptydir never arrived: [$(ls -la "$PARDIR" 2>&1 | tr '\n' ' ')]"
+            share_diagnostics
+        fi
+
+        dockert exec itest-parity chmod +x /w/script.sh >/dev/null 2>&1
+        execd=false
+        for _ in $(seq 1 30); do
+            [ -x "$PARDIR/script.sh" ] && execd=true && break
+            sleep 1
+        done
+        if [ "$execd" = true ]; then
+            ok "chmod +x on an existing file in the container arrives"
+        else
+            bad "script.sh is [$(stat -c %a "$PARDIR/script.sh" 2>&1)] 30s after chmod +x in the container"
+            share_diagnostics
+        fi
+
+        # Last writer wins. The container writes first and the client is
+        # killed before a round can carry it (no shutdown round on a kill);
+        # then this machine writes, and the client starts again. This
+        # machine's later version is kept and the container's is named.
+        # The restarted client also caps the fill at one file, for the
+        # incomplete cache below.
+        dockert exec itest-parity sh -c 'echo "written in the container first" >/w/kept.txt' >/dev/null 2>&1 &&
+            kill -9 "$CLIENT_PID" 2>/dev/null
+        wait "$CLIENT_PID" 2>/dev/null
+        CLIENT_PID=""
+        echo "touched here after the container" >"$PARDIR/kept.txt"
+        REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree REMOTE_DOCKER_CACHE_FILES=1 \
+            "$WORK/remote-docker" remote start --foreground >"$WORK/parity-up.log" 2>&1 &
+        CLIENT_PID=$!
+        if endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/parity-up.log"; then
+            # Any request connects the session, which reattaches the share.
+            dockert ps >/dev/null 2>&1
+            if wait_output 'kept\.txt' 40 "$WORK/remote-docker" remote status; then
+                ok "a container change older than this machine's is named in remote status"
+            else
+                bad "remote status does not name kept.txt: [$LAST_OUTPUT]"
+                share_diagnostics
+            fi
+            if outputs '^touched here after the container$' cat "$PARDIR/kept.txt"; then
+                ok "and this machine's later version is kept"
+            else
+                bad "kept.txt holds [$LAST_OUTPUT], want this machine's later write"
+            fi
+
+            # A cache the fill could not finish carries back all the same.
+            BUDDIR="$WORK/wb-budget"
+            mkdir -p "$BUDDIR"
+            for f in a b c d; do echo "$f from the runner" >"$BUDDIR/$f.txt"; done
+            if dockert run -d --name itest-budget -v "$BUDDIR:/w:read=cached,write=back,prefetch=tree" \
+                alpine:3 sleep 900 >"$WORK/budget-run.log" 2>&1; then
+                if wait_output "$BUDDIR: .*cached in part" 40 "$WORK/remote-docker" remote status; then
+                    ok "a fill capped at one file stops short"
+                else
+                    bad "the capped share never reported a partial cache: [$LAST_OUTPUT]"
+                fi
+                dockert exec itest-budget sh -c 'echo "d from the container" >/w/d.txt && echo new >/w/new.txt' >/dev/null 2>&1
+                if seen=$(wait_for_content "$BUDDIR/d.txt" "d from the container" 30) &&
+                    seen=$(wait_for_content "$BUDDIR/new.txt" "new" 10); then
+                    ok "an incomplete cache still carries back what the container wrote"
+                else
+                    bad "with a partial cache, the container's writes did not arrive: [$seen]"
+                    # Which side lost it: the container's own view, and what is here.
+                    echo "        in the container: $(dockert exec itest-budget sh -c 'for f in /w/*; do echo "$f=[$(cat "$f")] $(stat -c "%s %y %z" "$f")"; done' 2>&1 | tr '\n' ' ')"
+                    echo "        here: $(for f in "$BUDDIR"/*; do echo "$f=[$(cat "$f")] $(stat -c '%s %y %z' "$f")"; done | tr '\n' ' ')"
+                    share_diagnostics
+                fi
+            else
+                bad "the capped container would not start"
+                sed 's/^/        /' "$WORK/budget-run.log"
+            fi
+            docker rm -f itest-budget itest-parity >/dev/null 2>&1
+
+            # A container that writes and exits, and the client stopped at
+            # once, which is how a job ends. The stop carries it back first.
+            if dockert run --rm -v "$PARDIR:/w:$PAR_MODE" alpine:3 \
+                sh -c 'echo "the last thing written" >/w/last.txt' >"$WORK/parity-last.log" 2>&1; then
+                if outputs '^stopped' "$WORK/remote-docker" remote stop -f; then
+                    ok "the session stops"
+                else
+                    bad "remote stop: [$LAST_OUTPUT]"
+                fi
+                wait "$CLIENT_PID" 2>/dev/null
+                CLIENT_PID=""
+                if outputs '^the last thing written$' cat "$PARDIR/last.txt"; then
+                    ok "a write made just before remote stop arrives"
+                else
+                    bad "last.txt holds [$LAST_OUTPUT] after the session stopped"
+                    tail -20 "$WORK/parity-up.log" | sed 's/^/        /'
+                fi
+            else
+                bad "the last container failed: [$(cat "$WORK/parity-last.log")]"
+            fi
+        else
+            docker rm -f itest-parity >/dev/null 2>&1
+        fi
+    else
+        bad "a container would not start against a write=back share with prefetch off"
+        sed 's/^/        /' "$WORK/parity-run.log"
+    fi
+else
+    bad "no client is running, so bind-mount parity could not be tested"
 fi
 
 echo

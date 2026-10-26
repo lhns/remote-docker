@@ -108,6 +108,24 @@ type Change struct {
 	// that did not is never told of a link, because it would read it as an empty
 	// file.
 	Link string `json:"l,omitempty"`
+
+	// Changed is the cache layer entry's ctime, Unix nanoseconds on the
+	// WORKSPACE's clock: of the file, of a whiteout for a deletion, of the
+	// marker for a replaced directory. A container cannot set it, which is why
+	// last-writer-wins reads it rather than ModTime (ADR 0044). Zero is not
+	// known. Sent only to a client that asked (Request.Times).
+	Changed int64 `json:"t,omitempty"`
+
+	// Dir is an empty directory in the cache layer that is no replaced one: a
+	// directory the container made, or one it copied up and left empty. Sent
+	// only to a client that asked (Request.Times); one that did not would
+	// fetch it as a file.
+	Dir bool `json:"i,omitempty"`
+
+	// Mode is the permission bits of the entry, under Request.Times, where 0
+	// is a file nobody may read: the share reports wide bits (ADR 0046), so a
+	// client compares only the execute bit.
+	Mode uint32 `json:"x,omitempty"`
 }
 
 // Request is one frame from the client: one op and the fields it needs.
@@ -158,6 +176,17 @@ type Request struct {
 	// when the agent announced the capability, and an agent that has not got it
 	// ignores the field.
 	Carry bool `json:"y,omitempty"`
+
+	// Times asks OpChanges for Change.Changed, Change.Mode and Change.Dir
+	// (Hello.Times). Sent only when announced; an agent without it ignores the
+	// field.
+	Times bool `json:"t,omitempty"`
+
+	// Fill marks an OpApply as a prefetch batch, under Times: a file the
+	// container has its own version of in the cache layer is left as it is and
+	// named in Reply.Kept, because a fill never overwrites the container's work
+	// (ADR 0044). An invalidation does not set it: that is the user writing now.
+	Fill bool `json:"f,omitempty"`
 }
 
 // Reply is the agent's answer to one request.
@@ -184,6 +213,10 @@ type Reply struct {
 	// entries that could not be written (or read) and were left out, where the
 	// rest of the batch went. Spelled as a share path.
 	Skipped []string `json:"k,omitempty"`
+
+	// Kept answers an OpApply that asked for Fill: the paths left as the
+	// container had them, which are not in the cache as the client sent them.
+	Kept []string `json:"kp,omitempty"`
 
 	// Present answers OpPresent: the subset of the paths that exist.
 	Present []string `json:"x,omitempty"`
@@ -219,6 +252,12 @@ type Hello struct {
 	// carries nothing back that is not a plain file, and says so in its
 	// status.
 	Carry bool `json:"w,omitempty"`
+
+	// Times says this agent reports, on an OpChanges that asks (Request.Times),
+	// each entry's ctime, its mode and the empty directories in the cache
+	// layer. Without it a client cannot tell when the container deleted a file
+	// the cache never held, and keeps it (ADR 0044).
+	Times bool `json:"t,omitempty"`
 }
 
 // Accepts reports whether the agent that sent this greeting can read a codec.

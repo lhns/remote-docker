@@ -3,7 +3,7 @@
 - Status: Accepted; off by default since 2026-09-04
 - Date: 2026-09-04; amended 2026-10-14 (per share), 2026-10-15 (a later
   mount raises it), 2026-10-21 (restored shares resume, a failed batch is
-  retried)
+  retried), 2026-10-26 (prefetch no longer gates write-back)
 - Current answer: `prefetch: off|eager|tree` (`REMOTE_DOCKER_PREFETCH`);
   `tree` follows the NFS misses, `eager` sends the whole tree smallest first.
   Default off, pending the apply; see "What it measured". Amended 2026-10-14:
@@ -19,7 +19,10 @@
   2026-10-15: a later mount of the same share raises the policy (`off < tree <
   eager`) and never lowers it: `Cache.Attach` on a known share lifts it, starting
   the fill if there was none, and `Touch` keeps its atomic-count fast path
-  because a raise only stores to state the sender reads.
+  because a raise only stores to state the sender reads. Amended 2026-10-26:
+  prefetch decides what is in the cache and nothing about write-back, which
+  no longer waits for the fill to finish or for it to fit the budget (ADR
+  0044); the fill never sends over a container change, held or not.
 - Extends [ADR 0044](0044-a-delegated-share-is-a-cache.md), which decides
   that the share is a union; this record decides what goes into it and when.
   The read and write axes it hangs off are
@@ -121,6 +124,23 @@ land in; step 0.5 below could change that.
   ways: `Touch` ignored, no quiet wait, 16 MiB batches (`batchBytes`). Kept
   because a dense workload is its case once the apply is fixed.
 - `remote status` reports bytes sent per share.
+
+### Prefetch does not gate write-back (amended 2026-10-26)
+
+- **Before:** write-back ran only once a share's fill was done, and moved
+  nothing while the cache lacked something the prefetch chose
+  (`Done && !Cached`). A share the budget stopped short never carried a
+  container's writes back, and a session closing mid-fill left them in the
+  workspace.
+- **Now:** neither gate exists. Every path is decided by its baseline or by
+  the change times on both sides (ADR 0044, "Every change comes back"), so
+  what the fill has or has not sent is not evidence about the container.
+  `Cached` is for `remote status` alone ("cached in part; the rest is read
+  live").
+- **The fill never sends over a container change** not yet carried back,
+  whether or not the cache held the path; a copy of the file here (a
+  `chown -R`) is sent, since nothing is lost. A first fill now asks what the
+  container changed once per two seconds of batches, which it did not before.
 
 ## What it measured
 

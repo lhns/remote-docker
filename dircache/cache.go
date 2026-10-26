@@ -1,6 +1,7 @@
 package dircache
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +50,16 @@ type Store interface {
 // implies; a Store without it, or whose answer fails, deletes nothing that way.
 type Presenter interface {
 	Present(ctx context.Context, share string, paths []string) ([]string, error)
+}
+
+// FillApplier is a Store that can apply a fill batch without overwriting what
+// the consumer made: an entry the consumer has its own version of is left as it
+// is and named in kept. The prefetch uses it where the Store has it, because a
+// batch is often set off by the consumer's own copy-up of the file it is
+// writing, and landing it would lose that write (ADR 0044). Invalidation uses
+// Apply: an edit here is decided by the change times before it is sent.
+type FillApplier interface {
+	ApplyFill(ctx context.Context, share, root string, entries []Entry) (skipped, kept []string, err error)
 }
 
 // ErrCannotPresent is a Presenter whose far end cannot answer at all, such as an
@@ -133,8 +145,23 @@ type Cache struct {
 	// falls back to its leaf size.
 	Link func() Link
 
+	// ChangeTime is when a path in the share last changed on this machine: its
+	// ctime, which every write, rename and change of mode moves and no tool
+	// sets back. Last writer wins reads it for a file the cache never held
+	// (decide). Supplied rather than read here because it is a different
+	// structure on every platform; false, or a nil func, is not known, and a
+	// time that is not known never writes or deletes anything.
+	ChangeTime func(r *os.Root, rel string) (time.Time, bool)
+
 	shares shares
 	inval  invalidator
+
+	// rounds keeps write-back rounds one at a time: the per-connection loop
+	// and the round Settle runs when the session closes. A channel rather than
+	// a mutex, so waiting for it honours the caller's context: the loop may be
+	// mid-round on a context nobody cancels until Settle has returned.
+	roundsOnce sync.Once
+	rounds     chan struct{}
 
 	// bw is the bandwidth measured on this cache's own batches, in bytes per
 	// second, and zero until a batch large enough has gone.
@@ -185,6 +212,12 @@ type ShareOptions struct {
 	// for. Invalidation from this machine still applies; ephemeral is about
 	// the direction out, not coherence in.
 	Ephemeral bool
+
+	// Exec is the execute bits the consumer sees as this machine's file has
+	// them: 0111 less what the share's mask clears. Zero where this machine
+	// has no execute bit to carry (Windows, whose share reports every file
+	// executable), which turns comparing and carrying modes off.
+	Exec fs.FileMode
 }
 
 // Attach registers a share and, if asked, starts filling its cache from root.
@@ -210,10 +243,8 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 	// can take it out.
 	go c.reconcileDeletions(share, root)
 	if opts.Policy == PolicyOff || opts.Policy == "" {
-		// Nothing to prefetch: the cache holds only what the consumer writes.
-		// Cached as well as Done, because write-back moves nothing while the
-		// cache lacks something the prefetch chose, and this one chose
-		// nothing.
+		// Nothing to prefetch: the cache holds only what the consumer writes,
+		// and status calls a share that chose nothing complete.
 		c.shares.finish(state, true, nil)
 		return
 	}
@@ -223,9 +254,20 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 // Reports is one entry per share this cache holds, for a status command.
 func (c *Cache) Reports() []Report { return c.shares.reports() }
 
-// Stop cancels anything waiting to be sent. A pending invalidation runs on a
-// timer, so it can fire after everything it needs has gone.
-func (c *Cache) Stop() { c.inval.stop() }
+// Stop sends what is waiting to be sent and cancels the timer. Sent rather than
+// dropped: an edit made here a moment before the session closes is otherwise
+// missing from the cache for as long as the container runs. Bounded, because a
+// workspace that has stopped answering must not hold the close.
+func (c *Cache) Stop() {
+	ctx, cancel := context.WithTimeout(cmp.Or(c.Ctx, context.Background()), stopFlushTimeout)
+	defer cancel()
+	c.flushNow(ctx)
+	c.inval.stop()
+}
+
+// stopFlushTimeout bounds what Stop sends. Settle, which a closing session
+// runs first, has already sent the same queue within its own bound.
+const stopFlushTimeout = 15 * time.Second
 
 // reconcileDeletions takes out of the cache the recorded paths this machine no
 // longer has. Only recorded ones: a path no batch sent is the consumer's own.
@@ -267,7 +309,7 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	// it too, sending would overwrite the consumer's version and reset the
 	// baseline, so the both-changed rule would never run. If the consumer cannot
 	// be asked the batch fails and is retried, since sending blind is the loss.
-	if sendable, err := c.withoutConsumerChanges(share, store, entries); err != nil {
+	if sendable, err := c.withoutConsumerChanges(share, root, store, entries); err != nil {
 		return err
 	} else if len(sendable) != len(entries) {
 		entries = sendable
@@ -292,11 +334,24 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	ctx, cancel := context.WithTimeout(c.Ctx, batchTimeout)
 	defer cancel()
 	started := time.Now()
-	skipped, err := store.Apply(ctx, share, root, entries)
+	var skipped, kept []string
+	var err error
+	if fa, ok := store.(FillApplier); ok {
+		skipped, kept, err = fa.ApplyFill(ctx, share, root, entries)
+	} else {
+		skipped, err = store.Apply(ctx, share, root, entries)
+	}
 	if err != nil {
 		return err
 	}
 	c.observeBandwidth(bytes, time.Since(started))
+
+	// What the far end kept as the consumer had it is the consumer's change,
+	// which write-back decides; the fill holds no copy of it.
+	if len(kept) > 0 {
+		entries = withoutSkipped(entries, kept)
+		c.unrecord(share, kept)
+	}
 
 	// What the far end left out is not in the cache, so it is neither recorded
 	// nor compared against: a file the consumer later makes there is the
@@ -327,20 +382,29 @@ type changedAnswer struct {
 // batches back to back, and each answer is a walk of the consumer's layer.
 const consumerChangedTTL = 2 * time.Second
 
-// consumerChanged is what the consumer reports, by path.
-func (c *Cache) consumerChanged(share string, store Store) (map[string]Change, error) {
+// consumerChanged is what the consumer reports, by path. fresh asks again
+// whatever was asked a moment ago: an invalidation decides who wrote last, and
+// a container write in the last two seconds is exactly the one that matters.
+func (c *Cache) consumerChanged(ctx context.Context, share string, store Store, fresh bool) (map[string]Change, error) {
 	c.changedMu.Lock()
 	cached, ok := c.changed[share]
 	c.changedMu.Unlock()
-	if ok && c.clock().Sub(cached.at) < consumerChangedTTL {
+	if !fresh && ok && c.clock().Sub(cached.at) < consumerChangedTTL {
 		return cached.changes, nil
 	}
-	ctx, cancel := context.WithTimeout(c.Ctx, c.budget())
+	ctx, cancel := context.WithTimeout(ctx, c.budget())
 	defer cancel()
 	changes, err := store.Changes(ctx, share)
 	if err != nil {
 		return nil, err
 	}
+	return c.rememberChanges(share, changes), nil
+}
+
+// rememberChanges keeps an answer to what the consumer changed, by path, for
+// the next consumerChanged within the TTL. Write-back's own round keeps its
+// answer too, so a fill running beside it rarely asks again.
+func (c *Cache) rememberChanges(share string, changes []Change) map[string]Change {
 	byPath := make(map[string]Change, len(changes))
 	for _, ch := range changes {
 		byPath[ch.Path] = ch
@@ -351,37 +415,37 @@ func (c *Cache) consumerChanged(share string, store Store) (map[string]Change, e
 	}
 	c.changed[share] = changedAnswer{at: c.clock(), changes: byPath}
 	c.changedMu.Unlock()
-	return byPath, nil
+	return byPath
 }
 
 // withoutConsumerChanges is entries less the paths the consumer changed and
-// write-back has not carried back, each said once as a conflict.
+// write-back has not carried back, each said once as a conflict. The fill must
+// never overwrite one: write-back decides which side is kept (ADR 0044).
 //
-// Only a path the cache already holds can be one: a batch of paths never sent
-// asks nothing, so a first fill does not walk the consumer's layer per batch.
 // A change that is the fill's own copy (the agent cannot always tell, after it
-// restarts) is not the consumer's, and is judged by the baseline as decide does.
+// restarts) is not the consumer's, and is judged by the baseline as decide
+// does; a copy of a file the cache never held (a chown -R) has the size and time
+// of the file here, and sending over it loses nothing.
 //
 // Never for an ephemeral share: nothing is carried back from one, so there is no
 // rule to protect, and the edit here is the version the container should get.
-func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entry) ([]Entry, error) {
+func (c *Cache) withoutConsumerChanges(share, root string, store Store, entries []Entry) ([]Entry, error) {
 	if c.shares.ephemeral(share) {
 		return entries, nil
 	}
-	sent := c.shares.sentOf(share, entries)
-	if len(sent) == 0 {
-		return entries, nil
-	}
-	changed, err := c.consumerChanged(share, store)
+	changed, err := c.consumerChanged(c.Ctx, share, store, false)
 	if err != nil {
 		return nil, err
 	}
+	if len(changed) == 0 {
+		return entries, nil
+	}
+	sent := c.shares.sentOf(share, entries)
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		p := slashed(e.Path)
 		ch, listed := changed[p]
-		base, held := sent[p]
-		if !held || !listed || (!ch.Deleted && ch.Link == "" && base.carries(ch)) {
+		if !listed || ch.Opaque || ch.Dir || c.fillsOwn(root, p, ch, sent) {
 			out = append(out, e)
 			continue
 		}
@@ -391,6 +455,44 @@ func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entr
 		}
 	}
 	return out, nil
+}
+
+// fillsOwn reports whether sending this machine's file over a listed change
+// loses nothing of the consumer's: the change is a copy of what this machine has
+// or sent, or a deletion older than the file here. The last is the whiteout
+// this machine's own deletion left (an invalidation drops through the union)
+// for a file made here again since; kept out of the fill, the file would never
+// reach the consumer. A deletion with no time goes as it did before times
+// existed: sent over for a file the cache never held, not for one it did.
+func (c *Cache) fillsOwn(root, p string, ch Change, sent map[string]Baseline) bool {
+	base, held := sent[p]
+	switch {
+	case ch.Link != "":
+		return false
+	case ch.Deleted && ch.Changed == 0:
+		return !held
+	case ch.Deleted:
+		ours, ok := c.localChangeTime(root, p)
+		return ok && !time.Unix(0, ch.Changed).Add(-c.skew()).After(ours.Add(c.margin()))
+	case held:
+		return base.carries(ch)
+	}
+	info, err := os.Stat(localPath(root, p))
+	return err == nil && sameContent(ch, info)
+}
+
+// localChangeTime is ChangeTime for one share path under root, false when it
+// cannot be read.
+func (c *Cache) localChangeTime(root, p string) (time.Time, bool) {
+	if c.ChangeTime == nil {
+		return time.Time{}, false
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer func() { _ = r.Close() }()
+	return c.ChangeTime(r, relPath(p))
 }
 
 // record saves a batch's paths BEFORE it is applied: a batch cut off midway may
@@ -560,6 +662,17 @@ func (f *shares) ephemeral(share string) bool {
 	return ok && s.opts.Ephemeral
 }
 
+// exec is the execute bits a share's consumer sees as they are here
+// (ShareOptions.Exec).
+func (f *shares) exec(share string) fs.FileMode {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.state[share]; ok {
+		return s.opts.Exec
+	}
+	return 0
+}
+
 func (f *shares) set(share, root string, s *shareState, filled map[string]Baseline) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -626,6 +739,23 @@ func (f *shares) recordedPaths(share string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return keys(f.recorded[share])
+}
+
+// recordedUnder is the paths given, and every recorded path under one of them:
+// a directory dropped from the cache takes its files out of the record too.
+func (f *shares) recordedUnder(share string, paths []string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Clone(paths)
+	for p := range f.recorded[share] {
+		for _, d := range paths {
+			if strings.HasPrefix(p, strings.TrimSuffix(d, "/")+"/") {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // recordedSet is a COPY of a share's record, for a write-back round to decide
@@ -788,7 +918,7 @@ func (f *shares) rebase(share, root string, actions []action) {
 			} else {
 				delete(manifest, a.Path)
 			}
-		case a.kind == kindWrite || (a.kind == kindConflict && a.Wins):
+		case a.kind == kindWrite || a.kind == kindAdopt || (a.kind == kindConflict && a.Wins):
 			if b, ok := baselineOf(root, a.Path); ok {
 				b.Consumer = a.Consumer
 				manifest[a.Path] = b
