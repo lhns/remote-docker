@@ -830,7 +830,13 @@ premise of the project, and it applies to building it too. So:
   too, so its own copies sit there beside the container's. The manifest is what
   separates them, on both ends (ADR 0044). Left unfiltered, every write-back
   round asks for the whole tree back and an idle session is told about every
-  cached file every five seconds.
+  cached file every five seconds. The client's baseline is the rule and the
+  agent's record only keeps replies small, since an agent restart loses it. A
+  baseline is the file as the Store READ it into the tar (`Applied.Read`),
+  never a stat after it landed, and a copy lands with its time rounded to the
+  second, so it is compared as a copy (`copiedTime`). Get either wrong and our
+  own copy reads as the container's change: a file deleted here comes back, and
+  one rewritten while it was sent is overwritten with the older version.
 
 - **A fileid comes from ONE spelling of a path, and a containment check
   compares CLEANED paths.** go-nfs stats a just-created file by the absolute
@@ -1762,8 +1768,10 @@ its pure planning function was.
   time a host edit into that window.
 - **The premises of bind-mount parity, until CI has printed them.** That
   copy-up through fuse-overlayfs keeps an NFS lower's mtime to the nanosecond,
-  that `chown -R` copies files up, and that a whiteout and an opaque marker keep
-  the ctime of the deletion are RECORDED by `test/union-probe.sh` section 14,
+  that `chown -R` copies files up, that a whiteout and an opaque marker keep
+  the ctime of the deletion, and whether a file landed through the union has
+  the same ctime through the mount as in the layer are RECORDED by
+  `test/union-probe.sh` section 14,
   not asserted; the decision rests on them. Read that section's output before
   claiming any of them. The agent's `Change.Changed` is unit tested on Linux
   only (`changes_times_linux_test.go`), and a whiteout device there only where

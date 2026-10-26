@@ -61,24 +61,46 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 	}
 	defer done()
 
+	up, err := l.openUpper()
+	if err != nil && fill {
+		_, _ = io.Copy(io.Discard, decoded)
+		return nil, nil, fmt.Errorf("unions: opening the cache layer of %s: %w", export, err)
+	}
+	if up != nil {
+		defer func() { _ = up.Close() }()
+	}
 	var theirs func(string) bool
 	if fill {
-		upper, err := l.relocate(l.spec.Upper())
-		if err != nil {
-			_, _ = io.Copy(io.Discard, decoded)
-			return nil, nil, fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
-		}
-		up, err := os.OpenRoot(upper)
-		if err != nil {
-			_, _ = io.Copy(io.Discard, decoded)
-			return nil, nil, fmt.Errorf("unions: opening the cache layer of %s: %w", export, err)
-		}
-		defer func() { _ = up.Close() }()
 		theirs = containersOwn(up, l)
 	}
 	return extractWith(root, decoded, carry, theirs, func(name string, info os.FileInfo) {
-		l.noteApplied(name, info.Size(), info.ModTime(), ctimeOf(info))
+		l.noteApplied(name, inLayer(up, name, info))
 	})
+}
+
+// openUpper opens the union's cache layer as the agent can read it.
+func (l *live) openUpper() (*os.Root, error) {
+	upper, err := l.relocate(l.spec.Upper())
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenRoot(upper)
+}
+
+// inLayer is a file just landed as the cache layer has it, which is what
+// Changes compares it with. The merged mount is a FUSE client's view, whose
+// ctime is not promised to be the layer's (test/union-probe.sh section 14
+// records it); one that differs leaves the file reported as the container's for
+// as long as it is cached. Without the layer the ctime is not compared.
+func inLayer(up *os.Root, name string, merged os.FileInfo) applied {
+	if up != nil {
+		if target, err := within(name); err == nil {
+			if info, err := up.Lstat(target); err == nil {
+				return applied{size: info.Size(), modTime: info.ModTime(), ctime: ctimeOf(info)}
+			}
+		}
+	}
+	return applied{size: merged.Size(), modTime: merged.ModTime()}
 }
 
 // containersOwn reports whether the cache layer holds a file or link at a share

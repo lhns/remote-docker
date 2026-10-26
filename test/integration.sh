@@ -2224,8 +2224,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         fi
 
         # The read above passes with an empty cache too, since a miss falls
-        # through. Write-back is gated on a complete fill, so a fill that did
-        # nothing would otherwise surface later as a write that never arrived.
+        # through, so the fill itself is asserted to have finished.
         if wait_output "$UNIONDIR: .*, cached\$" 20 "$WORK/remote-docker" remote status; then
             ok "the fill completed, so the share is cached rather than only live"
         else

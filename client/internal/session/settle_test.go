@@ -22,8 +22,8 @@ type oneFileStore struct {
 	pulled int
 }
 
-func (s *oneFileStore) Apply(context.Context, string, string, []dircache.Entry) ([]string, error) {
-	return nil, nil
+func (s *oneFileStore) Apply(context.Context, string, string, []dircache.Entry, bool) (dircache.Applied, error) {
+	return dircache.Applied{}, nil
 }
 func (s *oneFileStore) Drop(context.Context, string, []string) error { return nil }
 func (s *oneFileStore) Changes(context.Context, string) ([]dircache.Change, error) {

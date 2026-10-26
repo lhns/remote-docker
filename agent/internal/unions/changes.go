@@ -284,7 +284,7 @@ func pull(upper string, paths []string, carry bool) ([]byte, []cache.Unreadable,
 
 	var buf bytes.Buffer
 	if !carry {
-		if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
+		if _, err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
 			return nil, nil, err
 		}
 		return buf.Bytes(), nil, nil

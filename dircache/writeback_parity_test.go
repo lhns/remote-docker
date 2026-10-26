@@ -625,24 +625,25 @@ func TestAContainerChangeWithinTheMarginLoses(t *testing.T) {
 }
 
 // fillKeeper is a store whose far end keeps the consumer's version of named
-// files when a fill batch carries them (FillApplier).
+// files when a fill batch carries them.
 type fillKeeper struct {
 	*faultStore
 	theirs map[string]bool
 }
 
-func (f fillKeeper) ApplyFill(ctx context.Context, share, root string, entries []Entry) ([]string, []string, error) {
+func (f fillKeeper) Apply(ctx context.Context, share, root string, entries []Entry, fill bool) (Applied, error) {
 	var kept []string
 	var rest []Entry
 	for _, e := range entries {
-		if f.theirs["/"+e.Path] {
+		if fill && f.theirs["/"+e.Path] {
 			kept = append(kept, "/"+e.Path)
 			continue
 		}
 		rest = append(rest, e)
 	}
-	skipped, err := f.Apply(ctx, share, root, rest)
-	return skipped, kept, err
+	applied, err := f.faultStore.Apply(ctx, share, root, rest, fill)
+	applied.Kept = kept
+	return applied, err
 }
 
 // A file the far end kept as the consumer had it is not in the cache as this

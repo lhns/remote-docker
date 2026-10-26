@@ -313,11 +313,8 @@ func (c *Cache) writeBackShare(ctx context.Context, share string, force bool) pa
 			kept[conflict.Path] = Skipped{Path: conflict.Path, Why: conflict.Why, Kind: SkipKept}
 			continue
 		}
-		if c.shares.wb.conflictNew(share, conflict.Path, conflict.Why) {
-			c.log().Warn("a file changed in both places",
-				"path", strings.TrimPrefix(conflict.Path, "/"),
-				"kind", conflict.kind, "outcome", conflict.Why)
-		}
+		c.sayOnce(share, conflict.Path, conflict.Why, "a file changed in both places",
+			"kind", conflict.kind, "outcome", conflict.Why)
 	}
 	for _, sk := range c.shares.wb.keptNow(share, kept, pass.change) {
 		if ctx.Err() == nil {
@@ -588,13 +585,10 @@ func landLink(r *os.Root, rel, target string) error {
 //
 // guard, if not nil, is asked just before the rename, so a file that changed
 // here while it was being written is not replaced (errChangedHere).
-func writeUnder(r *os.Root, file File, guard func() bool) error {
-	return writeUnderExec(r, file, guard, 0)
-}
-
-// writeUnderExec is writeUnder leaving an existing file with the execute bit
-// the consumer gave it (action.Exec): +1 set, -1 clear, 0 as it was here.
-func writeUnderExec(r *os.Root, file File, guard func() bool, exec int8) error {
+//
+// exec is the execute bit to leave an existing file with (action.Exec): +1 set,
+// -1 clear, 0 as it was here.
+func writeUnder(r *os.Root, file File, guard func() bool, exec int8) error {
 	rel := relPath(file.Path)
 	if err := r.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return err

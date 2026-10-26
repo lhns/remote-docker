@@ -43,7 +43,7 @@ func TestWriteUnderRefusesAPathThatLeavesTheShare(t *testing.T) {
 		"/a/../../escaped",
 		"/a/b/../../../escaped",
 	} {
-		err := writeUnder(openRoot(t, root), File{Path: name, Mode: 0o644, Body: strings.NewReader("x")}, nil)
+		err := writeUnder(openRoot(t, root), File{Path: name, Mode: 0o644, Body: strings.NewReader("x")}, nil, 0)
 		if err == nil {
 			t.Errorf("writeUnder(%q) = %v, want a refusal", name, err)
 		}
@@ -73,7 +73,7 @@ func TestWriteUnderRefusesASiblingOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := writeUnder(openRoot(t, root), File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")}, nil)
+	err := writeUnder(openRoot(t, root), File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")}, nil, 0)
 	if err == nil {
 		t.Fatalf("writeUnder into a sibling = %v, want a refusal", err)
 	}
@@ -89,7 +89,7 @@ func TestWriteUnderKeepsTheModificationTime(t *testing.T) {
 	err := writeUnder(openRoot(t, root), File{
 		Path: "/pkg/deep/lib.go", ModTime: wrote, Mode: 0o644,
 		Body: strings.NewReader("package deep\n"),
-	}, nil)
+	}, nil, 0)
 	if err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
@@ -118,10 +118,10 @@ func TestWriteUnderKeepsAnExistingFilesPermissions(t *testing.T) {
 	}
 	r := openRoot(t, root)
 
-	if err := writeUnder(r, File{Path: "/secret.env", Mode: 0o644, Body: strings.NewReader("new\n")}, nil); err != nil {
+	if err := writeUnder(r, File{Path: "/secret.env", Mode: 0o644, Body: strings.NewReader("new\n")}, nil, 0); err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
-	if err := writeUnder(r, File{Path: "/new.sh", Mode: 0o700, Body: strings.NewReader("#!/bin/sh\n")}, nil); err != nil {
+	if err := writeUnder(r, File{Path: "/new.sh", Mode: 0o700, Body: strings.NewReader("#!/bin/sh\n")}, nil, 0); err != nil {
 		t.Fatalf("writeUnder: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 
 	c := cacheWith(t, store)
 	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-	c.shares.noteSent("/m/1111111111111111", root, []Entry{{Path: "main.go", Size: 7}})
+	c.shares.noteSent("/m/1111111111111111", readHere(root, []Entry{{Path: "main.go", Size: 7}}))
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111", false)
 

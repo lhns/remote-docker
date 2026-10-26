@@ -185,13 +185,13 @@ type applied struct {
 }
 
 // noteApplied records what was just written through the union.
-func (l *live) noteApplied(name string, size int64, modTime time.Time, ctime int64) {
+func (l *live) noteApplied(name string, a applied) {
 	l.appliedMu.Lock()
 	defer l.appliedMu.Unlock()
 	if l.applied == nil {
 		l.applied = map[string]applied{}
 	}
-	l.applied[name] = applied{size: size, modTime: modTime, ctime: ctime}
+	l.applied[name] = a
 }
 
 // forgetApplied drops a path, so a file the client removed and the container

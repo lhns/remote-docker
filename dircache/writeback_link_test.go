@@ -59,7 +59,7 @@ func TestWriteUnderRefusesALinkLeavingTheShare(t *testing.T) {
 
 			r := openRoot(t, share)
 			for _, p := range []string{"/link/new.txt", "/link/sub/new.txt"} {
-				err := writeUnder(r, File{Path: p, Mode: 0o644, ModTime: time.Now(), Body: strings.NewReader("x")}, nil)
+				err := writeUnder(r, File{Path: p, Mode: 0o644, ModTime: time.Now(), Body: strings.NewReader("x")}, nil, 0)
 				if err == nil {
 					t.Errorf("writeUnder(%q) through a link out of the share succeeded", p)
 				}
@@ -97,7 +97,7 @@ func TestWriteBackShareDoesNotDeleteThroughALink(t *testing.T) {
 			c := cacheWith(t, store)
 			const id = "/m/1111111111111111"
 			c.shares.set(id, share, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-			c.shares.noteSent(id, share, []Entry{{Path: "link/victim.txt", Size: 4}})
+			c.shares.noteSent(id, readHere(share, []Entry{{Path: "link/victim.txt", Size: 4}}))
 
 			c.writeBackShare(t.Context(), id, false)
 
@@ -123,7 +123,7 @@ func TestWriteUnderFollowsALinkInsideTheShare(t *testing.T) {
 			// Relative: os.Root treats an absolute link target as leaving the root.
 			lm.make(t, filepath.Join(share, "link"), "real")
 
-			err := writeUnder(openRoot(t, share), File{Path: "/link/f.txt", Mode: 0o644, Body: strings.NewReader("x")}, nil)
+			err := writeUnder(openRoot(t, share), File{Path: "/link/f.txt", Mode: 0o644, Body: strings.NewReader("x")}, nil, 0)
 			if err != nil {
 				t.Fatalf("writeUnder through an inside link: %v", err)
 			}

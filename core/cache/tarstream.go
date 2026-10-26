@@ -5,8 +5,8 @@ package cache
 //
 // Here rather than in either module because the two directions must produce the
 // SAME thing: write-back compares a change's modification time against the
-// baseline the fill recorded, so "the mtime survives the round trip" is
-// behaviour both ends depend on. It was asserted independently in two modules,
+// baseline the fill recorded, so "the mtime survives the round trip, to the
+// second" is behaviour both ends depend on. It was asserted independently in two modules,
 // which is the drift ADR 0021 exists to prevent.
 //
 // The stream only. Extracting is deliberately NOT shared: the agent creates
@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // TarFile is one entry to carry: the name it takes in the archive, and where to
@@ -46,21 +47,32 @@ func TarFilesFrom(root string, names []string) []TarFile {
 	return out
 }
 
-// WriteTar writes the files as a tar.
+// Read is one file as a tar carries it: its size and modification time when it
+// was opened, which is the version the entry holds. The entry's own time is
+// this one rounded to the second (archive/tar does that unless a format is
+// chosen), so a stat taken afterwards may describe a version the tar never saw.
+type Read struct {
+	Name    string
+	Size    int64
+	ModTime time.Time
+}
+
+// WriteTar writes the files as a tar, and answers with each file it carried.
 //
 // A file that cannot be opened or stat'ed, or that is not regular, is SKIPPED
 // rather than failing the archive. On the client that is a file locked by
 // another process, which is ordinary on Windows; on the agent it is a file the
 // container removed between being listed and being read. Either way one absent
 // file is better than a batch nobody gets.
-func WriteTar(files []TarFile, w io.Writer) error {
+func WriteTar(files []TarFile, w io.Writer) ([]Read, error) {
 	return WriteTarFrom(os.Open, files, w)
 }
 
 // WriteTarFrom is WriteTar opening each Path with open, for a caller that must
 // not follow a symlink out of a directory: the agent passes os.Root.Open.
-func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Writer) error {
+func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Writer) ([]Read, error) {
 	tw := tar.NewWriter(w)
+	read := make([]Read, 0, len(files))
 
 	for _, file := range files {
 		// Opened BEFORE its header is written. Once the header is out the entry
@@ -89,12 +101,12 @@ func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Wri
 
 		if err := tw.WriteHeader(header); err != nil {
 			_ = f.Close()
-			return fmt.Errorf("workspace: writing the header for %s: %w", file.Name, err)
+			return nil, fmt.Errorf("workspace: writing the header for %s: %w", file.Name, err)
 		}
 		written, err := io.Copy(tw, io.LimitReader(f, header.Size))
 		_ = f.Close()
 		if err != nil {
-			return fmt.Errorf("workspace: writing %s: %w", file.Name, err)
+			return nil, fmt.Errorf("workspace: writing %s: %w", file.Name, err)
 		}
 		// A file that shrank while it was read leaves the entry short, which
 		// the writer reports on the NEXT header rather than here. Pad instead:
@@ -102,12 +114,13 @@ func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Wri
 		// invalidated, and a failed batch costs every file in it.
 		if pad := header.Size - written; pad > 0 {
 			if _, err := tw.Write(make([]byte, pad)); err != nil {
-				return fmt.Errorf("workspace: padding %s: %w", file.Name, err)
+				return nil, fmt.Errorf("workspace: padding %s: %w", file.Name, err)
 			}
 		}
+		read = append(read, Read{Name: file.Name, Size: info.Size(), ModTime: info.ModTime()})
 	}
 
-	return tw.Close()
+	return read, tw.Close()
 }
 
 // Unreadable is one file WriteTarNaming left out, and why.

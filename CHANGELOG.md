@@ -28,6 +28,10 @@ software.
 - **An edit on your machine could overwrite a newer write from the
   container** when the two came within a fraction of a second. The later one
   now wins.
+- **A file you deleted or edited on your machine could come back** from a
+  `write=back` share's cache, as if the container had changed it, when it was
+  the copy your machine had sent there. Most likely after the workspace
+  restarted, or for a file being rewritten while it was sent.
 - Upgrade both the client and the workspace. With only the client upgraded,
   changed files come back, but deletions made in a container are kept, and
   `remote status` says the workspace needs updating.

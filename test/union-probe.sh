@@ -766,6 +766,22 @@ if command -v fuse-overlayfs >/dev/null 2>&1; then
         else
             info "RECORDED: no opaque marker ctime earlier than a later write (marker [$marker], later [$later])"
         fi
+
+        # The agent lands a file through the union and records it by a stat;
+        # Changes reads the layer and leaves out what matches (ADR 0044). A
+        # ctime the mount reports and the layer does not have makes every
+        # landed file read as the container's.
+        sudo sh -c "printf 'landed
+' >$PB/merged/landed.txt && touch -m -d '2020-01-02 03:04:05.5' $PB/merged/landed.txt"
+        via_mount=$(sudo stat -c '%z' "$PB/merged/landed.txt")
+        in_layer=$(sudo stat -c '%z' "$PB/upper/landed.txt" 2>&1)
+        sleep 1
+        in_layer_later=$(sudo stat -c '%z' "$PB/upper/landed.txt" 2>&1)
+        if [ "$via_mount" = "$in_layer" ] && [ "$in_layer" = "$in_layer_later" ]; then
+            info "RECORDED: a file landed through the union has one ctime, through the mount and in the layer ($in_layer)"
+        else
+            info "RECORDED: a file landed through the union has ctime [$via_mount] through the mount, [$in_layer] in the layer, [$in_layer_later] a second later"
+        fi
         sudo umount "$PB/merged" 2>/dev/null
     else
         info "fuse-overlayfs would not mount for section 14: $(cat "$WORK/parity.err")"

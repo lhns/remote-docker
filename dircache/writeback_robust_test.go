@@ -40,16 +40,16 @@ type faultStore struct {
 	asked   []string // what Present was asked
 }
 
-func (f *faultStore) Apply(_ context.Context, _, _ string, entries []Entry) ([]string, error) {
+func (f *faultStore) Apply(_ context.Context, _, root string, entries []Entry, _ bool) (Applied, error) {
 	if f.applyFn != nil {
 		if err := f.applyFn(entries); err != nil {
-			return nil, err
+			return Applied{}, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = append(f.applied, entries...)
-	return f.skip(entries), nil
+	return Applied{Read: readHere(root, entries), Skipped: f.skip(entries)}, nil
 }
 
 // skip names the entries the far end is scripted to leave out.
@@ -263,7 +263,7 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 			attempts++
 			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 
 	rounds(t, c, clk, 5)
@@ -301,7 +301,7 @@ func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 		if full {
 			return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 		}
-		return writeUnder(r, f, nil)
+		return writeUnder(r, f, nil, 0)
 	}
 
 	rounds(t, c, clk, 4)
@@ -443,7 +443,7 @@ func TestWriteBackEventuallyLandsEverythingWhateverFailedFirst(t *testing.T) {
 				if faulty && rng.IntN(4) == 0 {
 					return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 				}
-				return writeUnder(r, f, nil)
+				return writeUnder(r, f, nil, 0)
 			}
 
 			rounds(t, c, clk, 15)

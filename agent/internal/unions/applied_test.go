@@ -11,7 +11,7 @@ import (
 func TestAppliedRecord(t *testing.T) {
 	var l live
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	l.noteApplied("/pkg/lib.go", 120, at, 7)
+	l.noteApplied("/pkg/lib.go", applied{size: 120, modTime: at, ctime: 7})
 
 	if !l.isApplied("/pkg/lib.go", 120, at, 7) {
 		t.Error("what the client wrote was not recognised")

@@ -175,7 +175,7 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 	}
 	entries := []dircache.Entry{{Path: "main.go", Size: int64(len(body))}}
 
-	plain, err := tarOf(root, entries, cache.CodecNone)
+	plain, _, err := tarOf(root, entries, cache.CodecNone)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 		t.Fatalf("the plain batch held %v", names)
 	}
 
-	zipped, err := tarOf(root, entries, cache.CodecZstd)
+	zipped, _, err := tarOf(root, entries, cache.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf zstd: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestTarOfClosesTheCompressor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	zipped, err := tarOf(root, []dircache.Entry{{Path: "a.go", Size: 1}}, cache.CodecZstd)
+	zipped, _, err := tarOf(root, []dircache.Entry{{Path: "a.go", Size: 1}}, cache.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}
