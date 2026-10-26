@@ -366,6 +366,33 @@ jobs:
           if ($item.LinkType -ne 'SymbolicLink') { throw "a link the container made did not arrive as a link" }
           .\client\rd.exe rm -f wbprobe
 
+      # A file that was here before the container, rewritten there, arrives.
+      # With prefetch off the cache never held it, so who wrote last is read
+      # from the change time on each side, and on this side that is NTFS's
+      # ChangeTime (ADR 0044).
+      - name: write-back carries back a file that already existed here
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          New-Item -ItemType Directory wbexisting | Out-Null
+          Set-Content -NoNewline -Path wbexisting\index.json -Value 'from the runner'
+          .\client\rd.exe run -d --name wbexisting -v "${PWD}\wbexisting:/w:read=cached,write=back,prefetch=off" alpine:3 sleep 600
+          if ($LASTEXITCODE -ne 0) { throw "could not start the container" }
+
+          .\client\rd.exe exec wbexisting sh -c 'printf "from the container" >/w/index.json'
+          $deadline = (Get-Date).AddSeconds(60)
+          $got = ''
+          while ((Get-Date) -lt $deadline) {
+            $got = Get-Content wbexisting\index.json -Raw
+            if ($got -eq 'from the container') { break }
+            Start-Sleep -Seconds 2
+          }
+          if ($got -ne 'from the container') {
+            .\client\rd.exe remote status
+            throw "index.json holds [$got] 60s after the container rewrote it"
+          }
+          .\client\rd.exe rm -f wbexisting
+
       # A distribution left behind is a running Linux system nothing names.
       - name: rm takes the machine with it
         shell: pwsh
