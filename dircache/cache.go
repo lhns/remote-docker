@@ -444,7 +444,7 @@ func (c *Cache) withoutConsumerChanges(share, root string, store Store, entries 
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		if _, t := theirs[slashed(e.Path)]; t {
-			c.sayOnce(share, e.Path, "changed in the container and here before write-back carried it",
+			c.sayOnce(share, slashed(e.Path), "changed in the container and here before write-back carried it",
 				"a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept")
 			continue
 		}
