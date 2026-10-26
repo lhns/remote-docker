@@ -2892,8 +2892,9 @@ chmod 0644 "$PARDIR/script.sh"
 echo "this machine writes it last" >"$PARDIR/kept.txt"
 echo "nobody changes this" >"$PARDIR/lib/untouched.txt"
 
-# par_state lists every file with its time, size and mode, for "nothing changed".
-par_state() { find "$PARDIR" -type f -exec stat -c '%n %Y %s %a' {} + | sort; }
+# par_state lists every file under lib with its time, size and mode, for
+# "nothing changed".
+par_state() { find "$PARDIR/lib" -type f -exec stat -c '%n %Y %s %a' {} + | sort; }
 
 # wait_absent waits for a path to be gone here, and prints what is there if not.
 wait_absent() {
@@ -2913,9 +2914,10 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
 
         # An entrypoint's chown -R copies every file into the cache layer
         # with its size and time unchanged. A copy is not a change: nothing
-        # may be rewritten here for it.
+        # may be rewritten here for it. Only lib/: a copy is adopted as a file
+        # the cache holds, and the cases below are about files it never held.
         before=$(par_state)
-        if dockert exec itest-parity chown -R 1000:1000 /w >"$WORK/parity-chown.log" 2>&1; then
+        if dockert exec itest-parity chown -R 1000:1000 /w/lib >"$WORK/parity-chown.log" 2>&1; then
             # Three write-back rounds.
             sleep 15
             after=$(par_state)
