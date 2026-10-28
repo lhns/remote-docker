@@ -19,7 +19,9 @@ software.
   users as before, and upgrades of an existing all-users install are
   unchanged. The Hyper-V workspace still needs all users. Not covered: the
   dialog that asks which, which CI builds and never clicks, and another user's
-  own copy, which an all-users install cannot see.
+  own copy, which an all-users install cannot see. Installing for all users
+  while you have your own copy warns in the log; remove yours from Settings >
+  Apps.
 
 ## 0.16.1 — 2026-10-26
 

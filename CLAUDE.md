@@ -1568,8 +1568,10 @@ with no arguments PROBED and refused (1603, error 1925: the context is
 resolved before any sequence), and one with `MSIINSTALLPERUSER=1` going to `%LocalAppData%\Programs` and the user PATH with
 nothing in Program Files, HKLM or the system PATH, the `docker.exe` feature and
 its refusals (System32 and Docker Desktop's real Program Files), the Hyper-V
-refusal, a per-user install over an all-users one refused and the reverse, and
-a per-user upgrade. Each Windows Installer premise (AdminUser, ProgramFiles64Folder,
+refusal, a per-user install over an all-users one refused, an all-users install
+over the installing user's copy warning in the log and that copy then removed
+with `msiexec /x` by a user without administrator rights (9j), and a per-user
+upgrade. Each Windows Installer premise (AdminUser, ProgramFiles64Folder,
 FindRelatedProducts missing the other context) is printed from the log.
 Sections 11 to 19
 run the optional Hyper-V workspace against a STAND-IN for Hyper-V (the
@@ -1609,9 +1611,8 @@ its pure planning function was.
 - **A per-user MSI install from the dialog, or by another user.** CI installs
   per user silently as a standard local user (9f to 9k) and builds the scope
   dialog (`ScopeDlg`), but no CI clicks it, so the shield, the folder it sets
-  and Back navigation are unrun. Another user's per-user copy is not detected
-  by an all-users install, nor the reverse for a user other than the one
-  installing. An unelevated administrator's shell has no AdminUser, so a silent
+  and Back navigation are unrun, and the reverse-case warning is in the log only.
+  Another user's per-user copy is not detected by an all-users install. An unelevated administrator's shell has no AdminUser, so a silent
   install there is per user.
 - **The MSI's Hyper-V workspace beyond one hand run.** CI proves the
   installer, service, group, rollback and upgrade around a stand-in. Real

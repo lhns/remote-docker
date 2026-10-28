@@ -570,28 +570,63 @@ Invoke-Msi @('/x', $Msi) 'co-machine-uninstall' 0
 Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
-Section '9j. and a per-machine install over the installing user''s own per-user copy is refused'
+Section '9j. an all-users install over the installing user''s own copy warns, and the copy can still be removed'
 
+# The same package across contexts is refused by Windows Installer itself, so
+# the user's copy is the 0.0.1 stand-in and the all-users one is 99.0.0.
 # An administrator may install for themselves too, by asking for it.
 $userDir = Join-Path $env:LOCALAPPDATA 'Programs\remote-docker'
-Invoke-Msi @('/i', $Msi, 'MSIINSTALLPERUSER=1') 'co-user' 0
+Invoke-Msi @('/i', $StandinMsi, 'MSIINSTALLPERUSER=1') 'co-user' 0
 if (-not (Test-Path (Join-Path $userDir 'remote-docker.exe'))) { Fail "MSIINSTALLPERUSER=1 did not install into $userDir" }
 if (Test-Path $Exe) { Fail "$Exe exists after a per-user install by an administrator" }
 Ok "MSIINSTALLPERUSER=1 installs into $userDir, even for an administrator"
-Invoke-Msi @('/i', $StandinMsi) 'co-user-machine' 1603
+Invoke-Msi @('/i', $Msi) 'co-user-machine' 0
 $cl = Log-Of 'co-user-machine'
-if ($cl -notmatch 'already installed for your account alone') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
+$warn = [regex]::Match($cl, '(?m)^.*USEROVERMACHINEWARNING.*$').Value
+Write-Host "  saw: [$warn]"
+if ($warn -notmatch 'also installed for your account alone') { Fail "the warning is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
+if ($warn -notmatch 'msiexec /x') { Fail "the warning does not say how to remove the copy: [$warn]" }
+Ok 'the all-users install succeeded and the log carries the warning'
 $fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value }
 Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
 if ($fr) { Fail "FindRelatedProducts saw the per-user product from a per-machine install: [$($fr -join '; ')]" }
-Ok 'refused, and FindRelatedProducts did not see it either'
-if (Test-Path $Exe) { Fail "$Exe exists after the refused per-machine install" }
-Invoke-Msi @('/x', $Msi) 'co-user-uninstall' 0
-if (Test-Path (Join-Path $userDir 'remote-docker.exe')) { Fail "uninstalling left $userDir\remote-docker.exe" }
+if (-not (Test-Path $Exe)) { Fail "$Exe is missing after the all-users install" }
+if (-not (Test-Path (Join-Path $userDir 'remote-docker.exe'))) { Fail 'the all-users install took the per-user copy away' }
+Ok 'both are installed, and FindRelatedProducts saw neither as the other'
+
+# Which product does /x of the stand-in's package pick, with both present?
+Invoke-Msi @('/x', $StandinMsi) 'co-user-remove' 0
+if (Test-Path (Join-Path $userDir 'remote-docker.exe')) { Fail "uninstalling the per-user copy left $userDir\remote-docker.exe" }
 if ([Environment]::GetEnvironmentVariable('Path', 'User') -like '*remote-docker*') { Fail "the user PATH still names remote-docker: $([Environment]::GetEnvironmentVariable('Path', 'User'))" }
 if (Test-Path 'HKCU:\SOFTWARE\lhns\remote-docker') { Fail 'HKCU\Software\lhns\remote-docker is left behind' }
+if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
+  Fail 'removing the per-user copy damaged the all-users install'
+}
+Ok 'msiexec /x of the older package removed the per-user copy only; the all-users install is intact'
+Invoke-Msi @('/x', $Msi) 'co-user-machine-uninstall' 0
 Assert-NotInstalled
-Ok 'the per-user copy is gone with its PATH entry and key'
+
+# The same, by a user with no administrator rights removing their own copy.
+Invoke-AsStdMsi @('/i', $StdStandin1, 'MSIINSTALLPERUSER=1') 'std-co-user' 0
+Invoke-Msi @('/i', $Msi) 'std-co-machine' 0
+$f = Get-StdFacts 'facts-co-before'
+if ($f.arp -notmatch '0\.0\.1') { Fail "the standard user's own copy is not registered: [$($f.arp)]" }
+Invoke-AsStdMsi @('/x', $StdStandin1) 'std-co-remove' 0
+$f = Get-StdFacts 'facts-co-after' 'remote-docker remote --help'
+$stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
+if (Test-Path (Join-Path $stdDir 'remote-docker.exe')) { Fail "$stdDir\remote-docker.exe is left" }
+if ($f.userpath -like '*remote-docker*') { Fail "the user's PATH still names remote-docker: $($f.userpath)" }
+if ($f.key -eq 'True') { Fail 'HKCU\Software\lhns\remote-docker is left for the standard user' }
+if ($f.arp -notmatch '99\.0\.0' -or $f.arp -match '0\.0\.1') { Fail "after removing their copy the registered products are [$($f.arp)], expected only 99.0.0" }
+Ok 'their files, PATH entry and key are gone, and only the all-users product is left'
+if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
+  Fail 'the standard user removing their copy damaged the all-users install'
+}
+Ok 'the all-users install, its system PATH entry and HKLM marker are intact'
+if ($f.code -ne '0') { Fail "exit $($f.code) from a fresh shell of $StdName after the removal; output: $($f.output)" }
+Ok 'a fresh shell of that user still runs remote-docker'
+Invoke-Msi @('/x', $Msi) 'std-co-machine-uninstall' 0
+Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
 Section '9k. a per-user install upgrades in place'

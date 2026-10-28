@@ -112,10 +112,14 @@ the installer only appends its own entry and only removes that one on
 uninstall. Remove your own entry before installing, or that copy keeps running
 instead of the installed one.
 
-A user's copy and an all-users copy are never both installed: the second
-install says so and stops, and the Hyper-V workspace below needs all users.
-Another user's own copy is not noticed, so on a shared computer the all-users
-copy is the one their PATH finds first.
+Installing for yourself over an all-users copy is refused. Installing for all
+users while you have your own copy works and warns in the log: your copy stays
+installed and is no longer used, because the all-users copy comes first on
+PATH. Remove it from Settings > Apps, or with `msiexec /x` and the MSI it was
+installed from, as yourself and without administrator rights (a different
+version of the MSI than the all-users one, since Windows Installer refuses the
+same package across the two). Another user's own copy is not noticed. The
+Hyper-V workspace below needs all users.
 
 **The `docker.exe` option is off by default.** Selected, it installs a second
 copy of the same binary as `docker.exe`, so `docker run ...` on this machine is

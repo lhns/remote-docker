@@ -157,13 +157,22 @@ fires, which is silent for a release cycle.
   | markers | HKLM | HKCU (`HKMU`) |
   | Hyper-V | available | level 0, and `ADDLOCAL=...HyperV` is refused by name |
 
-- **One install per user, never two copies on PATH.** `FindRelatedProducts`
+- **A per-user install over an all-users one is refused; the reverse warns.** `FindRelatedProducts`
   sees only the context it runs in, so each context looks for the other by
   what it wrote: `HKLM\Software\lhns\remote-docker\Installed` (or `Path`,
   from 0.16.x and earlier) and the same value under HKCU. A per-user
-  install over an all-users one is refused, and so is the reverse. **Not
-  detected:** another user's per-user copy, whose hive this install cannot
-  read; their PATH still finds the machine copy first.
+  install over an all-users one is refused. An all-users install over the
+  installing user's own copy succeeds and logs `USEROVERMACHINEWARNING` (a
+  `SetProperty` whose value is the message): the copy stays installed and
+  unused, since the system PATH comes first, and the user removes it with
+  Settings > Apps or `msiexec /x` of the package it came from, as that user and
+  without administrator rights. CI shows `/x` of the older package picks the
+  per-user product while the all-users one exists (9j). The same package across
+  contexts is refused by Windows Installer itself (1625 for a standard user:
+  "installed per-machine", maintenance mode), so this holds for a different
+  version. The scope dialog does not show the warning (WiX 5's UI element takes
+  no `ControlCondition`). **Not detected:** another user's per-user copy, whose
+  hive this install cannot read.
 - **The `docker.exe` refusal reads Docker Desktop's directories through
   `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
   a per-user install, so searching it would have stopped refusing.

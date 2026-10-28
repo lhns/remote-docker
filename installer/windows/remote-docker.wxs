@@ -128,7 +128,7 @@
     </InstallExecuteSequence>
 
     <!--
-      ONE INSTALL PER USER, NEVER TWO COPIES ON PATH. FindRelatedProducts sees
+      ONE INSTALL PER USER, AND NO SECOND COPY OVER AN ALL-USERS ONE. FindRelatedProducts sees
       only products in the context of this install, so the other context is
       looked for by what it wrote (component C.Installed; installs from 0.16.x
       and earlier have the Path value instead). Another user's per-user copy is
@@ -149,25 +149,31 @@
                       Name="Installed" Type="raw" />
     </Property>
 
+    <!--
+      The reverse case warns instead of refusing: an all-users install over the
+      installing user's own copy works, and the user's copy stays installed and
+      unused, since the system PATH comes first. The warning is a property, so
+      it is in the log as a property change. The scope dialog does not show it
+      (WiX 5's UI element takes no ControlCondition to follow the radio choice).
+      Only the installing user's own hive can be read, so no one else's copy
+      is noticed.
+    -->
+    <SetProperty Id="USEROVERMACHINEWARNING" Before="CostInitialize" Sequence="both"
+                 Value="WARNING: remote-docker is also installed for your account alone. That copy stays installed and is no longer used, because the all-users copy comes first on PATH. To remove it, use Settings, Apps, or run msiexec /x with the msi it was installed from, as that user and without administrator rights."
+                 Condition="NOT Installed AND NOT MSIINSTALLPERUSER=1 AND USERINSTALL" />
     <CustomAction Id="RefuseUserOverMachine"
                   Error="remote-docker is already installed for all users on this computer.&#xA;fix: use that copy, or ask an administrator to uninstall it first." />
-    <CustomAction Id="RefuseMachineOverUser"
-                  Error="remote-docker is already installed for your account alone, and a second copy for all users would put it on PATH twice.&#xA;fix: uninstall your own copy first, then install for all users." />
     <CustomAction Id="RefuseHyperVPerUser"
                   Error="The Hyper-V workspace needs an installation for all users, which needs administrator rights, and this is an installation for one user.&#xA;fix: as an administrator, run this installer again with MSIINSTALLPERUSER=&quot;&quot; (or choose &quot;For all users&quot;)." />
     <InstallUISequence>
       <Custom Action="RefuseUserOverMachine" After="CostFinalize"
               Condition="NOT Installed AND MSIINSTALLPERUSER=1 AND (MACHINEINSTALL OR MACHINEINSTALLOLD)" />
-      <Custom Action="RefuseMachineOverUser" After="CostFinalize"
-              Condition="NOT Installed AND NOT MSIINSTALLPERUSER=1 AND USERINSTALL" />
       <Custom Action="RefuseHyperVPerUser" After="CostFinalize"
               Condition="ADDLOCAL &gt;&lt; &quot;HyperV&quot; AND MSIINSTALLPERUSER=1" />
     </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="RefuseUserOverMachine" After="CostFinalize"
               Condition="NOT Installed AND MSIINSTALLPERUSER=1 AND (MACHINEINSTALL OR MACHINEINSTALLOLD)" />
-      <Custom Action="RefuseMachineOverUser" After="CostFinalize"
-              Condition="NOT Installed AND NOT MSIINSTALLPERUSER=1 AND USERINSTALL" />
       <Custom Action="RefuseHyperVPerUser" After="CostFinalize"
               Condition="ADDLOCAL &gt;&lt; &quot;HyperV&quot; AND MSIINSTALLPERUSER=1" />
     </InstallExecuteSequence>
