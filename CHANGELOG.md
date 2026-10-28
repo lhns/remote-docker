@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## 0.17.0 — 2026-10-28
+## 0.16.2 — 2026-10-28
 
 ### New
 
