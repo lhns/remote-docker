@@ -333,18 +333,19 @@ function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
   if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
 }
 
-# GitHub's Windows image sets the machine policy DisableMsi=1, "Windows Installer:
+# Windows Server defaults the machine policy DisableMsi to 1, "Windows Installer:
 # Turn off Windows Installer for non-managed apps only", under which Windows
 # Installer rejects any install by a user without administrator rights, in
 # either context (1625, "Non-assigned apps are disabled for non-admin users").
-# That is the image's policy and not the package's, so it is lifted for these
-# sections and put back after them.
+# windows-latest is a Server image, so it is set to 0 for these sections and put
+# back after them. Windows 11 defaults to 0.
 $PolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer'
 $policyBefore = (Get-ItemProperty $PolicyKey -Name DisableMsi -ErrorAction SilentlyContinue).DisableMsi
 Write-Host "  DisableMsi policy before: [$policyBefore]"
-if ($null -ne $policyBefore -and $policyBefore -ne 0) {
-  Set-ItemProperty $PolicyKey -Name DisableMsi -Value 0
-  Write-Host '  lifted DisableMsi to 0 for sections 9e to 9k'
+if ($policyBefore -ne 0) {
+  New-Item -Path $PolicyKey -Force | Out-Null
+  Set-ItemProperty $PolicyKey -Name DisableMsi -Value 0 -Type DWord
+  Write-Host '  set DisableMsi to 0 for sections 9e to 9k'
 }
 
 # The MSIs where the standard user can read them, and msiexec as that user: a
@@ -626,9 +627,9 @@ Ok 'FindRelatedProducts found the per-user product in the same context; one PATH
 Invoke-AsStdMsi @('/x', $StdStandin2) 'std-up-uninstall' 0
 Assert-StdNotInstalled 'after the upgraded copy is uninstalled'
 
-if ($null -ne $policyBefore -and $policyBefore -ne 0) {
-  Set-ItemProperty $PolicyKey -Name DisableMsi -Value $policyBefore
-  Write-Host "  put DisableMsi back to $policyBefore"
+if ($policyBefore -ne 0) {
+  if ($null -eq $policyBefore) { Remove-ItemProperty $PolicyKey -Name DisableMsi } else { Set-ItemProperty $PolicyKey -Name DisableMsi -Value $policyBefore }
+  Write-Host "  put DisableMsi back to [$policyBefore]"
 }
 
 # ===========================================================================
