@@ -598,7 +598,9 @@ Ok 'both are installed, and FindRelatedProducts saw neither as the other'
 Invoke-Msi @('/x', $StandinMsi) 'co-user-remove' 0
 if (Test-Path (Join-Path $userDir 'remote-docker.exe')) { Fail "uninstalling the per-user copy left $userDir\remote-docker.exe" }
 if ([Environment]::GetEnvironmentVariable('Path', 'User') -like '*remote-docker*') { Fail "the user PATH still names remote-docker: $([Environment]::GetEnvironmentVariable('Path', 'User'))" }
-if (Test-Path 'HKCU:\SOFTWARE\lhns\remote-docker') { Fail 'HKCU\Software\lhns\remote-docker is left behind' }
+if (Test-Path 'HKCU:\SOFTWARE\lhns\remote-docker') {
+  Fail "HKCU\Software\lhns\remote-docker is left behind with: $((Get-ItemProperty 'HKCU:\SOFTWARE\lhns\remote-docker' | Format-List | Out-String))"
+}
 if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
   Fail 'removing the per-user copy damaged the all-users install'
 }
