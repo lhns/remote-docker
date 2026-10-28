@@ -35,13 +35,11 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # -trimpath makes Go leave -ldflags out of the binary's build info, and
-    # that is the only place syft reads a -X version from, so an SBOM names the
-    # main module by its commit (v0.0.0-<time>-<revision>), not by the release,
-    # whatever the order of the -X flags. Measured with syft 1.55.0 on
+    # -trimpath leaves -ldflags out of the build info, the only place syft
+    # reads a -X version from, so an SBOM names the commit
+    # (v0.0.0-<time>-<revision>) rather than the release. syft 1.55.0,
     # 2026-10-28; re-check against a built archive with
     #   syft <archive> -o json | jq '.artifacts[] | select(.name | endswith("/client")) | .version'
-    # Without -trimpath the same build reports main.version.
     ldflags: &ldflags
       - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
     goos: [windows, linux, darwin]
