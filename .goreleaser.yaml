@@ -38,8 +38,14 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # main.version LAST, and the order is load-bearing: syft reports the
+    # last -X version it finds as the main module's version, so with Compose's
+    # flag after it every client SBOM said v5.6.0 instead of the release.
+    # Measured with syft 1.14.0 on 2026-10-28 (the release workflow pins it);
+    # re-check against a built archive with
+    #   syft <archive> -o json | jq '.artifacts[] | select(.name | endswith("/client")) | .version'
     ldflags: &ldflags
-      - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
+      - -s -w -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }} -X main.version={{.Version}}
     goos: [linux]
     goarch: [amd64, arm64]
 
