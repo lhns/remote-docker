@@ -103,3 +103,38 @@ jobs:
             dist/*.json
             dist/checksums.txt
           retention-days: 3
+
+  vermatrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-go
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+      - name: build and scan
+        run: |
+          set -u
+          mkdir -p /tmp/vt/cmd/rd /tmp/vt/internal /tmp/out && cd /tmp/vt
+          printf 'module example.com/rd/client\n\ngo 1.22\n' > go.mod
+          printf 'package internal\n\nvar Version = "dev"\n' > internal/v.go
+          printf 'package main\n\nimport (\n"fmt"\n"example.com/rd/client/internal"\n)\n\nvar version = "dev"\n\nfunc main() { fmt.Println(version, internal.Version) }\n' > cmd/rd/main.go
+          I=example.com/rd/client/internal.Version
+          n=0
+          while IFS='|' read -r label flags; do
+            CGO_ENABLED=0 go build -trimpath -o "/tmp/out/$label" -ldflags "$flags" ./cmd/rd
+            printf '%-8s ldflags=[%s]\n' "$label" "$flags"
+            for v in "" "SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false" "SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false"; do
+              got=$(env $v syft "/tmp/out/$label" -o json 2>/dev/null | jq -r '.artifacts[]|select(.name=="example.com/rd/client")|.version')
+              printf '    %-100s -> %s\n' "${v:-default}" "$got"
+            done
+          done <<LIST
+          a|-s -w -X main.version=0.99.0
+          b|-s -w -X main.version=v0.99.0
+          c|-s -w -X main.version=0.99.0 -X $I=v5.6.0
+          d|-s -w -X $I=v5.6.0 -X main.version=0.99.0
+          e|-s -w -X main.version=v0.99.0 -X $I=v5.6.0
+          f|-s -w -X main.Version=0.99.0
+          g|-s -w -X main.version=0.99.0 -X $I=5.6.0
+          h|-s -w -X main.version=0.99.0 -X $I=dev
+          LIST
