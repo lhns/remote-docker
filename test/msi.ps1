@@ -53,9 +53,9 @@ function Ok([string]$message) {
 
 # The log is printed whenever the exit code is not the one asked for, because
 # the reason an MSI failed is only ever in it.
-function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
+function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn') {
   $log = Join-Path $LogDir "$Tag.log"
-  $all = $Arguments + @('/qn', '/l*v', $log)
+  $all = $Arguments + @($Ui, '/l*v', $log)
   Write-Host "  msiexec $($all -join ' ')"
   $p = Start-Process -FilePath msiexec.exe -ArgumentList $all -PassThru
   # Bounded, so a hang fails here with the log and what was still running,
@@ -353,7 +353,7 @@ Write-Host "  DisableMsi policy before: [$policyBefore]"
 if ($policyBefore -ne 0) {
   New-Item -Path $PolicyKey -Force | Out-Null
   Set-ItemProperty $PolicyKey -Name DisableMsi -Value 0 -Type DWord
-  Write-Host '  set DisableMsi to 0 for sections 9e to 9k'
+  Write-Host '  set DisableMsi to 0 for sections 9e to 9l'
 }
 
 # The MSIs where the standard user can read them, and msiexec as that user: a
@@ -365,9 +365,9 @@ Copy-Item $Msi $StdMsi -Force
 Copy-Item $StandinMsi $StdStandin1 -Force
 Copy-Item $StandinNextMsi $StdStandin2 -Force
 
-function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
+function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn') {
   $log = Join-Path $Pub "$Tag.log"
-  $all = $Arguments + @('/qn', '/l*v', $log)
+  $all = $Arguments + @($Ui, '/l*v', $log)
   Write-Host "  msiexec as ${StdName}: $($all -join ' ')"
   $p = Start-AsStd msiexec.exe $all
   if (-not $p.WaitForExit(10 * 60 * 1000)) {
@@ -645,6 +645,49 @@ Ok 'FindRelatedProducts found the per-user product in the same context; one PATH
 Invoke-AsStdMsi @('/x', $StdStandin2) 'std-up-uninstall' 0
 Assert-StdNotInstalled 'after the upgraded copy is uninstalled'
 
+# ---------------------------------------------------------------------------
+Section '9l. reduced UI runs the InstallUISequence, so the install-scope default is exercised without a click'
+
+# /qn skips the InstallUISequence, where the scope default lives. /qr runs its
+# actions and shows no authored dialog, so nobody has to click ScopeDlg. What
+# stays unrun is the dialog itself (ADR 0048, 2026-10-28).
+function Show-ScopeDefault([string]$Log, [bool]$Expected) {
+  $lines = @([regex]::Matches($Log, '(?m)^.*((Action start|Skipping action).*MSIINSTALLPERUSER|PROPERTY CHANGE: Adding (MSIINSTALLPERUSER|INSTALLSCOPE|ALLUSERS|INSTALLFOLDER) ).*$') | ForEach-Object { $_.Value.Trim() })
+  foreach ($l in $lines) { Write-Host "  saw: $l" }
+  $ran = $Log -match '(?m)Action start .*MSIINSTALLPERUSER'
+  $set = $Log -match "(?m)PROPERTY CHANGE: Adding MSIINSTALLPERUSER property\. Its value is '1'"
+  if ($Expected -and -not ($ran -and $set)) { Fail 'the UI-sequence action did not run and set MSIINSTALLPERUSER=1, so /qr does not exercise the default' }
+  if (-not $Expected -and $set) { Fail 'MSIINSTALLPERUSER was set to 1 for an elevated administrator' }
+}
+
+# The standard user, with no properties at all.
+Invoke-AsStdMsi @('/i', $StdMsi) 'std-qr' 0 '/qr'
+Show-ScopeDefault (Log-Of 'std-qr') $true
+$f = Get-StdFacts 'facts-qr' 'remote-docker remote --help'
+$stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
+Write-Host "  saw: localappdata=$($f.localappdata) userpath=$($f.userpath)"
+if (-not (Test-Path (Join-Path $stdDir 'remote-docker.exe'))) { Fail "no $stdDir\remote-docker.exe after a /qr install by $StdName" }
+if (Test-Path $Exe) { Fail "$Exe exists after a /qr install by $StdName" }
+if (Test-Path 'HKLM:\SOFTWARE\lhns\remote-docker') { Fail 'HKLM\Software\lhns\remote-docker exists after a /qr install by a standard user' }
+if ((MachinePath) -like '*remote-docker*') { Fail "the system PATH names remote-docker: $(MachinePath)" }
+$entries = @($f.userpath -split ';' | Where-Object { $_ -ne '' })
+if ($entries.Count -eq 0 -or ($entries[-1] -ne ($stdDir + '\') -and $entries[-1] -ne $stdDir)) {
+  Fail "the install directory is not the last entry of $StdName's PATH: $($f.userpath)"
+}
+if ($f.code -ne '0') { Fail "exit $($f.code) from a fresh shell of $StdName; output: $($f.output)" }
+Ok "a standard user's /qr install with no properties went to $stdDir and the user PATH, and nothing machine-wide"
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-qr-uninstall' 0
+Assert-StdNotInstalled 'after the /qr per-user uninstall'
+
+# The elevated runner, with no properties either.
+Invoke-Msi @('/i', $Msi) 'qr-machine' 0 '/qr'
+Show-ScopeDefault (Log-Of 'qr-machine') $false
+if (-not (Test-Path $Exe)) { Fail "no $Exe after an elevated /qr install" }
+Assert-MachineInstalled 'after the elevated /qr install'
+if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\remote-docker\remote-docker.exe')) { Fail 'the elevated /qr install also wrote a per-user copy' }
+Invoke-Msi @('/x', $Msi) 'qr-machine-uninstall' 0
+Assert-NotInstalled
+
 if ($policyBefore -ne 0) {
   if ($null -eq $policyBefore) { Remove-ItemProperty $PolicyKey -Name DisableMsi } else { Set-ItemProperty $PolicyKey -Name DisableMsi -Value $policyBefore }
   Write-Host "  put DisableMsi back to [$policyBefore]"
@@ -825,7 +868,7 @@ Ok 'the flag and the name are remembered for upgrade and uninstall'
 # ---------------------------------------------------------------------------
 Section '15. a standard user is refused until added to the group, with no new logon'
 
-# $StdName, $cred and Invoke-AsStd are set up with sections 9e to 9k.
+# $StdName, $cred and Invoke-AsStd are set up with sections 9e to 9l.
 
 # One process that keeps its logon token across the group change: it asks, waits
 # for the signal, and asks again. Two Start-Process calls would be two logons,
