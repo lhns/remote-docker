@@ -364,12 +364,17 @@
       </Component>
 
       <!--
-        What the other context looks for (see MACHINEINSTALL below). HKMU is
-        HKLM in a per-machine install and HKCU in a per-user one, which is the
-        whole point of it.
+        What the other context looks for (see MACHINEINSTALL below). One
+        component per context: a single HKMU one has the same component code in
+        both, and removing the per-user copy then left its value behind because
+        the all-users install still held that code (measured, test/msi.ps1 9j).
       -->
-      <Component Id="C.Installed" Directory="INSTALLFOLDER">
-        <RegistryValue Root="HKMU" Key="Software\lhns\remote-docker" Name="Installed"
+      <Component Id="C.Installed" Directory="INSTALLFOLDER" Condition="ALLUSERS=1">
+        <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="Installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="C.UserInstalled" Directory="INSTALLFOLDER" Condition="NOT ALLUSERS=1">
+        <RegistryValue Root="HKCU" Key="Software\lhns\remote-docker" Name="Installed"
                        Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
@@ -407,10 +412,16 @@
       -->
       <Feature Id="DockerName" Title="Also install it as docker.exe" Level="2" AllowAdvertise="no"
                Description="A second copy named docker.exe, so `docker` on this machine is this program. Refused if a docker.exe is already installed.">
-        <Component Id="C.DockerAlias" Directory="INSTALLFOLDER">
-          <RegistryValue Root="HKMU" Key="Software\lhns\remote-docker" Name="DockerAlias"
+        <Component Id="C.DockerAlias" Directory="INSTALLFOLDER" Condition="ALLUSERS=1">
+          <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="DockerAlias"
                          Type="integer" Value="1" KeyPath="yes" />
           <CopyFile Id="CF.DockerExe" FileId="F.RemoteDockerExe"
+                    DestinationDirectory="INSTALLFOLDER" DestinationName="docker.exe" />
+        </Component>
+        <Component Id="C.UserDockerAlias" Directory="INSTALLFOLDER" Condition="NOT ALLUSERS=1">
+          <RegistryValue Root="HKCU" Key="Software\lhns\remote-docker" Name="DockerAlias"
+                         Type="integer" Value="1" KeyPath="yes" />
+          <CopyFile Id="CF.UserDockerExe" FileId="F.RemoteDockerExe"
                     DestinationDirectory="INSTALLFOLDER" DestinationName="docker.exe" />
         </Component>
       </Feature>
