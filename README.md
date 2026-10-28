@@ -107,6 +107,11 @@ msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ALLUSERS=1
 msiexec /x remote-docker_0.6.0_windows_amd64.msi /qn
 ```
 
+A copy unzipped from a download and added to PATH by hand stays where it is:
+the installer only appends its own entry and only removes that one on
+uninstall. Remove your own entry before installing, or that copy keeps running
+instead of the installed one.
+
 A user's copy and an all-users copy are never both installed: the second
 install says so and stops, and the Hyper-V workspace below needs all users.
 Another user's own copy is not noticed, so on a shared computer the all-users
