@@ -34,8 +34,7 @@ jobs:
             s=$(date +%s.%N)
             env "$@" > "$label.out" 2>&1 || echo "FAILED $label: $(tail -3 "$label.out")"
             e=$(date +%s.%N)
-            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s
-' "$label" "$(echo "$e - $s" | bc)"               "$(jq '.packages|length' "$label.json" 2>/dev/null)"               "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
+            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s\n' "$label" "$(echo "$e - $s" | bc)"               "$(jq '.packages|length' "$label.json" 2>/dev/null)"               "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
           }
           export SYFT_FILE_METADATA_CATALOGER_ENABLED=true
           (cd "$GITHUB_WORKSPACE/client" && go mod download)
@@ -50,8 +49,7 @@ jobs:
           go version -m <(tar xzOf "$A" remote-docker) 2>&1 | head -30 || true
           P=remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json
           for f in $P w1_local.json w2_local_noldf.json w5_local_none.json; do
-            printf '%-45s pkgs=%s licensed=%s
-' "$f" "$(jq '.packages|length' $f)"               "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)"
+            printf '%-45s pkgs=%s licensed=%s\n' "$f" "$(jq '.packages|length' $f)"               "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)"
             jq -r '.packages[]|"\(.name) \(.versionInfo) D=\(.licenseDeclared) C=\(.licenseConcluded)"' $f | sort > "$f.pk"
           done
           for f in w1_local w2_local_noldf w5_local_none; do
