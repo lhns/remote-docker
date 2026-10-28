@@ -35,6 +35,13 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # -trimpath makes Go leave -ldflags out of the binary's build info, and
+    # that is the only place syft reads a -X version from, so an SBOM names the
+    # main module by its commit (v0.0.0-<time>-<revision>), not by the release,
+    # whatever the order of the -X flags. Measured with syft 1.55.0 on
+    # 2026-10-28; re-check against a built archive with
+    #   syft <archive> -o json | jq '.artifacts[] | select(.name | endswith("/client")) | .version'
+    # Without -trimpath the same build reports main.version.
     ldflags: &ldflags
       - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
     goos: [windows, linux, darwin]
@@ -157,6 +164,11 @@ archives:
 #
 # syft is the default tool and the release workflow installs it pinned. A
 # snapshot build makes no archives, so nothing here runs in ci.yml.
+#
+# Keep syft at 1.14.2 or later: before it, a client scan took about 3 minutes
+# (a licence matcher built for every licence file, anchore/syft PR 3348), and
+# eight in a row were 20 minutes of the release (v0.16.2). On 1.55.0 all ten
+# archives take 17 seconds together. Windows binaries need 1.19 or later.
 sboms:
   - id: archives
     artifacts: archive
