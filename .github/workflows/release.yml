@@ -231,6 +231,40 @@ jobs:
             remote-docker-workspace-*.tgz
             workspace-chart.sbom.spdx.json
 
+  # Fills the Go build cache that `binaries` restores. A tag's run cannot save
+  # a cache a later tag can read (a cache is visible to its own ref and to the
+  # default branch), so main saves one per commit, and the release of that
+  # commit finds it by the exact key. Compiling the ten targets cold is about
+  # 6.5 minutes of the release (measured on v0.16.2, run 40712689447). Not
+  # needed by anything: a cache miss only makes the release slower.
+  buildcache:
+    name: go build cache (main only)
+    needs: [ci]
+    runs-on: ubuntu-latest
+    if: github.ref_type != 'tag'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-go
+      - id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      # setup-go keys its own copy on go.sum alone and never refreshes it, so
+      # it holds nothing from these cross-builds. This one is keyed on the
+      # commit and restored from the newest earlier one. Both extract into the
+      # same directory, which merges.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: release-gobuild-${{ runner.os }}-${{ github.sha }}
+          restore-keys: release-gobuild-${{ runner.os }}-
+      - name: compose version
+        run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.19.0
+          args: build --snapshot --clean
+
   # Tags only. Per-commit binaries are ci.yml's artifacts, from the same
   # .goreleaser.yaml.
   binaries:
@@ -245,6 +279,16 @@ jobs:
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-go
+
+      # Written by `buildcache` on the push to main of this same commit. A miss
+      # is a cold build, not a failure.
+      - id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: release-gobuild-${{ runner.os }}-${{ github.sha }}
+          restore-keys: release-gobuild-${{ runner.os }}-
 
       # What the embedded Compose reports, read from the module graph.
       - name: compose version
@@ -279,7 +323,11 @@ jobs:
 
       - uses: goreleaser/goreleaser-action@v7
         with:
-          version: "~> v2"
+          # Exact, so a release is not the first run of a new goreleaser: it
+          # moved from 2.18.3 to 2.19.0 between v0.16.1 and v0.16.2. ci.yml
+          # stays on "~> v2" and finds a break first. Latest, checked
+          # 2026-10-28: gh api repos/goreleaser/goreleaser/releases/latest --jq .tag_name
+          version: v2.19.0
           args: release --clean ${{ steps.notes.outputs.flag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

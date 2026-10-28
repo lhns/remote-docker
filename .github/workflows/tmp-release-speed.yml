@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  timing:
+  timing2:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -23,56 +23,46 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/m && cd /tmp/m
-          gh release download v0.16.2 -R lhns/remote-docker \
-            -p 'remote-docker_0.16.2_linux_amd64.tar.gz' -p 'remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json'
-          ls -la
+          gh release download v0.16.2 -R lhns/remote-docker             -p 'remote-docker_0.16.2_linux_amd64.tar.gz' -p 'remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json'
       - name: time the variants
         shell: bash
         run: |
           cd /tmp/m
           A=remote-docker_0.16.2_linux_amd64.tar.gz
-          syft cataloger list 2>/dev/null | grep -i -E "go-module|file-" || true
           t() {
             label=$1; shift
             s=$(date +%s.%N)
             env "$@" > "$label.out" 2>&1 || echo "FAILED $label: $(tail -3 "$label.out")"
             e=$(date +%s.%N)
-            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s\n' "$label" "$(echo "$e - $s" | bc)" \
-              "$(jq '.packages|length' "$label.json" 2>/dev/null)" \
-              "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
+            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s
+' "$label" "$(echo "$e - $s" | bc)"               "$(jq '.packages|length' "$label.json" 2>/dev/null)"               "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
           }
           export SYFT_FILE_METADATA_CATALOGER_ENABLED=true
-          echo "--- warm module cache (as in the release job)"
           (cd "$GITHUB_WORKSPACE/client" && go mod download)
-          t v1_plain      syft "$A" -o spdx-json=v1_plain.json
-          t v2_enrich_all syft "$A" -o spdx-json=v2_enrich_all.json --enrich all
-          t v3_no_remote  SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v3_no_remote.json --enrich all
-          t v4_enrich_none SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=false syft "$A" -o spdx-json=v4_enrich_none.json
-          t v5_no_ldflags SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v5_no_ldflags.json --enrich all
-          t v6_go_only    SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v6_go_only.json --enrich all --select-catalogers go
-          echo "--- debug log of the enrich-all run"
-          SYFT_LOG_LEVEL=debug syft "$A" -o spdx-json=dbg.json --enrich all 2> dbg.log || true
-          wc -l dbg.log
-          grep -i -E "licen|proxy|http|fetch|duration|took" dbg.log | head -60 || true
-          echo "--- content vs the published SBOM"
+          L=SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=true
+          R=SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false
+          t w1_local        $L $R syft "$A" -o spdx-json=w1_local.json
+          t w2_local_noldf  $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false syft "$A" -o spdx-json=w2_local_noldf.json
+          t w3_local_nocont $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false syft "$A" -o spdx-json=w3_local_nocont.json
+          t w4_local_nobs   $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false syft "$A" -o spdx-json=w4_local_nobs.json
+          t w5_local_none   $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false syft "$A" -o spdx-json=w5_local_none.json
+          strings -a <(tar xzOf "$A" remote-docker) | grep -E "^-X |main\.version|internal\.Version|ldflags|vcs\." | head -12 || true
+          go version -m <(tar xzOf "$A" remote-docker) 2>&1 | head -30 || true
           P=remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json
-          for f in $P v1_plain.json v2_enrich_all.json v3_no_remote.json v4_enrich_none.json v5_no_ldflags.json v6_go_only.json; do
-            printf '%-45s pkgs=%s licensed=%s files=%s\n' "$f" \
-              "$(jq '.packages|length' $f)" \
-              "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)" \
-              "$(jq '(.files//[])|length' $f)"
+          for f in $P w1_local.json w2_local_noldf.json w5_local_none.json; do
+            printf '%-45s pkgs=%s licensed=%s
+' "$f" "$(jq '.packages|length' $f)"               "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)"
             jq -r '.packages[]|"\(.name) \(.versionInfo) D=\(.licenseDeclared) C=\(.licenseConcluded)"' $f | sort > "$f.pk"
           done
-          for f in v1_plain v2_enrich_all v3_no_remote v4_enrich_none v5_no_ldflags v6_go_only; do
-            echo "=== diff published vs $f (first 25 lines)"
-            diff $P.pk $f.json.pk | head -25 || true
+          for f in w1_local w2_local_noldf w5_local_none; do
+            echo "=== diff published vs $f (first 30 lines)"
+            diff $P.pk $f.json.pk | head -30 || true
           done
+          jq -c '.packages[]|select(.name|test("remote-docker/(client|core)$"))|{name,versionInfo}' w2_local_noldf.json w5_local_none.json
       - uses: actions/upload-artifact@v7
         with:
-          name: syft-timing
-          path: |
-            /tmp/m/*.json
-            /tmp/m/dbg.log
+          name: syft-timing2
+          path: /tmp/m/*.json
           retention-days: 3
 
   # The current config, for the serial baseline.

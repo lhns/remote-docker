@@ -25,6 +25,9 @@ env:
   - COMPOSE_VERSION={{ if index .Env "COMPOSE_VERSION" }}{{ .Env.COMPOSE_VERSION }}{{ else }}dev{{ end }}
 
 builds:
+  # One build per GOOS, so that each has its own archive and therefore its own
+  # SBOM config, which is what lets the scans run in parallel (see `sboms`).
+  # The first keeps the id `remote-docker`, which names its dist directory.
   - id: remote-docker
     main: ./cmd/remote-docker
     dir: client
@@ -37,7 +40,31 @@ builds:
       - -trimpath
     ldflags: &ldflags
       - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
-    goos: [windows, linux, darwin]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+  - id: remote-docker-windows
+    main: ./cmd/remote-docker
+    dir: client
+    binary: remote-docker
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags: *ldflags
+    goos: [windows]
+    goarch: [amd64, arm64]
+
+  - id: remote-docker-darwin
+    main: ./cmd/remote-docker
+    dir: client
+    binary: remote-docker
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags: *ldflags
+    goos: [darwin]
     goarch: [amd64, arm64]
 
   # Android is its own GOOS, and has to be.
@@ -117,20 +144,34 @@ builds:
     goarch: [amd64, arm64]
 
 archives:
-  - id: remote-docker
-    ids: [remote-docker, remote-docker-android]
-    # A zip on Windows and a tarball elsewhere, matching what each platform's
-    # tooling expects to be handed.
+  # One per GOOS, for the SBOM split. The default name template is shared, so
+  # the file names are what a single archive block produced.
+  - id: archive-linux
+    ids: [remote-docker]
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
-    files:
+    files: &clientfiles
       - README.md
       - CHANGELOG.md
       - LICENSE
       - NOTICE
       - THIRD-PARTY-NOTICES.md
+
+  # A zip on Windows and a tarball elsewhere, matching what each platform's
+  # tooling expects to be handed.
+  - id: archive-windows
+    ids: [remote-docker-windows]
+    formats: [zip]
+    files: *clientfiles
+
+  - id: archive-darwin
+    ids: [remote-docker-darwin]
+    formats: [tar.gz]
+    files: *clientfiles
+
+  - id: archive-android
+    ids: [remote-docker-android]
+    formats: [tar.gz]
+    files: *clientfiles
 
   # Its own archive, so `remote-docker_<v>_linux_amd64` stays the client and an
   # operator downloading a workspace does not get 70MB of Docker CLI with it.
