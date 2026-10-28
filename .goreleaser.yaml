@@ -198,8 +198,28 @@ archives:
 #
 # syft is the default tool and the release workflow installs it pinned. A
 # snapshot build makes no archives, so nothing here runs in ci.yml.
+#
+# One config per archive id, because goreleaser runs the configs in parallel
+# and the archives of one config one after the other. A client scan takes
+# about 4 minutes on one core, nearly all of it matching licence texts in the
+# module cache (`--enrich all`, goreleaser's default), so eight in a row was
+# 20 minutes of the release (v0.16.2) and four at a time is a quarter of that.
+# The agent's is 10 seconds and goes first.
 sboms:
-  - id: archives
+  - id: sbom-agent
+    ids: [remote-dockerd]
+    artifacts: archive
+  - id: sbom-linux
+    ids: [archive-linux]
+    artifacts: archive
+  - id: sbom-windows
+    ids: [archive-windows]
+    artifacts: archive
+  - id: sbom-darwin
+    ids: [archive-darwin]
+    artifacts: archive
+  - id: sbom-android
+    ids: [archive-android]
     artifacts: archive
 
 checksum:

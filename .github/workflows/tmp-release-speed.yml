@@ -10,89 +10,96 @@ permissions:
   contents: read
 
 jobs:
-  timing2:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-go
-      - uses: anchore/sbom-action/download-syft@v0
-        with:
-          syft-version: v1.14.0
-      - name: fetch the v0.16.2 archive and its published SBOM
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p /tmp/m && cd /tmp/m
-          gh release download v0.16.2 -R lhns/remote-docker             -p 'remote-docker_0.16.2_linux_amd64.tar.gz' -p 'remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json'
-      - name: time the variants
-        shell: bash
-        run: |
-          cd /tmp/m
-          A=remote-docker_0.16.2_linux_amd64.tar.gz
-          t() {
-            label=$1; shift
-            s=$(date +%s.%N)
-            env "$@" > "$label.out" 2>&1 || echo "FAILED $label: $(tail -3 "$label.out")"
-            e=$(date +%s.%N)
-            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s\n' "$label" "$(echo "$e - $s" | bc)"               "$(jq '.packages|length' "$label.json" 2>/dev/null)"               "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
-          }
-          export SYFT_FILE_METADATA_CATALOGER_ENABLED=true
-          (cd "$GITHUB_WORKSPACE/client" && go mod download)
-          L=SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=true
-          R=SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false
-          t w1_local        $L $R syft "$A" -o spdx-json=w1_local.json
-          t w2_local_noldf  $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false syft "$A" -o spdx-json=w2_local_noldf.json
-          t w3_local_nocont $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false syft "$A" -o spdx-json=w3_local_nocont.json
-          t w4_local_nobs   $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false syft "$A" -o spdx-json=w4_local_nobs.json
-          t w5_local_none   $L $R SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false syft "$A" -o spdx-json=w5_local_none.json
-          strings -a <(tar xzOf "$A" remote-docker) | grep -E "^-X |main\.version|internal\.Version|ldflags|vcs\." | head -12 || true
-          go version -m <(tar xzOf "$A" remote-docker) 2>&1 | head -30 || true
-          P=remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json
-          for f in $P w1_local.json w2_local_noldf.json w5_local_none.json; do
-            printf '%-45s pkgs=%s licensed=%s\n' "$f" "$(jq '.packages|length' $f)"               "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)"
-            jq -r '.packages[]|"\(.name) \(.versionInfo) D=\(.licenseDeclared) C=\(.licenseConcluded)"' $f | sort > "$f.pk"
-          done
-          for f in w1_local w2_local_noldf w5_local_none; do
-            echo "=== diff published vs $f (first 30 lines)"
-            diff $P.pk $f.json.pk | head -30 || true
-          done
-          jq -c '.packages[]|select(.name|test("remote-docker/(client|core)$"))|{name,versionInfo}' w2_local_noldf.json w5_local_none.json
-      - uses: actions/upload-artifact@v7
-        with:
-          name: syft-timing2
-          path: /tmp/m/*.json
-          retention-days: 3
-
-  # The current config, for the serial baseline.
-  snapshot-old:
+  snapshot-new:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-go
+      - id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      # Exact on a re-run of this job (same run id), which is the warm case.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: tmp-gobuild-${{ github.run_id }}
+          restore-keys: tmp-gobuild-
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
       - uses: anchore/sbom-action/download-syft@v0
         with:
           syft-version: v1.14.0
-      - name: snapshot release, config from the base branch
+      - name: snapshot release with the new config
         run: |
-          git show origin/main:.goreleaser.yaml > "$RUNNER_TEMP/old.yaml"
+          # A version syft can read as a release, in place of sha-<commit>.
+          sed -i 's/version_template: "sha-{{ .ShortCommit }}"/version_template: "0.99.0"/' .goreleaser.yaml
+          grep -n version_template .goreleaser.yaml
           curl -sSfL https://github.com/goreleaser/goreleaser/releases/download/v2.19.0/goreleaser_Linux_x86_64.tar.gz | tar xz -C "$RUNNER_TEMP" goreleaser
-          "$RUNNER_TEMP/goreleaser" release --snapshot --clean --skip=publish,sign,announce --verbose --config "$RUNNER_TEMP/old.yaml" 2>&1 |
-            while IFS= read -r l; do printf '%s %s\n' "$(date +%T)" "$l"; done | tee "$RUNNER_TEMP/old.log" | cut -c1-300
-      - name: what would be published
+          "$RUNNER_TEMP/goreleaser" release --snapshot --clean --skip=publish,sign,announce --verbose 2>&1 |
+            while IFS= read -r l; do printf '%s %s\n' "$(date +%T)" "$l"; done | tee "$RUNNER_TEMP/new.log" | cut -c1-300
+      - name: wall times
+        run: |
+          grep -E "software bill|took:|release succeeded|building  .*paths=agent|^.{9}.*archiving" "$RUNNER_TEMP/new.log" | sed -n '1,4p;/software/,$p' | cut -c1-200 || true
+          grep -E "building " "$RUNNER_TEMP/new.log" | head -2 | cut -c1-120
+          grep -E "took:" "$RUNNER_TEMP/new.log" | cut -c1-120
+      - name: files against v0.16.2
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          ls -1 *.tar.gz *.zip *.sbom.json checksums.txt | sort
-          awk '{print $2}' checksums.txt | sort
+          gh release view v0.16.2 -R lhns/remote-docker --json assets --jq '.assets[].name' |
+            grep -v -E '\.msi$|workspace' | sed 's/0\.16\.2/0.99.0/g' | sort > "$RUNNER_TEMP/expected.txt"
+          ls -1 | grep -E '\.(tar\.gz|zip|json)$|^checksums.txt$' | grep -v -E '^(artifacts|metadata|config)\.' | sort > "$RUNNER_TEMP/actual.txt"
+          echo "--- expected vs actual (empty diff is a match)"
+          diff "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/actual.txt" && echo SAME FILES
+          echo "--- checksums.txt names vs v0.16.2's"
+          gh release download v0.16.2 -R lhns/remote-docker -p checksums.txt -O "$RUNNER_TEMP/old-checksums.txt"
+          diff <(awk '{print $2}' "$RUNNER_TEMP/old-checksums.txt" | sed 's/0\.16\.2/0.99.0/g' | sort) <(awk '{print $2}' checksums.txt | sort) && echo SAME CHECKSUM COVERAGE
+          echo "--- the windows lookup release.yml does"
+          for goarch in amd64 arm64; do
+            jq -r --arg a "$goarch" '.[] | select(.type == "Binary" and .goos == "windows" and .goarch == $a) | .path' artifacts.json
+          done
+      - name: archive contents against v0.16.2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          cd "$RUNNER_TEMP/old"
+          gh release download v0.16.2 -R lhns/remote-docker -p '*.tar.gz' -p '*.zip' | tail -1
+          for old in *.tar.gz *.zip; do
+            new="$GITHUB_WORKSPACE/dist/${old//0.16.2/0.99.0}"
+            case "$old" in
+              *.zip) l() { unzip -Z1 "$1" | sort; } ;;
+              *) l() { tar tzf "$1" | sort; } ;;
+            esac
+            if diff <(l "$old") <(l "$new") >/dev/null; then echo "SAME CONTENT $old"; else echo "DIFFERENT $old"; diff <(l "$old") <(l "$new"); fi
+          done
+      - name: main module version matrix, on the built archive
+        run: |
+          cd dist
+          A=$(ls remote-docker_0.99.0_linux_amd64.tar.gz)
+          export SYFT_FILE_METADATA_CATALOGER_ENABLED=true
+          t() {
+            label=$1; shift
+            env "$@" syft "$A" -o spdx-json=/tmp/$label.json >/dev/null 2>&1
+            printf '%-14s client=%s core=%s\n' "$label" \
+              "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' /tmp/$label.json)" \
+              "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/core")|.versionInfo' /tmp/$label.json)"
+          }
+          t default     X=1
+          t noldflags   SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false
+          t nocontents  SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false
+          t none        SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false
+          t onlyldflags SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_CONTENTS=false SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_BUILD_SETTINGS=false
+          echo "--- version in the SBOMs goreleaser wrote"
+          for f in *.sbom.json; do
+            printf '%-55s client=%s\n' "$f" "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client" or .name=="github.com/lhns/remote-docker/agent")|.versionInfo' "$f")"
+          done
       - uses: actions/upload-artifact@v7
         with:
-          name: snapshot-old
+          name: snapshot-new
           path: |
-            dist/*.tar.gz
-            dist/*.zip
             dist/*.json
             dist/checksums.txt
           retention-days: 3
