@@ -2,15 +2,17 @@
 
 - Status: Accepted
 - Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace feature), 2026-10-16
-  (rollback guard, Restart Manager, run by hand), 2026-10-21 (PATH feature)
-- Current answer: one MSI per architecture with three features besides the
-  required one: `Path` (on by default), `DockerName` and `HyperV`. The
+  (rollback guard, Restart Manager, run by hand), 2026-10-21 (PATH feature),
+  2026-10-28 (installed per user without admin rights)
+- Current answer: one MSI per architecture that installs for all users as an
+  administrator, or for one user with no administrator rights, with three
+  features besides the required one: `Path` (on by default), `DockerName` and `HyperV`. The
   `docker.exe` feature is a second file name and runs no code. The Hyper-V
   workspace feature runs this program's own hidden commands as custom actions
   on install, upgrade and removal; the service they set up is
   [ADR 0055](0055-hyperv-machines-through-a-system-broker-service.md). Nothing
   else runs code at install time. An upgrade closes a running background
-  session through Restart Manager.
+  session through Restart Manager. The Hyper-V feature needs all users.
 
 ## Context
 
@@ -34,7 +36,7 @@ tool.
 | tool | WiX v5, `dotnet tool install --global wix` |
 | built on | `windows-latest`, in an `installers` job after the `binaries` one |
 | payload | the two Windows binaries goreleaser built, passed as an artifact |
-| scope | `perMachine`: Program Files, system PATH, elevated |
+| scope | per machine or per user, by `MSIINSTALLPERUSER` (see the 2026-10-28 section): Program Files and the system PATH, elevated, or `%LocalAppData%\Programs` and the user's PATH |
 | PATH | the `Path` feature, on by default; `Environment Part="last"` — appended, never prepended |
 | upgrades | `MajorUpgrade`, on a fixed `UpgradeCode` |
 | when | tag releases only |
@@ -110,6 +112,55 @@ fires, which is silent for a release cycle.
   need nothing.
 - Checked by `test/msi.ps1` 9b to 9d, the last of which upgrades from the
   latest released MSI, where the entry lived in `Main`.
+
+## Installed per user without admin rights (2026-10-28)
+
+- **Forced by:** the MSI was `perMachine`, so a user without administrator
+  rights could not install it, though nothing they need requires one: the
+  exe, their own PATH and the `docker` name. Only the Hyper-V workspace (a
+  SYSTEM service, a group, a VM; ADR 0055) does.
+- **Decision:** one package for both contexts, Windows Installer's own
+  dual-purpose mechanism. WiX 5 has no `perMachineOrUser` scope, so it is
+  written out: `Scope="perUser"` (the summary's "elevation not required" bit,
+  and no `ALLUSERS`) plus `ALLUSERS=2`. `MSIINSTALLPERUSER=1` is per user,
+  empty is per machine, and `ALLUSERS=2` alone is per machine.
+- **The default.** Run by an administrator: per machine, which is also what
+  finds the product older releases installed, so upgrades are unchanged.
+  Without administrator rights: per user, from a double-click or
+  `msiexec /i x.msi /qn` with no arguments and no UAC prompt. Set in
+  the sequence by `SetProperty` before `FindRelatedProducts` on
+  `NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS="1"`. Explicit:
+  `MSIINSTALLPERUSER=1`, or `MSIINSTALLPERUSER=""` or `ALLUSERS=1` as an
+  administrator. A dialog after the licence asks "Only for me" or "For all
+  users" and sets `MSIINSTALLPERUSER`, `ALLUSERS` and `INSTALLFOLDER`; the
+  stock Install button then shows its shield only for all users.
+- **What differs per user.**
+
+  | | per machine | per user |
+  |---|---|---|
+  | folder | `ProgramFiles64Folder` | `%LocalAppData%\Programs\remote-docker` |
+  | PATH | `C.Path`, system, appended | `C.UserPath`, user, appended |
+  | markers | HKLM | HKCU (`HKMU`) |
+  | Hyper-V | available | level 0, and `ADDLOCAL=...HyperV` is refused by name |
+
+- **One install per user, never two copies on PATH.** `FindRelatedProducts`
+  sees only the context it runs in, so each context looks for the other by
+  what it wrote: `HKLM\Software\lhns\remote-docker\Installed` (or `Path`,
+  from 0.16.x and earlier) and the same value under HKCU. A per-user
+  install over an all-users one is refused, and so is the reverse. **Not
+  detected:** another user's per-user copy, whose hive this install cannot
+  read; their PATH still finds the machine copy first.
+- **The `docker.exe` refusal reads Docker Desktop's directories through
+  `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
+  a per-user install, so searching it would have stopped refusing.
+- **Covered by** `test/msi.ps1` 9e to 9k, run as a standard local user: the
+  default install, PATH, the `docker` feature and its refusals, the Hyper-V
+  refusal, both coexistence refusals, an in-place upgrade and the uninstall.
+  Each premise above is printed from the log it came from.
+- **Not covered:** the dialog (built, never clicked), a filtered administrator
+  (AdminUser is false in an unelevated administrator's shell, so a silent
+  install there is per user; pass `ALLUSERS=1` for all users), and another
+  user's copy.
 
 ## The Hyper-V workspace feature (2026-10-15)
 

@@ -1562,7 +1562,15 @@ absent by default and working when `ADDLOCAL` asks for it, the refusal firing
 against a `docker.exe` in System32 with a message naming it, the override, and
 an uninstall that takes both names and the PATH entry with it. PATH is a
 feature that can be left out, added and removed by Modify, and is kept across
-an upgrade from the latest released MSI (9b to 9d). Sections 11 to 19
+an upgrade from the latest released MSI (9b to 9d). Sections 9e to 9k run as
+a STANDARD local user, never elevated (ADR 0048, 2026-10-28): a silent install
+with no arguments going to `%LocalAppData%\Programs` and the user PATH with
+nothing in Program Files, HKLM or the system PATH, the `docker.exe` feature and
+its refusals (System32 and Docker Desktop's real Program Files), the Hyper-V
+refusal, a per-user install over an all-users one refused and the reverse, and
+a per-user upgrade. Each Windows Installer premise (AdminUser, ProgramFiles64Folder,
+FindRelatedProducts missing the other context) is printed from the log.
+Sections 11 to 19
 run the optional Hyper-V workspace against a STAND-IN for Hyper-V (the
 `rdstandin` build tag, `machine/broker_standin_windows.go`, which logs its
 operations under `%ProgramData%\remote-docker-standin`; `msi.yml` asserts no
@@ -1597,6 +1605,13 @@ Keep this list honest, and name the assertion rather than the area: "the
 `docker run` mechanism under `elevate` is tested" was written here while only
 its pure planning function was.
 
+- **A per-user MSI install from the dialog, or by another user.** CI installs
+  per user silently as a standard local user (9f to 9k) and builds the scope
+  dialog (`ScopeDlg`), but no CI clicks it, so the shield, the folder it sets
+  and Back navigation are unrun. Another user's per-user copy is not detected
+  by an all-users install, nor the reverse for a user other than the one
+  installing. An unelevated administrator's shell has no AdminUser, so a silent
+  install there is per user.
 - **The MSI's Hyper-V workspace beyond one hand run.** CI proves the
   installer, service, group, rollback and upgrade around a stand-in. Real
   Hyper-V under the service, the installing user's identity (`[UserSID]` and

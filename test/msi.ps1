@@ -1,14 +1,16 @@
 # The Windows installer, end to end: install, the PATH feature, the docker.exe
-# feature, the refusal that guards it, uninstall, and the optional Hyper-V
-# workspace feature (service, group, a machine, upgrade, removal, adding and
-# removing it with Modify) against a stand-in for Hyper-V.
+# feature, the refusal that guards it, uninstall, the per-user install by a user
+# with no administrator rights, and the optional Hyper-V workspace feature
+# (service, group, a machine, upgrade, removal, adding and removing it with
+# Modify) against a stand-in for Hyper-V.
 #
 #   pwsh test/msi.ps1 -Msi dist/remote-docker_0.6.0_windows_amd64.msi `
 #     -StandinMsi dist/standin_0.0.1.msi -StandinNextMsi dist/standin_0.0.2.msi
 #
 # Runs elevated and makes machine-wide changes: it installs to Program Files,
-# edits the system PATH, and moves any docker.exe it finds out of the way so the
-# feature can be tested both with and without one present. Meant for a
+# edits the system PATH, creates a standard local user to install as, and moves
+# any docker.exe it finds out of the way so the feature can be tested both with
+# and without one present. Meant for a
 # throwaway machine, which is what .github/workflows/msi.yml gives it.
 
 [CmdletBinding()]
@@ -73,6 +75,8 @@ function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
   }
   Ok "msiexec exited $Expect"
 }
+
+function Log-Of([string]$Tag) { return Get-Content (Join-Path $LogDir "$Tag.log") -Raw }
 
 function MachinePath() {
   # The registry, which is where the MSI wrote it and where a newly created
@@ -302,6 +306,273 @@ Invoke-Msi @('/x', $Msi) 'released-uninstall' 0
 Assert-NotInstalled
 
 # ===========================================================================
+# One package, two contexts (ADR 0048, 2026-10-28). The runner is an
+# administrator, so "a user with no administrator rights" is a standard local
+# user, the one sections 15 to 18 also use. Each claim about Windows Installer
+# that the design rests on is printed from the log it came out of, so a wrong
+# one shows what Windows Installer did instead.
+
+$Pub = 'C:\Users\Public\rdtest'
+New-Item -ItemType Directory -Force -Path $Pub | Out-Null
+& icacls.exe $Pub /grant 'Everyone:(OI)(CI)M' | Out-Null
+$StdName = 'rdstd'
+$StdPass = 'Rd-Std-' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '!A1'
+if (Get-LocalUser -Name $StdName -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $StdName }
+$null = New-LocalUser -Name $StdName -Password (ConvertTo-SecureString $StdPass -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires
+Add-LocalGroupMember -Group 'Users' -Member $StdName
+if ((Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like "*\$StdName" })) { Fail "$StdName is an administrator" }
+Write-Host "created the standard user $StdName"
+$cred = New-Object System.Management.Automation.PSCredential($StdName, (ConvertTo-SecureString $StdPass -AsPlainText -Force))
+
+function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
+  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  $null = $p.WaitForExit(180000)
+  $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
+  if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
+}
+
+# The MSIs where the standard user can read them, and msiexec as that user: a
+# token without the Administrators group, never elevated.
+$StdMsi = Join-Path $Pub 'remote-docker.msi'
+$StdStandin1 = Join-Path $Pub 'standin_0.0.1.msi'
+$StdStandin2 = Join-Path $Pub 'standin_0.0.2.msi'
+Copy-Item $Msi $StdMsi -Force
+Copy-Item $StandinMsi $StdStandin1 -Force
+Copy-Item $StandinNextMsi $StdStandin2 -Force
+
+function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
+  $log = Join-Path $Pub "$Tag.log"
+  $all = $Arguments + @('/qn', '/l*v', $log)
+  Write-Host "  msiexec as ${StdName}: $($all -join ' ')"
+  $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList $all -WindowStyle Hidden -PassThru
+  if (-not $p.WaitForExit(10 * 60 * 1000)) {
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    if (Test-Path $log) { Get-Content $log -Tail 200 }
+    Fail "msiexec as $StdName did not finish within 10 minutes"
+  }
+  if (Test-Path $log) { Copy-Item $log (Join-Path $LogDir "$Tag.log") -Force }
+  if ($p.ExitCode -ne $Expect) {
+    Write-Host "  exit $($p.ExitCode), expected $Expect; log follows:" -ForegroundColor Yellow
+    if (Test-Path $log) { Get-Content $log }
+    Fail "msiexec as $StdName exited $($p.ExitCode), expected $Expect"
+  }
+  Ok "msiexec as $StdName exited $Expect"
+}
+
+# What the standard user sees of its own profile and registry, which this
+# elevated process cannot read (its hive is loaded only while it runs).
+$factsScript = Join-Path $Pub 'facts.ps1'
+Set-Content -Path $factsScript -Encoding ascii -Value @'
+param($Cmd)
+$u = [Environment]::GetEnvironmentVariable('Path', 'User')
+$m = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+"localappdata=$env:LOCALAPPDATA"
+"userpath=$u"
+"machinepath=$m"
+"key=" + (Test-Path 'HKCU:\Software\lhns\remote-docker')
+# A per-user product has no Uninstall key; Windows Installer lists it by upgrade code.
+$wi = New-Object -ComObject WindowsInstaller.Installer
+$versions = foreach ($pc in $wi.RelatedProducts('{6FDE5FD9-D1A3-4094-B8EC-2193CA79C91F}')) { $wi.ProductInfo($pc, 'VersionString') }
+"arp=" + ($versions -join ',')
+if ($Cmd) {
+  $env:Path = "$m;$u"
+  $o = (& cmd.exe /c $Cmd 2>&1 | Out-String)
+  "code=$LASTEXITCODE"
+  "output=" + ($o -replace "\s+", ' ')
+}
+'@
+
+function Get-StdFacts([string]$Tag, [string]$Cmd = '') {
+  $p = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $factsScript, ('"' + $Cmd + '"')) -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  if (-not $p.WaitForExit(180000)) { Fail "facts as $StdName did not finish" }
+  $facts = @{}
+  foreach ($line in (Get-Content "$Pub\$Tag.out" -ErrorAction SilentlyContinue)) {
+    $i = $line.IndexOf('=')
+    if ($i -gt 0) { $facts[$line.Substring(0, $i)] = $line.Substring($i + 1) }
+  }
+  if (-not $facts.ContainsKey('localappdata')) {
+    Fail "no facts from ${StdName}: $((Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -ErrorAction SilentlyContinue) -join ' | ')"
+  }
+  return $facts
+}
+
+function Assert-StdNotInstalled([string]$What) {
+  $f = Get-StdFacts 'facts-clean'
+  $dir = Join-Path $f.localappdata 'Programs\remote-docker'
+  if (Test-Path $dir) {
+    $left = Get-ChildItem $dir -Recurse -File
+    if ($left) { Fail "$What : $dir still holds: $(($left | ForEach-Object Name) -join ', ')" }
+  }
+  if ($f.userpath -like '*remote-docker*') { Fail "$What : $StdName's PATH still names remote-docker: $($f.userpath)" }
+  if ($f.key -eq 'True') { Fail "$What : HKCU\Software\lhns\remote-docker still exists for $StdName" }
+  if ($f.arp) { Fail "$What : $StdName's still has the product registered: $($f.arp)" }
+  Ok "$What : nothing of it is left in $StdName's profile or registry"
+}
+
+# ---------------------------------------------------------------------------
+Section '9e. an administrator gets the per-machine default, and the log says what Windows Installer decided'
+
+# Claim: AdminUser is set for an elevated administrator, so the per-user default
+# (NOT AdminUser) does not fire, and ALLUSERS resolves to 1.
+$log = Log-Of 'install-default'
+$au = [regex]::Match($log, '(?m)^Property\(S\): AdminUser = .*$').Value
+$al = [regex]::Match($log, '(?m)^Property\(S\): ALLUSERS = .*$').Value
+$pf = [regex]::Match($log, '(?m)^Property\(S\): INSTALLFOLDER = .*$').Value
+Write-Host "  saw: [$au] [$al] [$pf]"
+if ($au -notmatch '= 1') { Fail "AdminUser is not set for the elevated runner: [$au]" }
+if ($al -notmatch '= 1') { Fail "ALLUSERS is not 1 for the elevated runner's default install: [$al]" }
+if ($log -match '(?m)^Property\(S\): MSIINSTALLPERUSER = 1') { Fail 'the elevated default install was made per user' }
+Ok 'AdminUser = 1, ALLUSERS = 1 and MSIINSTALLPERUSER unset: per machine, as before'
+
+# ---------------------------------------------------------------------------
+Section '9f. a user with no administrator rights installs silently, with no arguments, for themselves'
+
+Invoke-AsStdMsi @('/i', $StdMsi) 'std-default' 0
+$f = Get-StdFacts 'facts-default' 'remote-docker remote --help'
+$stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
+Write-Host "  saw: localappdata=$($f.localappdata)"
+if (-not (Test-Path (Join-Path $stdDir 'remote-docker.exe'))) { Fail "missing $stdDir\remote-docker.exe; the log is $LogDir\std-default.log" }
+Ok "remote-docker.exe is in $stdDir"
+if (Test-Path $Exe) { Fail "$Exe exists; nothing may reach Program Files from a standard user" }
+if (Test-Path 'HKLM:\SOFTWARE\lhns\remote-docker') { Fail 'HKLM\Software\lhns\remote-docker exists after a per-user install' }
+if ((MachinePath) -like '*remote-docker*') { Fail "the system PATH names remote-docker: $(MachinePath)" }
+Ok 'nothing in Program Files, HKLM or the system PATH'
+
+# Claim: the user PATH is appended, and a fresh shell finds the program.
+$entries = @($f.userpath -split ';' | Where-Object { $_ -ne '' })
+if ($entries.Count -eq 0 -or ($entries[-1] -ne ($stdDir + '\') -and $entries[-1] -ne $stdDir)) {
+  Fail "the install directory is not the last entry of $StdName's PATH: $($f.userpath)"
+}
+Ok "appended to the user PATH: $($entries[-1])"
+if ($f.code -ne '0') { Fail "exit $($f.code) from a fresh shell of $StdName; output: $($f.output)" }
+Ok 'a fresh shell of that user runs `remote-docker remote --help`'
+if ($f.arp -ne '99.0.0') { Fail "the product registered for that user is '$($f.arp)', not 99.0.0" }
+Ok 'registered for that user as 99.0.0'
+
+# Claims: ProgramFiles64Folder is %LocalAppData%\Programs, AdminUser is not set,
+# and the elevation-not-required bit let it through.
+$slog = Log-Of 'std-default'
+$sau = [regex]::Match($slog, '(?m)^Property\(S\): AdminUser = .*$').Value
+$spf = [regex]::Match($slog, '(?m)^Property\(S\): INSTALLFOLDER = .*$').Value
+$sal = [regex]::Match($slog, '(?m)^Property\(S\): ALLUSERS = .*$').Value
+$smp = [regex]::Match($slog, '(?m)^Property\(S\): MSIINSTALLPERUSER = .*$').Value
+Write-Host "  saw: [$sau] [$sal] [$smp] [$spf]"
+if ($sau) { Fail "AdminUser is set for the standard user: [$sau]" }
+if ($sal -match '= 1') { Fail "ALLUSERS resolved to 1 for the standard user: [$sal]" }
+Ok 'AdminUser unset, ALLUSERS not 1, and the install folder is under the profile'
+
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-uninstall' 0
+Assert-StdNotInstalled 'after the per-user uninstall'
+
+# ---------------------------------------------------------------------------
+Section '9g. a per-user install with the docker.exe feature, and the refusal still fires'
+
+Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-feature' 0
+$f = Get-StdFacts 'facts-feature' 'docker remote --help'
+$stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "the feature was selected and $stdDir\docker.exe was not created" }
+if ($f.code -ne '0') { Fail "exit $($f.code) from 'docker remote --help' as $StdName; output: $($f.output)" }
+Ok 'docker.exe beside remote-docker.exe, and a fresh shell reaches it as `docker`'
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-feature-uninstall' 0
+Assert-StdNotInstalled 'after uninstalling the docker.exe feature'
+
+# System32 is a directory the standard user cannot write, which is the point:
+# the stub is the administrator's.
+$stub = Join-Path $env:SystemRoot 'System32\docker.exe'
+Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $stub
+Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-refusal' 1603
+$rl = Log-Of 'std-refusal'
+Remove-Item $stub -Force
+if ($rl -notmatch [regex]::Escape('System32\docker.exe')) { Fail 'the refusal did not name the docker.exe in System32' }
+Ok 'refused, naming the docker.exe it found in System32'
+
+# Docker Desktop's directory is under the real Program Files, not under the
+# per-user "Programs" folder ProgramFiles64Folder means to this install.
+$desktopBin = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'
+New-Item -ItemType Directory -Force -Path $desktopBin | Out-Null
+Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') (Join-Path $desktopBin 'docker.exe')
+Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-refusal-desktop' 1603
+$dl = Log-Of 'std-refusal-desktop'
+Remove-Item (Join-Path $env:ProgramFiles 'Docker') -Recurse -Force
+if ($dl -notmatch [regex]::Escape('Docker\Docker\resources\bin\docker.exe')) {
+  Fail "the refusal did not find Docker Desktop's docker.exe in the real Program Files; tail: $($dl.Substring([Math]::Max(0, $dl.Length - 1500)))"
+}
+Ok "refused for Docker Desktop's docker.exe in $env:ProgramFiles"
+Assert-StdNotInstalled 'after the refusals'
+
+# ---------------------------------------------------------------------------
+Section '9h. the Hyper-V workspace is refused in a per-user install, by name'
+
+Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=msiserver') 'std-hyperv' 1603
+if ((Log-Of 'std-hyperv') -notmatch 'needs an installation for all users') { Fail 'the refusal message is not in the log' }
+Ok 'refused with 1603, and the message says it needs all users'
+Assert-StdNotInstalled 'after the Hyper-V refusal'
+
+# ---------------------------------------------------------------------------
+Section '9i. one install per user: a per-user install over a per-machine one is refused'
+
+Invoke-Msi @('/i', $Msi) 'co-machine' 0
+Invoke-AsStdMsi @('/i', $StdMsi) 'std-over-machine' 1603
+$cl = Log-Of 'std-over-machine'
+if ($cl -notmatch 'already installed for all users') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
+Ok 'refused, naming the all-users install'
+# Claim: FindRelatedProducts does not see a product of the other context, which
+# is why the registry markers exist.
+$fr = [regex]::Match($cl, '(?m)^Property\(S\): WIX_UPGRADE_DETECTED = .*$').Value
+Write-Host "  saw: WIX_UPGRADE_DETECTED [$fr]"
+if ($fr) { Fail "FindRelatedProducts saw the per-machine product from a per-user install: [$fr]; the markers are not needed, so say so" }
+Ok 'FindRelatedProducts did not see the product of the other context'
+Assert-StdNotInstalled 'after the refused per-user install'
+Invoke-Msi @('/x', $Msi) 'co-machine-uninstall' 0
+Assert-NotInstalled
+
+# ---------------------------------------------------------------------------
+Section '9j. and a per-machine install over the installing user''s own per-user copy is refused'
+
+# An administrator may install for themselves too, by asking for it.
+$userDir = Join-Path $env:LOCALAPPDATA 'Programs\remote-docker'
+Invoke-Msi @('/i', $Msi, 'MSIINSTALLPERUSER=1') 'co-user' 0
+if (-not (Test-Path (Join-Path $userDir 'remote-docker.exe'))) { Fail "MSIINSTALLPERUSER=1 did not install into $userDir" }
+if (Test-Path $Exe) { Fail "$Exe exists after a per-user install by an administrator" }
+Ok "MSIINSTALLPERUSER=1 installs into $userDir, even for an administrator"
+Invoke-Msi @('/i', $Msi) 'co-user-machine' 1603
+$cl = Log-Of 'co-user-machine'
+if ($cl -notmatch 'already installed for your account alone') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
+$fr = [regex]::Match($cl, '(?m)^Property\(S\): WIX_UPGRADE_DETECTED = .*$').Value
+Write-Host "  saw: WIX_UPGRADE_DETECTED [$fr]"
+if ($fr) { Fail "FindRelatedProducts saw the per-user product from a per-machine install: [$fr]" }
+Ok 'refused, and FindRelatedProducts did not see it either'
+if (Test-Path $Exe) { Fail "$Exe exists after the refused per-machine install" }
+Invoke-Msi @('/x', $Msi) 'co-user-uninstall' 0
+if (Test-Path (Join-Path $userDir 'remote-docker.exe')) { Fail "uninstalling left $userDir\remote-docker.exe" }
+if ([Environment]::GetEnvironmentVariable('Path', 'User') -like '*remote-docker*') { Fail "the user PATH still names remote-docker: $([Environment]::GetEnvironmentVariable('Path', 'User'))" }
+if (Test-Path 'HKCU:\SOFTWARE\lhns\remote-docker') { Fail 'HKCU\Software\lhns\remote-docker is left behind' }
+Assert-NotInstalled
+Ok 'the per-user copy is gone with its PATH entry and key'
+
+# ---------------------------------------------------------------------------
+Section '9k. a per-user install upgrades in place'
+
+Invoke-AsStdMsi @('/i', $StdStandin1) 'std-up1' 0
+if ((Get-StdFacts 'facts-up1').arp -ne '0.0.1') { Fail 'version 0.0.1 is not registered after installing it' }
+Invoke-AsStdMsi @('/i', $StdStandin2) 'std-up2' 0
+$f = Get-StdFacts 'facts-up2'
+if ($f.arp -ne '0.0.2') { Fail "after the upgrade the registered version is '$($f.arp)', not 0.0.2" }
+$entries = @($f.userpath -split ';' | Where-Object { $_ -like '*remote-docker*' })
+if ($entries.Count -ne 1) { Fail "expected one remote-docker entry on the user PATH after the upgrade: $($f.userpath)" }
+$ul = [regex]::Match((Log-Of 'std-up2'), '(?m)^Property\(S\): WIX_UPGRADE_DETECTED = .*$').Value
+Write-Host "  saw: [$ul]"
+if (-not $ul) { Fail 'the upgrade did not detect the earlier per-user product' }
+Ok 'FindRelatedProducts found the per-user product in the same context; one PATH entry, version 0.0.2'
+Invoke-AsStdMsi @('/x', $StdStandin2) 'std-up-uninstall' 0
+Assert-StdNotInstalled 'after the upgraded copy is uninstalled'
+
+# ===========================================================================
 # The optional Hyper-V workspace (ADR 0048 amendment, ADR 0055). The package is
 # built with the rdstandin tag: the real service, pipe, group and installer
 # around a stand-in for Hyper-V, which logs create/start/stop/destroy under
@@ -355,8 +626,6 @@ function Assert-NoHyperV([string]$What) {
   if (ConfigEntry $MyConfig 'hyperv') { Fail "$What : $MyConfig still has a hyperv entry" }
   Ok "$What : no service, no group, no $ServiceDir, no registry flag, no config entry"
 }
-
-function Log-Of([string]$Tag) { return Get-Content (Join-Path $LogDir "$Tag.log") -Raw }
 
 function InstalledVersion() {
   return (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
@@ -478,26 +747,7 @@ Ok 'the flag and the name are remembered for upgrade and uninstall'
 # ---------------------------------------------------------------------------
 Section '15. a standard user is refused until added to the group, with no new logon'
 
-$Pub = 'C:\Users\Public\rdtest'
-New-Item -ItemType Directory -Force -Path $Pub | Out-Null
-& icacls.exe $Pub /grant 'Everyone:(OI)(CI)M' | Out-Null
-$StdName = 'rdstd'
-$StdPass = 'Rd-Std-' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '!A1'
-if (Get-LocalUser -Name $StdName -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $StdName }
-$null = New-LocalUser -Name $StdName -Password (ConvertTo-SecureString $StdPass -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires
-Add-LocalGroupMember -Group 'Users' -Member $StdName
-if ((Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like "*\$StdName" })) { Fail "$StdName is an administrator" }
-Ok "created the standard user $StdName"
-$cred = New-Object System.Management.Automation.PSCredential($StdName, (ConvertTo-SecureString $StdPass -AsPlainText -Force))
-
-function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
-  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
-  $null = $p.WaitForExit(180000)
-  $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
-  if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
-}
+# $StdName, $cred and Invoke-AsStd are set up with sections 9e to 9k.
 
 # One process that keeps its logon token across the group change: it asks, waits
 # for the signal, and asks again. Two Start-Process calls would be two logons,
