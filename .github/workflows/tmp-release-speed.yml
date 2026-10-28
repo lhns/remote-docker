@@ -1,0 +1,110 @@
+name: tmp release speed
+
+# TEMPORARY, removed before the PR is finished.
+on:
+  pull_request:
+    paths: [".github/workflows/tmp-release-speed.yml", ".goreleaser.yaml", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-go
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+      - name: fetch the v0.16.2 archive and its published SBOM
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/m && cd /tmp/m
+          gh release download v0.16.2 -R lhns/remote-docker \
+            -p 'remote-docker_0.16.2_linux_amd64.tar.gz' -p 'remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json'
+          ls -la
+      - name: time the variants
+        shell: bash
+        run: |
+          cd /tmp/m
+          A=remote-docker_0.16.2_linux_amd64.tar.gz
+          syft cataloger list 2>/dev/null | grep -i -E "go-module|file-" || true
+          t() {
+            label=$1; shift
+            s=$(date +%s.%N)
+            env "$@" > "$label.out" 2>&1 || echo "FAILED $label: $(tail -3 "$label.out")"
+            e=$(date +%s.%N)
+            printf 'TIMING %-22s %6.1fs  pkgs=%s client=%s\n' "$label" "$(echo "$e - $s" | bc)" \
+              "$(jq '.packages|length' "$label.json" 2>/dev/null)" \
+              "$(jq -r '.packages[]|select(.name=="github.com/lhns/remote-docker/client")|.versionInfo' "$label.json" 2>/dev/null)"
+          }
+          export SYFT_FILE_METADATA_CATALOGER_ENABLED=true
+          echo "--- warm module cache (as in the release job)"
+          (cd "$GITHUB_WORKSPACE/client" && go mod download)
+          t v1_plain      syft "$A" -o spdx-json=v1_plain.json
+          t v2_enrich_all syft "$A" -o spdx-json=v2_enrich_all.json --enrich all
+          t v3_no_remote  SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v3_no_remote.json --enrich all
+          t v4_enrich_none SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=false syft "$A" -o spdx-json=v4_enrich_none.json
+          t v5_no_ldflags SYFT_GOLANG_MAIN_MODULE_VERSION_FROM_LD_FLAGS=false SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v5_no_ldflags.json --enrich all
+          t v6_go_only    SYFT_GOLANG_SEARCH_REMOTE_LICENSES=false syft "$A" -o spdx-json=v6_go_only.json --enrich all --select-catalogers go
+          echo "--- debug log of the enrich-all run"
+          SYFT_LOG_LEVEL=debug syft "$A" -o spdx-json=dbg.json --enrich all 2> dbg.log || true
+          wc -l dbg.log
+          grep -i -E "licen|proxy|http|fetch|duration|took" dbg.log | head -60 || true
+          echo "--- content vs the published SBOM"
+          P=remote-docker_0.16.2_linux_amd64.tar.gz.sbom.json
+          for f in $P v1_plain.json v2_enrich_all.json v3_no_remote.json v4_enrich_none.json v5_no_ldflags.json v6_go_only.json; do
+            printf '%-45s pkgs=%s licensed=%s files=%s\n' "$f" \
+              "$(jq '.packages|length' $f)" \
+              "$(jq '[.packages[]|select(.licenseDeclared!="NOASSERTION" or .licenseConcluded!="NOASSERTION")]|length' $f)" \
+              "$(jq '(.files//[])|length' $f)"
+            jq -r '.packages[]|"\(.name) \(.versionInfo) D=\(.licenseDeclared) C=\(.licenseConcluded)"' $f | sort > "$f.pk"
+          done
+          for f in v1_plain v2_enrich_all v3_no_remote v4_enrich_none v5_no_ldflags v6_go_only; do
+            echo "=== diff published vs $f (first 25 lines)"
+            diff $P.pk $f.json.pk | head -25 || true
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: syft-timing
+          path: |
+            /tmp/m/*.json
+            /tmp/m/dbg.log
+          retention-days: 3
+
+  # The current config, for the serial baseline.
+  snapshot-old:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-go
+      - name: compose version
+        run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+      - name: snapshot release, config from the base branch
+        run: |
+          git show origin/main:.goreleaser.yaml > "$RUNNER_TEMP/old.yaml"
+          curl -sSfL https://github.com/goreleaser/goreleaser/releases/download/v2.19.0/goreleaser_Linux_x86_64.tar.gz | tar xz -C "$RUNNER_TEMP" goreleaser
+          "$RUNNER_TEMP/goreleaser" release --snapshot --clean --skip=publish,sign,announce --verbose --config "$RUNNER_TEMP/old.yaml" 2>&1 |
+            while IFS= read -r l; do printf '%s %s\n' "$(date +%T)" "$l"; done | tee "$RUNNER_TEMP/old.log" | cut -c1-300
+      - name: what would be published
+        run: |
+          cd dist
+          ls -1 *.tar.gz *.zip *.sbom.json checksums.txt | sort
+          awk '{print $2}' checksums.txt | sort
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snapshot-old
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.json
+            dist/checksums.txt
+          retention-days: 3
