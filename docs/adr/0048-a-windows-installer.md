@@ -182,14 +182,18 @@ fires, which is silent for a release cycle.
   `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
   a per-user install, so searching it would have stopped refusing.
 - **Covered by** `test/msi.ps1` 9e to 9k, run as a standard local user: the
-  silent no-argument refusal (probed and printed), the install with
+  silent no-argument refusal (error 1925), the install with
   `MSIINSTALLPERUSER=1`, PATH, the `docker` feature and its refusals, the Hyper-V
-  refusal, both coexistence refusals, an in-place upgrade and the uninstall.
+  refusal, the per-user-over-all-users refusal, the all-users-over-per-user
+  warning and the user then removing their copy (9j), an in-place upgrade and
+  the uninstall.
   Each premise above is printed from the log it came from.
-- **Not covered:** the dialog (built, never clicked), a filtered administrator
-  (AdminUser is false in an unelevated administrator's shell, so a silent
-  install there is per user; pass `ALLUSERS=1` for all users), and another
-  user's copy.
+- **Not covered:** the dialog (built, never clicked: whether the identity
+  default, `MSIUSEREALADMINDETECTION` included, and the folder it sets work as
+  intended), and another user's copy. In an unelevated administrator's shell
+  `AdminUser` is false, so the dialog defaults to "Only for me" there; choose
+  "For all users" for the other. A silent install there is per machine and
+  fails with 1925, like any install without administrator rights.
 
 ## The Hyper-V workspace feature (2026-10-15)
 

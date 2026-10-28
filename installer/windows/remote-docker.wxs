@@ -39,7 +39,10 @@
     -->
     <Property Id="ALLUSERS" Value="2" />
 
-    <!-- Without this AdminUser can be true for a user who is not a real administrator, and NOT AdminUser below would never fire. -->
+    <!--
+      Without this AdminUser can be true for a user who is not a real
+      administrator, and NOT AdminUser below would never fire.
+    -->
     <Property Id="MSIUSEREALADMINDETECTION" Value="1" />
 
     <!--
@@ -49,7 +52,7 @@
       per-machine default, which is what finds the product that older releases
       installed. Only the client-side sequence can do this. A silent install
       resolves its context before any sequence runs (measured: a standard user's
-      /qn ends with ALLUSERS=1 and error 1625), so there it has to be asked for
+      /qn ends with ALLUSERS=1 and error 1925), so there it has to be asked for
       with MSIINSTALLPERUSER=1.
     -->
     <SetProperty Id="MSIINSTALLPERUSER" Value="1" Before="FindRelatedProducts" Sequence="ui"
@@ -130,8 +133,9 @@
     <!--
       ONE INSTALL PER USER, AND NO SECOND COPY OVER AN ALL-USERS ONE. FindRelatedProducts sees
       only products in the context of this install, so the other context is
-      looked for by what it wrote (component C.Installed; installs from 0.16.x
-      and earlier have the Path value instead). Another user's per-user copy is
+      looked for by what it wrote (the Installed value of C.Installed and
+      C.UserInstalled; installs from 0.16.x and earlier have the Path value
+      instead). Another user's per-user copy is
       in a registry hive this install cannot read, and is not detected.
       MSIINSTALLPERUSER is the context in both sequences, where ALLUSERS is
       still 2 until the user interface is done.
@@ -164,7 +168,7 @@
     <CustomAction Id="RefuseUserOverMachine"
                   Error="remote-docker is already installed for all users on this computer.&#xA;fix: use that copy, or ask an administrator to uninstall it first." />
     <CustomAction Id="RefuseHyperVPerUser"
-                  Error="The Hyper-V workspace needs an installation for all users, which needs administrator rights, and this is an installation for one user.&#xA;fix: as an administrator, run this installer again with MSIINSTALLPERUSER=&quot;&quot; (or choose &quot;For all users&quot;)." />
+                  Error="The Hyper-V workspace needs an installation for all users, which needs administrator rights, and this is an installation for one user.&#xA;fix: as an administrator, run this installer again with ALLUSERS=1 (or choose &quot;For all users&quot;)." />
     <InstallUISequence>
       <Custom Action="RefuseUserOverMachine" After="CostFinalize"
               Condition="NOT Installed AND MSIINSTALLPERUSER=1 AND (MACHINEINSTALL OR MACHINEINSTALLOLD)" />
@@ -364,7 +368,7 @@
       </Component>
 
       <!--
-        What the other context looks for (see MACHINEINSTALL below). One
+        What the other context looks for (see MACHINEINSTALL above). One
         component per context: a single HKMU one has the same component code in
         both, and removing the per-user copy then left its value behind because
         the all-users install still held that code (measured, test/msi.ps1 9j).

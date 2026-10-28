@@ -10,8 +10,8 @@
 # Runs elevated and makes machine-wide changes: it installs to Program Files,
 # edits the system PATH, creates a standard local user to install as, and moves
 # any docker.exe it finds out of the way so the feature can be tested both with
-# and without one present. Meant for a
-# throwaway machine, which is what .github/workflows/msi.yml gives it.
+# and without one present. Meant for a throwaway machine, which is what
+# .github/workflows/msi.yml gives it.
 
 [CmdletBinding()]
 param(
@@ -324,10 +324,18 @@ if ((Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like
 Write-Host "created the standard user $StdName"
 $cred = New-Object System.Management.Automation.PSCredential($StdName, (ConvertTo-SecureString $StdPass -AsPlainText -Force))
 
+# One logon of the standard user, hidden, optionally with its output in $Pub\<tag>.out and .err.
+function Start-AsStd([string]$File, [string[]]$Arguments, [string]$Tag = '') {
+  $a = @{
+    FilePath = $File; ArgumentList = $Arguments; Credential = $cred; LoadUserProfile = $true
+    UseNewEnvironment = $true; WorkingDirectory = $env:SystemRoot; WindowStyle = 'Hidden'; PassThru = $true
+  }
+  if ($Tag) { $a.RedirectStandardOutput = "$Pub\$Tag.out"; $a.RedirectStandardError = "$Pub\$Tag.err" }
+  return Start-Process @a
+}
+
 function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
-  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  $p = Start-AsStd $Exe $Arguments $Tag
   $null = $p.WaitForExit(180000)
   $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
   if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
@@ -361,8 +369,7 @@ function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
   $log = Join-Path $Pub "$Tag.log"
   $all = $Arguments + @('/qn', '/l*v', $log)
   Write-Host "  msiexec as ${StdName}: $($all -join ' ')"
-  $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList $all -WindowStyle Hidden -PassThru
+  $p = Start-AsStd msiexec.exe $all
   if (-not $p.WaitForExit(10 * 60 * 1000)) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     if (Test-Path $log) { Get-Content $log -Tail 200 }
@@ -401,9 +408,7 @@ if ($Cmd) {
 '@
 
 function Get-StdFacts([string]$Tag, [string]$Cmd = '') {
-  $p = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $factsScript, ('"' + $Cmd + '"')) -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  $p = Start-AsStd powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $factsScript, ('"' + $Cmd + '"')) $Tag
   if (-not $p.WaitForExit(180000)) { Fail "facts as $StdName did not finish" }
   $facts = @{}
   foreach ($line in (Get-Content "$Pub\$Tag.out" -ErrorAction SilentlyContinue)) {
@@ -430,6 +435,20 @@ function Assert-StdNotInstalled([string]$What, [switch]$MachineProductVisible) {
   Ok "$What : nothing of it is left in $StdName's profile or registry"
 }
 
+# The all-users install: its files, system PATH entry and HKLM marker.
+function Assert-MachineInstalled([string]$What) {
+  if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or
+      -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
+    Fail "$What : the all-users install is damaged"
+  }
+  Ok "$What : the all-users install, its system PATH entry and HKLM marker are intact"
+}
+
+# What FindRelatedProducts reported in a log: nothing, if it saw no product of the other context.
+function Related-Detected([string]$Log) {
+  return @([regex]::Matches($Log, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value })
+}
+
 # ---------------------------------------------------------------------------
 Section '9e. an administrator gets the per-machine default, and the log says what Windows Installer decided'
 
@@ -448,23 +467,12 @@ Ok 'AdminUser = 1, ALLUSERS = 1 and MSIINSTALLPERUSER unset: per machine, as bef
 # ---------------------------------------------------------------------------
 Section '9f. a user with no administrator rights installs for themselves'
 
-# Probed, not asserted: a silent install resolves its context before any
-# sequence runs, so with no argument a standard user gets a per-machine install
-# that Windows Installer then refuses (1603, error 1925). Printed for the record.
-$p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-  -ArgumentList @('/i', $StdMsi, '/qn', '/l*v', "$Pub\std-noargs.log") -WindowStyle Hidden -PassThru
-if (-not $p.WaitForExit(5 * 60 * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Fail 'msiexec /qn with no arguments as the standard user hung' }
-$noargsExit = $p.ExitCode
-Copy-Item "$Pub\std-noargs.log" (Join-Path $LogDir 'std-noargs.log') -Force -ErrorAction SilentlyContinue
-$nl = Get-Content "$Pub\std-noargs.log" -Raw -ErrorAction SilentlyContinue
-$nlines = @([regex]::Matches($nl, '(?m)^.*(PROPERTY CHANGE: Modifying ALLUSERS|PROPERTY CHANGE: Adding MSIINSTALLPERUSER|Rejecting product|Error 1925).*$') | ForEach-Object { $_.Value.Trim() })
-Write-Host "  PROBE: msiexec /i /qn with no arguments as ${StdName} exited $noargsExit"
-$nlines | ForEach-Object { Write-Host "    $_" }
-if ($noargsExit -eq 0) {
-  Write-Host '  PROBE: it installed'
-  Invoke-AsStdMsi @('/x', $StdMsi) 'std-noargs-uninstall' 0
-}
-else { Write-Host '  PROBE: refused, so a silent per-user install must pass MSIINSTALLPERUSER=1' -ForegroundColor Yellow }
+# A silent install resolves its context before any sequence runs, so with no
+# argument a standard user gets a per-machine install that Windows Installer
+# refuses (1603, error 1925). A silent per-user install has to ask for it.
+Invoke-AsStdMsi @('/i', $StdMsi) 'std-noargs' 1603
+if ((Log-Of 'std-noargs') -notmatch 'Error 1925') { Fail 'the refusal of a silent install with no arguments is not error 1925' }
+Ok 'refused with error 1925, so a silent per-user install must pass MSIINSTALLPERUSER=1'
 
 Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-default' 0
 $f = Get-StdFacts 'facts-default' 'remote-docker remote --help'
@@ -561,7 +569,7 @@ Ok 'refused, naming the all-users install'
 # Claim: FindRelatedProducts does not see a product of the other context, which
 # is why the registry markers exist. The all-users product is the higher version,
 # so seeing it would have set WIX_DOWNGRADE_DETECTED.
-$fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value }
+$fr = Related-Detected $cl
 Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
 if ($fr) { Fail "FindRelatedProducts saw the per-machine product from a per-user install: [$($fr -join '; ')]; the markers are not needed, so say so" }
 Ok 'FindRelatedProducts did not see the product of the other context'
@@ -587,7 +595,7 @@ Write-Host "  saw: [$warn]"
 if ($warn -notmatch 'also installed for your account alone') { Fail "the warning is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
 if ($warn -notmatch 'msiexec /x') { Fail "the warning does not say how to remove the copy: [$warn]" }
 Ok 'the all-users install succeeded and the log carries the warning'
-$fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value }
+$fr = Related-Detected $cl
 Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
 if ($fr) { Fail "FindRelatedProducts saw the per-user product from a per-machine install: [$($fr -join '; ')]" }
 if (-not (Test-Path $Exe)) { Fail "$Exe is missing after the all-users install" }
@@ -601,10 +609,7 @@ if ([Environment]::GetEnvironmentVariable('Path', 'User') -like '*remote-docker*
 if (Test-Path 'HKCU:\SOFTWARE\lhns\remote-docker') {
   Fail "HKCU\Software\lhns\remote-docker is left behind with: $((Get-ItemProperty 'HKCU:\SOFTWARE\lhns\remote-docker' | Format-List | Out-String))"
 }
-if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
-  Fail 'removing the per-user copy damaged the all-users install'
-}
-Ok 'msiexec /x of the older package removed the per-user copy only; the all-users install is intact'
+Assert-MachineInstalled 'msiexec /x of the older package removed the per-user copy only'
 Invoke-Msi @('/x', $Msi) 'co-user-machine-uninstall' 0
 Assert-NotInstalled
 
@@ -614,17 +619,10 @@ Invoke-Msi @('/i', $Msi) 'std-co-machine' 0
 $f = Get-StdFacts 'facts-co-before'
 if ($f.arp -notmatch '0\.0\.1') { Fail "the standard user's own copy is not registered: [$($f.arp)]" }
 Invoke-AsStdMsi @('/x', $StdStandin1) 'std-co-remove' 0
+Assert-StdNotInstalled 'after removing their own copy' -MachineProductVisible
+Assert-MachineInstalled 'after the standard user removed their copy'
 $f = Get-StdFacts 'facts-co-after' 'remote-docker remote --help'
-$stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
-if (Test-Path (Join-Path $stdDir 'remote-docker.exe')) { Fail "$stdDir\remote-docker.exe is left" }
-if ($f.userpath -like '*remote-docker*') { Fail "the user's PATH still names remote-docker: $($f.userpath)" }
-if ($f.key -eq 'True') { Fail 'HKCU\Software\lhns\remote-docker is left for the standard user' }
-if ($f.arp -notmatch '99\.0\.0' -or $f.arp -match '0\.0\.1') { Fail "after removing their copy the registered products are [$($f.arp)], expected only 99.0.0" }
-Ok 'their files, PATH entry and key are gone, and only the all-users product is left'
-if (-not (Test-Path $Exe) -or (MachinePath) -notlike "*$InstallDir*" -or -not (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Installed -ErrorAction SilentlyContinue)) {
-  Fail 'the standard user removing their copy damaged the all-users install'
-}
-Ok 'the all-users install, its system PATH entry and HKLM marker are intact'
+if ($f.arp -ne '99.0.0') { Fail "after removing their copy the registered products are [$($f.arp)], expected only 99.0.0" }
 if ($f.code -ne '0') { Fail "exit $($f.code) from a fresh shell of $StdName after the removal; output: $($f.output)" }
 Ok 'a fresh shell of that user still runs remote-docker'
 Invoke-Msi @('/x', $Msi) 'std-co-machine-uninstall' 0
@@ -844,9 +842,7 @@ while (-not (Test-Path "$Dir\go") -and (Get-Date) -lt $end) { Start-Sleep -Milli
 '@
 Remove-Item "$Pub\first.*", "$Pub\second.*", "$Pub\go" -ErrorAction SilentlyContinue
 
-$live = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, ('"' + $Exe + '"'), $Pub) -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput "$Pub\live.out" -RedirectStandardError "$Pub\live.err"
+$live = Start-AsStd powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, ('"' + $Exe + '"'), $Pub) 'live'
 
 $deadline = (Get-Date).AddSeconds(120)
 while (-not (Test-Path "$Pub\first.code") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
