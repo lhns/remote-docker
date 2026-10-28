@@ -39,6 +39,9 @@
     -->
     <Property Id="ALLUSERS" Value="2" />
 
+    <!-- Without this AdminUser can be true for a user who is not a real administrator, and NOT AdminUser below would never fire. -->
+    <Property Id="MSIUSEREALADMINDETECTION" Value="1" />
+
     <!--
       Which context an install gets when nobody said, for an install with a user
       interface: without administrator rights a per-machine install is
