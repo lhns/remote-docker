@@ -582,7 +582,7 @@ if (Test-Path $Exe) { Fail "$Exe exists after a per-user install by an administr
 Ok "MSIINSTALLPERUSER=1 installs into $userDir, even for an administrator"
 Invoke-Msi @('/i', $Msi) 'co-user-machine' 0
 $cl = Log-Of 'co-user-machine'
-$warn = [regex]::Match($cl, '(?m)^.*USEROVERMACHINEWARNING.*$').Value
+$warn = [regex]::Match($cl, '(?m)^.*PROPERTY CHANGE: Adding USEROVERMACHINEWARNING.*$').Value
 Write-Host "  saw: [$warn]"
 if ($warn -notmatch 'also installed for your account alone') { Fail "the warning is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
 if ($warn -notmatch 'msiexec /x') { Fail "the warning does not say how to remove the copy: [$warn]" }
