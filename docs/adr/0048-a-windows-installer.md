@@ -125,15 +125,22 @@ fires, which is silent for a release cycle.
   and no `ALLUSERS`) plus `ALLUSERS=2`. `MSIINSTALLPERUSER=1` is per user,
   empty is per machine, and `ALLUSERS=2` alone is per machine.
 - **The default.** Run by an administrator: per machine, which is also what
-  finds the product older releases installed, so upgrades are unchanged.
-  Without administrator rights: per user, from a double-click or
-  `msiexec /i x.msi /qn` with no arguments and no UAC prompt. Set in
-  the sequence by `SetProperty` before `FindRelatedProducts` on
-  `NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS="1"`. Explicit:
-  `MSIINSTALLPERUSER=1`, or `MSIINSTALLPERUSER=""` or `ALLUSERS=1` as an
-  administrator. A dialog after the licence asks "Only for me" or "For all
-  users" and sets `MSIINSTALLPERUSER`, `ALLUSERS` and `INSTALLFOLDER`; the
-  stock Install button then shows its shield only for all users.
+  finds the product older releases installed, so upgrades are unchanged. With
+  a user interface and without administrator rights: per user, set in the
+  client-side sequence by `SetProperty` before `FindRelatedProducts` on
+  `NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS="1"`. **A silent
+  install cannot have an identity-dependent default.** Windows Installer
+  resolves the context from the command line and the Property table before
+  any sequence runs; measured on `windows-latest` as a standard local user,
+  `msiexec /i x.msi /qn` logged `Modifying ALLUSERS property ... new value: '1'`
+  and then `Rejecting product ...: Non-assigned apps are disabled for non-admin
+  users`, exit 1625. So a silent per-user install passes `MSIINSTALLPERUSER=1`,
+  and a default in the Property table would make every administrator's, and
+  SYSTEM's, silent install per user. Explicit: `MSIINSTALLPERUSER=1`, or
+  `MSIINSTALLPERUSER=""` or `ALLUSERS=1`. A dialog after the licence asks "Only
+  for me" or "For all users" and sets `MSIINSTALLPERUSER`, `ALLUSERS` and
+  `INSTALLFOLDER`; the stock Install button then shows its shield only for all
+  users.
 - **What differs per user.**
 
   | | per machine | per user |
@@ -154,7 +161,8 @@ fires, which is silent for a release cycle.
   `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
   a per-user install, so searching it would have stopped refusing.
 - **Covered by** `test/msi.ps1` 9e to 9k, run as a standard local user: the
-  default install, PATH, the `docker` feature and its refusals, the Hyper-V
+  silent no-argument refusal (probed and printed), the install with
+  `MSIINSTALLPERUSER=1`, PATH, the `docker` feature and its refusals, the Hyper-V
   refusal, both coexistence refusals, an in-place upgrade and the uninstall.
   Each premise above is printed from the log it came from.
 - **Not covered:** the dialog (built, never clicked), a filtered administrator

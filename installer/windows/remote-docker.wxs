@@ -40,14 +40,16 @@
     <Property Id="ALLUSERS" Value="2" />
 
     <!--
-      Which context an install gets when nobody said. Without administrator
-      rights a per-machine install is impossible, so that user gets their own
-      copy, silently and from a double-click. This runs before
-      FindRelatedProducts, in the sequence that decides the context. An
-      administrator keeps the per-machine default, which is what finds the
-      product that older releases installed.
+      Which context an install gets when nobody said, for an install with a user
+      interface: without administrator rights a per-machine install is
+      impossible, so that user gets their own copy. An administrator keeps the
+      per-machine default, which is what finds the product that older releases
+      installed. Only the client-side sequence can do this. A silent install
+      resolves its context before any sequence runs (measured: a standard user's
+      /qn ends with ALLUSERS=1 and error 1625), so there it has to be asked for
+      with MSIINSTALLPERUSER=1.
     -->
-    <SetProperty Id="MSIINSTALLPERUSER" Value="1" Before="FindRelatedProducts" Sequence="both"
+    <SetProperty Id="MSIINSTALLPERUSER" Value="1" Before="FindRelatedProducts" Sequence="ui"
                  Condition="NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS=&quot;1&quot;" />
 
     <!--

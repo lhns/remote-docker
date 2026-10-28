@@ -430,9 +430,42 @@ if ($log -match '(?m)^Property\(S\): MSIINSTALLPERUSER = 1') { Fail 'the elevate
 Ok 'AdminUser = 1, ALLUSERS = 1 and MSIINSTALLPERUSER unset: per machine, as before'
 
 # ---------------------------------------------------------------------------
-Section '9f. a user with no administrator rights installs silently, with no arguments, for themselves'
+Section '9f. a user with no administrator rights installs for themselves'
 
-Invoke-AsStdMsi @('/i', $StdMsi) 'std-default' 0
+# Probed, not asserted: a silent install resolves its context before any
+# sequence runs, so with no argument a standard user gets a per-machine install
+# that Windows Installer then refuses. Printed for the record.
+$p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+  -ArgumentList @('/i', $StdMsi, '/qn', '/l*v', "$Pub\std-noargs.log") -WindowStyle Hidden -PassThru
+if (-not $p.WaitForExit(5 * 60 * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Fail 'msiexec /qn with no arguments as the standard user hung' }
+$noargsExit = $p.ExitCode
+Copy-Item "$Pub\std-noargs.log" (Join-Path $LogDir 'std-noargs.log') -Force -ErrorAction SilentlyContinue
+$nl = Get-Content "$Pub\std-noargs.log" -Raw -ErrorAction SilentlyContinue
+$nlines = @([regex]::Matches($nl, '(?m)^.*(PROPERTY CHANGE: Modifying ALLUSERS|PROPERTY CHANGE: Adding MSIINSTALLPERUSER|Rejecting product|Error 1925).*$') | ForEach-Object { $_.Value.Trim() })
+Write-Host "  PROBE: msiexec /i /qn with no arguments as ${StdName} exited $noargsExit"
+$nlines | ForEach-Object { Write-Host "    $_" }
+if ($noargsExit -eq 0) { Write-Host '  PROBE: it installed' }
+else { Write-Host '  PROBE: refused, so a silent per-user install must pass MSIINSTALLPERUSER=1' -ForegroundColor Yellow }
+
+# With a reduced user interface the client-side sequence runs, which is where
+# the per-user default is set (what a double-click gets, minus the dialogs).
+if ($noargsExit -ne 0) {
+  $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList @('/i', $StdMsi, '/qr', '/l*v', "$Pub\std-reduced.log") -WindowStyle Hidden -PassThru
+  if (-not $p.WaitForExit(5 * 60 * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Write-Host '  PROBE: /qr as the standard user hung' -ForegroundColor Yellow; $reducedExit = 'hung' }
+  else { $reducedExit = $p.ExitCode }
+  Copy-Item "$Pub\std-reduced.log" (Join-Path $LogDir 'std-reduced.log') -Force -ErrorAction SilentlyContinue
+  $rl = Get-Content "$Pub\std-reduced.log" -Raw -ErrorAction SilentlyContinue
+  $rlines = @([regex]::Matches($rl, '(?m)^.*(PROPERTY CHANGE: Modifying ALLUSERS|PROPERTY CHANGE: Adding MSIINSTALLPERUSER|Rejecting product|Error 1925|Doing action: SetMSIINSTALLPERUSER).*$') | ForEach-Object { $_.Value.Trim() })
+  Write-Host "  PROBE: msiexec /i /qr (reduced UI) as ${StdName} exited $reducedExit"
+  $rlines | ForEach-Object { Write-Host "    $_" }
+  if ($reducedExit -eq 0) {
+    Invoke-AsStdMsi @('/x', $StdMsi) 'std-reduced-uninstall' 0
+  }
+}
+Assert-StdNotInstalled 'before the explicit per-user install'
+
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-default' 0
 $f = Get-StdFacts 'facts-default' 'remote-docker remote --help'
 $stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
 Write-Host "  saw: localappdata=$($f.localappdata)"
@@ -472,7 +505,7 @@ Assert-StdNotInstalled 'after the per-user uninstall'
 # ---------------------------------------------------------------------------
 Section '9g. a per-user install with the docker.exe feature, and the refusal still fires'
 
-Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-feature' 0
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-feature' 0
 $f = Get-StdFacts 'facts-feature' 'docker remote --help'
 $stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
 if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "the feature was selected and $stdDir\docker.exe was not created" }
@@ -485,7 +518,7 @@ Assert-StdNotInstalled 'after uninstalling the docker.exe feature'
 # the stub is the administrator's.
 $stub = Join-Path $env:SystemRoot 'System32\docker.exe'
 Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $stub
-Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-refusal' 1603
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-refusal' 1603
 $rl = Log-Of 'std-refusal'
 Remove-Item $stub -Force
 if ($rl -notmatch [regex]::Escape('System32\docker.exe')) { Fail 'the refusal did not name the docker.exe in System32' }
@@ -496,7 +529,7 @@ Ok 'refused, naming the docker.exe it found in System32'
 $desktopBin = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'
 New-Item -ItemType Directory -Force -Path $desktopBin | Out-Null
 Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') (Join-Path $desktopBin 'docker.exe')
-Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,Path,DockerName') 'std-refusal-desktop' 1603
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-refusal-desktop' 1603
 $dl = Log-Of 'std-refusal-desktop'
 Remove-Item (Join-Path $env:ProgramFiles 'Docker') -Recurse -Force
 if ($dl -notmatch [regex]::Escape('Docker\Docker\resources\bin\docker.exe')) {
@@ -508,7 +541,7 @@ Assert-StdNotInstalled 'after the refusals'
 # ---------------------------------------------------------------------------
 Section '9h. the Hyper-V workspace is refused in a per-user install, by name'
 
-Invoke-AsStdMsi @('/i', $StdMsi, 'ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=msiserver') 'std-hyperv' 1603
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=msiserver') 'std-hyperv' 1603
 if ((Log-Of 'std-hyperv') -notmatch 'needs an installation for all users') { Fail 'the refusal message is not in the log' }
 Ok 'refused with 1603, and the message says it needs all users'
 Assert-StdNotInstalled 'after the Hyper-V refusal'
@@ -517,7 +550,7 @@ Assert-StdNotInstalled 'after the Hyper-V refusal'
 Section '9i. one install per user: a per-user install over a per-machine one is refused'
 
 Invoke-Msi @('/i', $Msi) 'co-machine' 0
-Invoke-AsStdMsi @('/i', $StdMsi) 'std-over-machine' 1603
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-over-machine' 1603
 $cl = Log-Of 'std-over-machine'
 if ($cl -notmatch 'already installed for all users') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
 Ok 'refused, naming the all-users install'
@@ -558,9 +591,9 @@ Ok 'the per-user copy is gone with its PATH entry and key'
 # ---------------------------------------------------------------------------
 Section '9k. a per-user install upgrades in place'
 
-Invoke-AsStdMsi @('/i', $StdStandin1) 'std-up1' 0
+Invoke-AsStdMsi @('/i', $StdStandin1, 'MSIINSTALLPERUSER=1') 'std-up1' 0
 if ((Get-StdFacts 'facts-up1').arp -ne '0.0.1') { Fail 'version 0.0.1 is not registered after installing it' }
-Invoke-AsStdMsi @('/i', $StdStandin2) 'std-up2' 0
+Invoke-AsStdMsi @('/i', $StdStandin2, 'MSIINSTALLPERUSER=1') 'std-up2' 0
 $f = Get-StdFacts 'facts-up2'
 if ($f.arp -ne '0.0.2') { Fail "after the upgrade the registered version is '$($f.arp)', not 0.0.2" }
 $entries = @($f.userpath -split ';' | Where-Object { $_ -like '*remote-docker*' })
