@@ -416,7 +416,8 @@ function Get-StdFacts([string]$Tag, [string]$Cmd = '') {
   return $facts
 }
 
-function Assert-StdNotInstalled([string]$What) {
+# -MachineProductVisible: an all-users product is registered for every user, so only the user's own files and keys are checked.
+function Assert-StdNotInstalled([string]$What, [switch]$MachineProductVisible) {
   $f = Get-StdFacts 'facts-clean'
   $dir = Join-Path $f.localappdata 'Programs\remote-docker'
   if (Test-Path $dir) {
@@ -425,7 +426,7 @@ function Assert-StdNotInstalled([string]$What) {
   }
   if ($f.userpath -like '*remote-docker*') { Fail "$What : $StdName's PATH still names remote-docker: $($f.userpath)" }
   if ($f.key -eq 'True') { Fail "$What : HKCU\Software\lhns\remote-docker still exists for $StdName" }
-  if ($f.arp) { Fail "$What : $StdName's still has the product registered: $($f.arp)" }
+  if ($f.arp -and -not $MachineProductVisible) { Fail "$What : $StdName's still has the product registered: $($f.arp)" }
   Ok "$What : nothing of it is left in $StdName's profile or registry"
 }
 
@@ -564,7 +565,7 @@ $fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .
 Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
 if ($fr) { Fail "FindRelatedProducts saw the per-machine product from a per-user install: [$($fr -join '; ')]; the markers are not needed, so say so" }
 Ok 'FindRelatedProducts did not see the product of the other context'
-Assert-StdNotInstalled 'after the refused per-user install'
+Assert-StdNotInstalled 'after the refused per-user install' -MachineProductVisible
 Invoke-Msi @('/x', $Msi) 'co-machine-uninstall' 0
 Assert-NotInstalled
 
