@@ -168,7 +168,7 @@ archives:
 # Keep syft at 1.14.2 or later: before it, a client scan took about 3 minutes
 # (a licence matcher built for every licence file, anchore/syft PR 3348), and
 # eight in a row were 20 minutes of the release (v0.16.2). On 1.55.0 all ten
-# archives take 17 seconds together. Windows binaries need 1.19 or later.
+# archives take 17 seconds together.
 sboms:
   - id: archives
     artifacts: archive

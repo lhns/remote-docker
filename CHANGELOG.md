@@ -13,7 +13,7 @@ software.
 ### Fixes
 
 - **The SBOM of a client archive gave the program's own version as v5.6.0.**
-  That is the embedded Compose's version; the SBOMs now name the commit the
+  That is the embedded Compose's version. Every SBOM now names the commit the
   program was built from, as a `v0.0.0-<time>-<revision>` version.
 
 ## 0.16.2 — 2026-10-28
