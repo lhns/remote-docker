@@ -173,6 +173,11 @@ fires, which is silent for a release cycle.
   version. The scope dialog does not show the warning (WiX 5's UI element takes
   no `ControlCondition`). **Not detected:** another user's per-user copy, whose
   hive this install cannot read.
+- **Each context has its own marker components** (`C.Installed` and
+  `C.UserInstalled`, `C.DockerAlias` and `C.UserDockerAlias`, like the PATH
+  ones). One `HKMU` component has one component code in both contexts, and
+  removing the per-user copy while an all-users install held that code left
+  the per-user `Installed` value behind (measured on `windows-latest`, 9j).
 - **The `docker.exe` refusal reads Docker Desktop's directories through
   `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
   a per-user install, so searching it would have stopped refusing.
