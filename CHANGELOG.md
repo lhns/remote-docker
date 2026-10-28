@@ -12,13 +12,14 @@ software.
 
 ### New
 
-- **The Windows installer no longer needs administrator rights.** Without
-  them it installs for you alone, into your profile and your own PATH, with no
-  UAC prompt; as an administrator it installs for all users as before.
-  Upgrades of an existing all-users install are unchanged. The Hyper-V
-  workspace still needs all users. Not covered: the dialog that asks which,
-  which CI builds and never clicks, and another user's own copy, which an
-  all-users install cannot see.
+- **The Windows installer no longer needs administrator rights.** It installs
+  for you alone, into your profile and your own PATH, with no UAC prompt: the
+  dialogs default to it without administrator rights, and a silent install
+  asks with `MSIINSTALLPERUSER=1`. As an administrator it installs for all
+  users as before, and upgrades of an existing all-users install are
+  unchanged. The Hyper-V workspace still needs all users. Not covered: the
+  dialog that asks which, which CI builds and never clicks, and another user's
+  own copy, which an all-users install cannot see.
 
 ## 0.16.1 — 2026-10-26
 

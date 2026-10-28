@@ -76,11 +76,12 @@ Every release also carries an MSI per architecture, beside the zip:
 `remote-docker.exe` and **appends** its directory to PATH (a feature of its
 own, "Add to PATH", that can be left out). **It does not need administrator
 rights.** Run by an administrator it installs for all users, into
-`C:\Program Files\remote-docker` and the system PATH. Run by anyone else, from
-a double-click or `msiexec /i ... /qn`, it installs for that user alone, into
-`%LocalAppData%\Programs\remote-docker` and their own PATH, with no UAC prompt.
-The dialogs ask which when they can. About 19 MB on amd64 and 18 on arm64, the
-same binary the zip holds.
+`C:\Program Files\remote-docker` and the system PATH. Installed for one user,
+it goes into `%LocalAppData%\Programs\remote-docker` and that user's own PATH,
+with no UAC prompt: the dialogs offer it, and default to it without
+administrator rights, and a silent install asks for it with
+`MSIINSTALLPERUSER=1`. About 19 MB on amd64 and 18 on arm64, the same binary the
+zip holds.
 
 From Git Bash or another MSYS2 shell, read [Windows shells](#windows-shells):
 those shells rewrite path arguments before this program sees them.
@@ -95,12 +96,11 @@ msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn
 # silently, and also as docker.exe
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName
 
-# for yourself, whoever you are (the default without administrator rights)
+# for yourself, with no administrator rights. A silent install has to say so:
+# without it Windows Installer tries for all users and refuses a standard user
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn MSIINSTALLPERUSER=1
 
-# for all users (the default for an administrator). A shell that has not been
-# elevated counts as no administrator here, so it installs per user unless
-# asked: ALLUSERS=1 prompts for elevation.
+# for all users (the default as an administrator)
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ALLUSERS=1
 
 # uninstall
