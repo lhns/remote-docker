@@ -207,10 +207,10 @@ archives:
 #
 # One config per archive id, because goreleaser runs the configs in parallel
 # and the archives of one config one after the other. A client scan takes
-# about 4 minutes on one core, nearly all of it matching licence texts in the
-# module cache (`--enrich all`, goreleaser's default), so eight in a row was
-# 20 minutes of the release (v0.16.2) and four at a time is a quarter of that.
-# The agent's is 10 seconds and goes first.
+# about 3 minutes, nearly all of it matching licence texts (`--enrich all`,
+# goreleaser's default), so eight in a row was 20 minutes of the release
+# (v0.16.2). The scans compete for cores, so in parallel they take 12 to 15
+# minutes, not a quarter. The agent's is 10 seconds and goes first.
 sboms:
   - id: sbom-agent
     ids: [remote-dockerd]
