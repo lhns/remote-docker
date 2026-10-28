@@ -372,7 +372,11 @@ function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect, [stri
   $p = Start-AsStd msiexec.exe $all
   if (-not $p.WaitForExit(10 * 60 * 1000)) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-    if (Test-Path $log) { Get-Content $log -Tail 200 }
+    if (Test-Path $log) {
+      Write-Host '  scope decisions in the log:'
+      Select-String -Path $log -Pattern 'MSIINSTALLPERUSER|ALLUSERS|AdminUser|INSTALLSCOPE|Doing action: (FindRelated|CostInit|ExecuteAction|INSTALL)|Error 19|UILevel|Skipping action: Set' | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
+      Get-Content $log -Tail 200
+    }
     Fail "msiexec as $StdName did not finish within 10 minutes"
   }
   if (Test-Path $log) { Copy-Item $log (Join-Path $LogDir "$Tag.log") -Force }
