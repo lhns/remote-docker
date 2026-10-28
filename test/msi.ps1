@@ -449,7 +449,7 @@ Section '9f. a user with no administrator rights installs for themselves'
 
 # Probed, not asserted: a silent install resolves its context before any
 # sequence runs, so with no argument a standard user gets a per-machine install
-# that Windows Installer then refuses. Printed for the record.
+# that Windows Installer then refuses (1603, error 1925). Printed for the record.
 $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
   -ArgumentList @('/i', $StdMsi, '/qn', '/l*v', "$Pub\std-noargs.log") -WindowStyle Hidden -PassThru
 if (-not $p.WaitForExit(5 * 60 * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Fail 'msiexec /qn with no arguments as the standard user hung' }
@@ -459,33 +459,11 @@ $nl = Get-Content "$Pub\std-noargs.log" -Raw -ErrorAction SilentlyContinue
 $nlines = @([regex]::Matches($nl, '(?m)^.*(PROPERTY CHANGE: Modifying ALLUSERS|PROPERTY CHANGE: Adding MSIINSTALLPERUSER|Rejecting product|Error 1925).*$') | ForEach-Object { $_.Value.Trim() })
 Write-Host "  PROBE: msiexec /i /qn with no arguments as ${StdName} exited $noargsExit"
 $nlines | ForEach-Object { Write-Host "    $_" }
-if ($noargsExit -eq 0) { Write-Host '  PROBE: it installed' }
-else { Write-Host '  PROBE: refused, so a silent per-user install must pass MSIINSTALLPERUSER=1' -ForegroundColor Yellow }
-
-# With a reduced user interface the client-side sequence runs, which is where
-# the per-user default is set (what a double-click gets, minus the dialogs).
-if ($noargsExit -ne 0) {
-  $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList @('/i', $StdMsi, '/qr', '/l*v', "$Pub\std-reduced.log") -WindowStyle Hidden -PassThru
-  if (-not $p.WaitForExit(2 * 60 * 1000)) {
-    Write-Host '  PROBE: /qr as the standard user hung' -ForegroundColor Yellow
-    $reducedExit = 'hung'
-    Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | ForEach-Object {
-      $owner = (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User
-      if ($owner -eq $StdName) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    }
-  }
-  else { $reducedExit = $p.ExitCode }
-  Copy-Item "$Pub\std-reduced.log" (Join-Path $LogDir 'std-reduced.log') -Force -ErrorAction SilentlyContinue
-  $rl = Get-Content "$Pub\std-reduced.log" -Raw -ErrorAction SilentlyContinue
-  $rlines = @([regex]::Matches($rl, '(?m)^.*(PROPERTY CHANGE: Modifying ALLUSERS|PROPERTY CHANGE: Adding MSIINSTALLPERUSER|Rejecting product|Error 1925|Doing action: SetMSIINSTALLPERUSER).*$') | ForEach-Object { $_.Value.Trim() })
-  Write-Host "  PROBE: msiexec /i /qr (reduced UI) as ${StdName} exited $reducedExit"
-  $rlines | ForEach-Object { Write-Host "    $_" }
-  if ($reducedExit -eq 0) {
-    Invoke-AsStdMsi @('/x', $StdMsi) 'std-reduced-uninstall' 0
-  }
+if ($noargsExit -eq 0) {
+  Write-Host '  PROBE: it installed'
+  Invoke-AsStdMsi @('/x', $StdMsi) 'std-noargs-uninstall' 0
 }
-Assert-StdNotInstalled 'before the explicit per-user install'
+else { Write-Host '  PROBE: refused, so a silent per-user install must pass MSIINSTALLPERUSER=1' -ForegroundColor Yellow }
 
 Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-default' 0
 $f = Get-StdFacts 'facts-default' 'remote-docker remote --help'
@@ -571,16 +549,20 @@ Assert-StdNotInstalled 'after the Hyper-V refusal'
 # ---------------------------------------------------------------------------
 Section '9i. one install per user: a per-user install over a per-machine one is refused'
 
+# A different version, so a different ProductCode: the same package is refused
+# by Windows Installer itself (1625, "maintenance mode ... installed
+# per-machine"), which is not the case an upgrade is.
 Invoke-Msi @('/i', $Msi) 'co-machine' 0
-Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-over-machine' 1603
+Invoke-AsStdMsi @('/i', $StdStandin1, 'MSIINSTALLPERUSER=1') 'std-over-machine' 1603
 $cl = Log-Of 'std-over-machine'
 if ($cl -notmatch 'already installed for all users') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
 Ok 'refused, naming the all-users install'
 # Claim: FindRelatedProducts does not see a product of the other context, which
-# is why the registry markers exist.
-$fr = [regex]::Match($cl, '(?m)^Property\(S\): WIX_UPGRADE_DETECTED = .*$').Value
-Write-Host "  saw: WIX_UPGRADE_DETECTED [$fr]"
-if ($fr) { Fail "FindRelatedProducts saw the per-machine product from a per-user install: [$fr]; the markers are not needed, so say so" }
+# is why the registry markers exist. The all-users product is the higher version,
+# so seeing it would have set WIX_DOWNGRADE_DETECTED.
+$fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value }
+Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
+if ($fr) { Fail "FindRelatedProducts saw the per-machine product from a per-user install: [$($fr -join '; ')]; the markers are not needed, so say so" }
 Ok 'FindRelatedProducts did not see the product of the other context'
 Assert-StdNotInstalled 'after the refused per-user install'
 Invoke-Msi @('/x', $Msi) 'co-machine-uninstall' 0
@@ -595,12 +577,12 @@ Invoke-Msi @('/i', $Msi, 'MSIINSTALLPERUSER=1') 'co-user' 0
 if (-not (Test-Path (Join-Path $userDir 'remote-docker.exe'))) { Fail "MSIINSTALLPERUSER=1 did not install into $userDir" }
 if (Test-Path $Exe) { Fail "$Exe exists after a per-user install by an administrator" }
 Ok "MSIINSTALLPERUSER=1 installs into $userDir, even for an administrator"
-Invoke-Msi @('/i', $Msi) 'co-user-machine' 1603
+Invoke-Msi @('/i', $StandinMsi) 'co-user-machine' 1603
 $cl = Log-Of 'co-user-machine'
 if ($cl -notmatch 'already installed for your account alone') { Fail "the refusal is not in the log; tail: $($cl.Substring([Math]::Max(0, $cl.Length - 1500)))" }
-$fr = [regex]::Match($cl, '(?m)^Property\(S\): WIX_UPGRADE_DETECTED = .*$').Value
-Write-Host "  saw: WIX_UPGRADE_DETECTED [$fr]"
-if ($fr) { Fail "FindRelatedProducts saw the per-user product from a per-machine install: [$fr]" }
+$fr = [regex]::Matches($cl, '(?m)^Property\(S\): WIX_(UP|DOWN)GRADE_DETECTED = .*$') | ForEach-Object { $_.Value }
+Write-Host "  saw: WIX_*GRADE_DETECTED [$($fr -join '; ')]"
+if ($fr) { Fail "FindRelatedProducts saw the per-user product from a per-machine install: [$($fr -join '; ')]" }
 Ok 'refused, and FindRelatedProducts did not see it either'
 if (Test-Path $Exe) { Fail "$Exe exists after the refused per-machine install" }
 Invoke-Msi @('/x', $Msi) 'co-user-uninstall' 0

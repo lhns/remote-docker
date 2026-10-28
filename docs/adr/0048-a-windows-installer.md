@@ -133,14 +133,21 @@ fires, which is silent for a release cycle.
   resolves the context from the command line and the Property table before
   any sequence runs; measured on `windows-latest` as a standard local user,
   `msiexec /i x.msi /qn` logged `Modifying ALLUSERS property ... new value: '1'`
-  and then `Rejecting product ...: Non-assigned apps are disabled for non-admin
-  users`, exit 1625. So a silent per-user install passes `MSIINSTALLPERUSER=1`,
+  and then `Error 1925. You do not have sufficient privileges to complete this
+  installation for all users`, exit 1603. So a silent per-user install passes
+  `MSIINSTALLPERUSER=1`,
   and a default in the Property table would make every administrator's, and
   SYSTEM's, silent install per user. Explicit: `MSIINSTALLPERUSER=1`, or
   `MSIINSTALLPERUSER=""` or `ALLUSERS=1`. A dialog after the licence asks "Only
   for me" or "For all users" and sets `MSIINSTALLPERUSER`, `ALLUSERS` and
   `INSTALLFOLDER`; the stock Install button then shows its shield only for all
   users.
+- **Windows Server refuses any install by a standard user by default.** The
+  machine policy `DisableMsi` defaults to 1 there, and the log says `Rejecting
+  product ...: Non-assigned apps are disabled for non-admin users`, exit 1625,
+  in either context. It is the OS's, not the package's: `windows-latest` is a
+  Server image, so `test/msi.ps1` sets the policy to 0 around 9e to 9k and puts
+  it back. Windows 11 defaults to 0.
 - **What differs per user.**
 
   | | per machine | per user |

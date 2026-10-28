@@ -1564,8 +1564,8 @@ an uninstall that takes both names and the PATH entry with it. PATH is a
 feature that can be left out, added and removed by Modify, and is kept across
 an upgrade from the latest released MSI (9b to 9d). Sections 9e to 9k run as
 a STANDARD local user, never elevated (ADR 0048, 2026-10-28): a silent install
-with no arguments PROBED and refused (1625, the context is resolved before any
-sequence), and one with `MSIINSTALLPERUSER=1` going to `%LocalAppData%\Programs` and the user PATH with
+with no arguments PROBED and refused (1603, error 1925: the context is
+resolved before any sequence), and one with `MSIINSTALLPERUSER=1` going to `%LocalAppData%\Programs` and the user PATH with
 nothing in Program Files, HKLM or the system PATH, the `docker.exe` feature and
 its refusals (System32 and Docker Desktop's real Program Files), the Hyper-V
 refusal, a per-user install over an all-users one refused and the reverse, and
