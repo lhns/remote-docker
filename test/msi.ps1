@@ -53,20 +53,20 @@ function Ok([string]$message) {
 
 # The log is printed whenever the exit code is not the one asked for, because
 # the reason an MSI failed is only ever in it.
-function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn') {
+function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn', [int]$Minutes = 10) {
   $log = Join-Path $LogDir "$Tag.log"
   $all = $Arguments + @($Ui, '/l*v', $log)
   Write-Host "  msiexec $($all -join ' ')"
   $p = Start-Process -FilePath msiexec.exe -ArgumentList $all -PassThru
   # Bounded, so a hang fails here with the log and what was still running,
   # rather than at the job's limit with nothing to read.
-  if (-not $p.WaitForExit(10 * 60 * 1000)) {
-    Write-Host "  msiexec still running after 10 minutes; still running:" -ForegroundColor Yellow
+  if (-not $p.WaitForExit($Minutes * 60 * 1000)) {
+    Write-Host "  msiexec still running after $Minutes minutes; still running:" -ForegroundColor Yellow
     Get-CimInstance Win32_Process -Filter "Name='msiexec.exe' OR Name='remote-docker.exe'" |
       ForEach-Object { Write-Host "    $($_.ProcessId) $($_.CommandLine)" }
     if (Test-Path $log) { Get-Content $log -Tail 200 }
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-    Fail "msiexec did not finish within 10 minutes"
+    Fail "msiexec did not finish within $Minutes minutes"
   }
   if ($p.ExitCode -ne $Expect) {
     Write-Host "  exit $($p.ExitCode), expected $Expect; log follows:" -ForegroundColor Yellow
@@ -365,19 +365,19 @@ Copy-Item $Msi $StdMsi -Force
 Copy-Item $StandinMsi $StdStandin1 -Force
 Copy-Item $StandinNextMsi $StdStandin2 -Force
 
-function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn') {
+function Invoke-AsStdMsi([string[]]$Arguments, [string]$Tag, [int]$Expect, [string]$Ui = '/qn', [int]$Minutes = 10) {
   $log = Join-Path $Pub "$Tag.log"
   $all = $Arguments + @($Ui, '/l*v', $log)
   Write-Host "  msiexec as ${StdName}: $($all -join ' ')"
   $p = Start-AsStd msiexec.exe $all
-  if (-not $p.WaitForExit(10 * 60 * 1000)) {
+  if (-not $p.WaitForExit($Minutes * 60 * 1000)) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     if (Test-Path $log) {
       Write-Host '  scope decisions in the log:'
       Select-String -Path $log -Pattern 'MSIINSTALLPERUSER|ALLUSERS|AdminUser|INSTALLSCOPE|Doing action: (FindRelated|CostInit|ExecuteAction|INSTALL)|Error 19|UILevel|Skipping action: Set' | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
       Get-Content $log -Tail 200
     }
-    Fail "msiexec as $StdName did not finish within 10 minutes"
+    Fail "msiexec as $StdName did not finish within $Minutes minutes"
   }
   if (Test-Path $log) { Copy-Item $log (Join-Path $LogDir "$Tag.log") -Force }
   if ($p.ExitCode -ne $Expect) {
@@ -665,7 +665,7 @@ function Show-ScopeDefault([string]$Log, [bool]$Expected) {
 }
 
 # The standard user, with no properties at all.
-Invoke-AsStdMsi @('/i', $StdMsi) 'std-qr' 0 '/qr'
+Invoke-AsStdMsi @('/i', $StdMsi) 'std-qr' 0 '/qr' 3
 Show-ScopeDefault (Log-Of 'std-qr') $true
 $f = Get-StdFacts 'facts-qr' 'remote-docker remote --help'
 $stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
@@ -684,7 +684,7 @@ Invoke-AsStdMsi @('/x', $StdMsi) 'std-qr-uninstall' 0
 Assert-StdNotInstalled 'after the /qr per-user uninstall'
 
 # The elevated runner, with no properties either.
-Invoke-Msi @('/i', $Msi) 'qr-machine' 0 '/qr'
+Invoke-Msi @('/i', $Msi) 'qr-machine' 0 '/qr' 3
 Show-ScopeDefault (Log-Of 'qr-machine') $false
 if (-not (Test-Path $Exe)) { Fail "no $Exe after an elevated /qr install" }
 Assert-MachineInstalled 'after the elevated /qr install'

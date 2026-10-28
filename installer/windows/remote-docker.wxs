@@ -50,13 +50,16 @@
       interface: without administrator rights a per-machine install is
       impossible, so that user gets their own copy. An administrator keeps the
       per-machine default, which is what finds the product that older releases
-      installed. Only the client-side sequence can do this. A silent install
-      resolves its context before any sequence runs (measured: a standard user's
-      /qn ends with ALLUSERS=1 and error 1925), so there it has to be asked for
-      with MSIINSTALLPERUSER=1.
+      installed. Only the client-side sequence can do this. Windows Installer
+      resolves ALLUSERS=2 to 1 before any sequence runs (measured: a standard
+      user's /qr log shows "Modifying ALLUSERS ... new value: '1'" first), so
+      ALLUSERS cannot tell an explicit choice from the default and is not
+      tested. A silent install skips the sequence (a standard user's /qn ends
+      with error 1925), so there the context has to be asked for with
+      MSIINSTALLPERUSER=1.
     -->
     <SetProperty Id="MSIINSTALLPERUSER" Value="1" Before="FindRelatedProducts" Sequence="ui"
-                 Condition="NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS=&quot;1&quot;" />
+                 Condition="NOT AdminUser AND NOT MSIINSTALLPERUSER" />
 
     <!--
       The user interface decides the context before the install runs, and its
