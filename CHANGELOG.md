@@ -8,6 +8,17 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The Windows installer no longer needs administrator rights.** Without
+  them it installs for you alone, into your profile and your own PATH, with no
+  UAC prompt; a silent install asks for that with `MSIINSTALLPERUSER=1`. As an
+  administrator it installs for all users, as before. The Hyper-V workspace
+  still needs an install for all users. If you install for all users while you
+  have your own copy, yours is left unused; remove it from Settings > Apps.
+
 ## 0.16.1 — 2026-10-26
 
 ### Fixes

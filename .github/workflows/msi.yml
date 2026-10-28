@@ -142,7 +142,7 @@ jobs:
 
       # About 4 minutes when it passes. Bounded so a hang fails while the step
       # below can still print the logs, instead of running to GitHub's 6 hours.
-      - name: install, uninstall, the docker.exe feature and the Hyper-V workspace
+      - name: install, uninstall, per user and per machine, the docker.exe feature and the Hyper-V workspace
         timeout-minutes: 30
         shell: pwsh
         env:

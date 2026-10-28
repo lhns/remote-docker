@@ -73,10 +73,15 @@ if you prefer one. *(Checked 2026-09-23 with
 
 Every release also carries an MSI per architecture, beside the zip:
 `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
-`remote-docker.exe` into `C:\Program Files\remote-docker` and **appends** that
-directory to the system PATH (a feature of its own, "Add to the system
-PATH", that can be left out). Per machine, so it needs administrator rights.
-About 19 MB on amd64 and 18 on arm64, the same binary the zip holds.
+`remote-docker.exe` and **appends** its directory to PATH (a feature of its
+own, "Add to PATH", that can be left out). **It does not need administrator
+rights.** Run by an administrator it installs for all users, into
+`C:\Program Files\remote-docker` and the system PATH. Installed for one user,
+it goes into `%LocalAppData%\Programs\remote-docker` and that user's own PATH,
+with no UAC prompt: the dialogs offer it, and default to it without
+administrator rights, and a silent install asks for it with
+`MSIINSTALLPERUSER=1`. About 19 MB on amd64 and 18 on arm64, the same binary the
+zip holds.
 
 From Git Bash or another MSYS2 shell, read [Windows shells](#windows-shells):
 those shells rewrite path arguments before this program sees them.
@@ -91,9 +96,30 @@ msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn
 # silently, and also as docker.exe
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName
 
+# for yourself, with no administrator rights. A silent install has to say so:
+# without it Windows Installer tries for all users and refuses a standard user
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn MSIINSTALLPERUSER=1
+
+# for all users (the default as an administrator)
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ALLUSERS=1
+
 # uninstall
 msiexec /x remote-docker_0.6.0_windows_amd64.msi /qn
 ```
+
+A copy unzipped from a download and added to PATH by hand stays where it is:
+the installer only appends its own entry and only removes that one on
+uninstall. Remove your own entry before installing, or that copy keeps running
+instead of the installed one.
+
+Installing for yourself over an all-users copy is refused. Installing for all
+users while you have your own copy works and warns in the log: your copy stays
+installed and is no longer used, because the all-users copy comes first on
+PATH. Remove it from Settings > Apps, or with `msiexec /x` and the MSI it was
+installed from, as yourself and without administrator rights (a different
+version of the MSI than the all-users one, since Windows Installer refuses the
+same package across the two). Another user's own copy is not noticed. The
+Hyper-V workspace below needs all users.
 
 **The `docker.exe` option is off by default.** Selected, it installs a second
 copy of the same binary as `docker.exe`, so `docker run ...` on this machine is
@@ -126,7 +152,8 @@ the user who ran the installer, even a standard user who typed administrator
 credentials at the prompt: no sign-out, no administrator rights afterwards. It
 can also be added or removed later from Settings > Apps > remote-docker >
 Modify. It needs Hyper-V enabled; without it the feature is not offered and a
-silent install naming it is refused, naming the command that enables it.
+silent install naming it is refused, naming the command that enables it. It
+needs an install for all users, so an install for one user refuses it by name.
 
 ```powershell
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,HyperV WORKSPACENAME=dev `
