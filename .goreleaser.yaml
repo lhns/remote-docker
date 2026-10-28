@@ -25,9 +25,6 @@ env:
   - COMPOSE_VERSION={{ if index .Env "COMPOSE_VERSION" }}{{ .Env.COMPOSE_VERSION }}{{ else }}dev{{ end }}
 
 builds:
-  # One build per GOOS, so that each has its own archive and therefore its own
-  # SBOM config, which is what lets the scans run in parallel (see `sboms`).
-  # The first keeps the id `remote-docker`, which names its dist directory.
   - id: remote-docker
     main: ./cmd/remote-docker
     dir: client
@@ -38,39 +35,9 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # main.version LAST, and the order is load-bearing: syft reports the
-    # last -X version it finds as the main module's version, so with Compose's
-    # flag after it every client SBOM said v5.6.0 instead of the release.
-    # Measured with syft 1.14.0 on 2026-10-28 (the release workflow pins it);
-    # re-check against a built archive with
-    #   syft <archive> -o json | jq '.artifacts[] | select(.name | endswith("/client")) | .version'
     ldflags: &ldflags
-      - -s -w -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }} -X main.version={{.Version}}
-    goos: [linux]
-    goarch: [amd64, arm64]
-
-  - id: remote-docker-windows
-    main: ./cmd/remote-docker
-    dir: client
-    binary: remote-docker
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    ldflags: *ldflags
-    goos: [windows]
-    goarch: [amd64, arm64]
-
-  - id: remote-docker-darwin
-    main: ./cmd/remote-docker
-    dir: client
-    binary: remote-docker
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    ldflags: *ldflags
-    goos: [darwin]
+      - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
+    goos: [windows, linux, darwin]
     goarch: [amd64, arm64]
 
   # Android is its own GOOS, and has to be.
@@ -150,34 +117,20 @@ builds:
     goarch: [amd64, arm64]
 
 archives:
-  # One per GOOS, for the SBOM split. The default name template is shared, so
-  # the file names are what a single archive block produced.
-  - id: archive-linux
-    ids: [remote-docker]
+  - id: remote-docker
+    ids: [remote-docker, remote-docker-android]
+    # A zip on Windows and a tarball elsewhere, matching what each platform's
+    # tooling expects to be handed.
     formats: [tar.gz]
-    files: &clientfiles
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
       - README.md
       - CHANGELOG.md
       - LICENSE
       - NOTICE
       - THIRD-PARTY-NOTICES.md
-
-  # A zip on Windows and a tarball elsewhere, matching what each platform's
-  # tooling expects to be handed.
-  - id: archive-windows
-    ids: [remote-docker-windows]
-    formats: [zip]
-    files: *clientfiles
-
-  - id: archive-darwin
-    ids: [remote-docker-darwin]
-    formats: [tar.gz]
-    files: *clientfiles
-
-  - id: archive-android
-    ids: [remote-docker-android]
-    formats: [tar.gz]
-    files: *clientfiles
 
   # Its own archive, so `remote-docker_<v>_linux_amd64` stays the client and an
   # operator downloading a workspace does not get 70MB of Docker CLI with it.
@@ -204,28 +157,8 @@ archives:
 #
 # syft is the default tool and the release workflow installs it pinned. A
 # snapshot build makes no archives, so nothing here runs in ci.yml.
-#
-# One config per archive id, because goreleaser runs the configs in parallel
-# and the archives of one config one after the other. A client scan takes
-# about 3 minutes, nearly all of it matching licence texts (`--enrich all`,
-# goreleaser's default), so eight in a row was 20 minutes of the release
-# (v0.16.2). The scans compete for cores, so in parallel they take 12 to 15
-# minutes, not a quarter. The agent's is 10 seconds and goes first.
 sboms:
-  - id: sbom-agent
-    ids: [remote-dockerd]
-    artifacts: archive
-  - id: sbom-linux
-    ids: [archive-linux]
-    artifacts: archive
-  - id: sbom-windows
-    ids: [archive-windows]
-    artifacts: archive
-  - id: sbom-darwin
-    ids: [archive-darwin]
-    artifacts: archive
-  - id: sbom-android
-    ids: [archive-android]
+  - id: archives
     artifacts: archive
 
 checksum:

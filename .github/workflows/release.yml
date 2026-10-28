@@ -151,7 +151,7 @@ jobs:
           cosign-release: v2.4.1
       - uses: anchore/sbom-action/download-syft@v0
         with:
-          syft-version: v1.14.0
+          syft-version: v1.55.0
 
       # The manifest list by digest: a tag can move, and per-platform digests
       # leave what `docker pull` resolves unsigned.
@@ -190,7 +190,7 @@ jobs:
           cosign-release: v2.4.1
       - uses: anchore/sbom-action/download-syft@v0
         with:
-          syft-version: v1.14.0
+          syft-version: v1.55.0
 
       - name: Package and push
         id: push
@@ -297,7 +297,7 @@ jobs:
       # goreleaser's sboms block shells out to syft.
       - uses: anchore/sbom-action/download-syft@v0
         with:
-          syft-version: v1.14.0
+          syft-version: v1.55.0
 
       # The release body is the CHANGELOG's section for the tag, falling back
       # to goreleaser's commit list with a warning rather than blocking.
