@@ -333,6 +333,20 @@ function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
   if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
 }
 
+# GitHub's Windows image sets the machine policy DisableMsi=1, "Windows Installer:
+# Turn off Windows Installer for non-managed apps only", under which Windows
+# Installer rejects any install by a user without administrator rights, in
+# either context (1625, "Non-assigned apps are disabled for non-admin users").
+# That is the image's policy and not the package's, so it is lifted for these
+# sections and put back after them.
+$PolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer'
+$policyBefore = (Get-ItemProperty $PolicyKey -Name DisableMsi -ErrorAction SilentlyContinue).DisableMsi
+Write-Host "  DisableMsi policy before: [$policyBefore]"
+if ($null -ne $policyBefore -and $policyBefore -ne 0) {
+  Set-ItemProperty $PolicyKey -Name DisableMsi -Value 0
+  Write-Host '  lifted DisableMsi to 0 for sections 9e to 9k'
+}
+
 # The MSIs where the standard user can read them, and msiexec as that user: a
 # token without the Administrators group, never elevated.
 $StdMsi = Join-Path $Pub 'remote-docker.msi'
@@ -452,7 +466,14 @@ else { Write-Host '  PROBE: refused, so a silent per-user install must pass MSII
 if ($noargsExit -ne 0) {
   $p = Start-Process -FilePath msiexec.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
     -ArgumentList @('/i', $StdMsi, '/qr', '/l*v', "$Pub\std-reduced.log") -WindowStyle Hidden -PassThru
-  if (-not $p.WaitForExit(5 * 60 * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Write-Host '  PROBE: /qr as the standard user hung' -ForegroundColor Yellow; $reducedExit = 'hung' }
+  if (-not $p.WaitForExit(2 * 60 * 1000)) {
+    Write-Host '  PROBE: /qr as the standard user hung' -ForegroundColor Yellow
+    $reducedExit = 'hung'
+    Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | ForEach-Object {
+      $owner = (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User
+      if ($owner -eq $StdName) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+  }
   else { $reducedExit = $p.ExitCode }
   Copy-Item "$Pub\std-reduced.log" (Join-Path $LogDir 'std-reduced.log') -Force -ErrorAction SilentlyContinue
   $rl = Get-Content "$Pub\std-reduced.log" -Raw -ErrorAction SilentlyContinue
@@ -604,6 +625,11 @@ if (-not $ul) { Fail 'the upgrade did not detect the earlier per-user product' }
 Ok 'FindRelatedProducts found the per-user product in the same context; one PATH entry, version 0.0.2'
 Invoke-AsStdMsi @('/x', $StdStandin2) 'std-up-uninstall' 0
 Assert-StdNotInstalled 'after the upgraded copy is uninstalled'
+
+if ($null -ne $policyBefore -and $policyBefore -ne 0) {
+  Set-ItemProperty $PolicyKey -Name DisableMsi -Value $policyBefore
+  Write-Host "  put DisableMsi back to $policyBefore"
+}
 
 # ===========================================================================
 # The optional Hyper-V workspace (ADR 0048 amendment, ADR 0055). The package is
