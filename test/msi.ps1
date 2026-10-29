@@ -11,8 +11,9 @@
 # Runs elevated and makes machine-wide changes: it installs to Program Files,
 # edits the system PATH, creates a standard local user to install as, and moves
 # any docker.exe it finds out of the way so the feature can be tested both with
-# and without one present. Every PATH it edits is put back after the case. Meant for a throwaway machine, which is what
-# .github/workflows/msi.yml gives it.
+# and without one present. Every PATH it edits is put back after the case.
+# Meant for a throwaway machine, which is what .github/workflows/msi.yml gives
+# it.
 
 [CmdletBinding()]
 param(
@@ -154,7 +155,7 @@ $candidates = @(
   (Join-Path $env:SystemRoot 'System32\docker.exe'),
   (Join-Path $env:SystemRoot 'SysWOW64\docker.exe'),
   (Join-Path $env:ProgramFiles 'Docker\docker.exe'),
-  (Join-Path $env:ProgramFiles 'Docker\Dockeresourcesin\docker.exe'),
+  (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe'),
   (Join-Path $env:ProgramFiles 'WinGet\Links\docker.exe'),
   (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\docker.exe')
 )
@@ -182,6 +183,7 @@ Ok "$Alias is $((Get-Item $Alias).Length) bytes, with nothing selected"
 if (Docker-Note 'install-default') { Fail "a default install with no other docker.exe logged: $(Docker-Note 'install-default')" }
 Ok 'and nothing was logged about another docker.exe'
 
+# ---------------------------------------------------------------------------
 Section '2. the install directory is on the system PATH, appended'
 
 $path = MachinePath
