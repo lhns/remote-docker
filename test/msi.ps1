@@ -539,7 +539,7 @@ if ($Action -eq 'Add') {
 $key.Close()
 '@
 
-function Set-StdUserPath([string]$Action, [string]$Dir = '-') {
+function Set-StdUserPath([string]$Action, [string]$Dir = 'none') {
   $p = Start-AsStd powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $userPathScript, $Action, $Dir) 'userpath'
   if (-not $p.WaitForExit(180000) -or $p.ExitCode -ne 0) {
     Fail "userpath $Action as $StdName failed: $((Get-Content "$Pub\userpath.out", "$Pub\userpath.err" -ErrorAction SilentlyContinue) -join ' | ')"
