@@ -8,13 +8,14 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.16.4 — 2026-10-30
 
 ### New
 
-- **The Windows installer installs `docker.exe` by default.** Untick it in the
-  feature tree, or leave `DockerName` out of `ADDLOCAL`, to keep the name. An
+- **The Windows installer installs `docker.exe` by default.** To go without
+  it, untick it in the feature tree or leave `DockerName` out of `ADDLOCAL`. An
   upgrade keeps what you had, so an install made without it does not gain it.
+- **The embedded Docker CLI is 29.9.2, Compose 5.6.1 and buildx 0.38.1.**
 
 ### Fixes
 
