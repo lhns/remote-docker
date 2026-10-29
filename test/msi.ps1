@@ -525,18 +525,18 @@ if ($Cmd) {
 $userPathScript = Join-Path $Pub 'userpath.ps1'
 Set-Content -Path $userPathScript -Encoding ascii -Value @'
 param($Action, $Dir)
-$k = 'HKCU:\Environment'
 $bak = 'C:\Users\Public\rdtest\userpath.json'
-$item = Get-Item $k
-$old = $item.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+$old = $key.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
 if ($Action -eq 'Add') {
-  $kind = if ($null -ne $old) { [string]$item.GetValueKind('Path') } else { 'ExpandString' }
+  $kind = if ($null -ne $old) { [string]$key.GetValueKind('Path') } else { 'ExpandString' }
   @{ Present = ($null -ne $old); Value = [string]$old; Kind = $kind } | ConvertTo-Json | Set-Content $bak
-  Set-ItemProperty $k -Name Path -Value ((([string]$old) + ';' + $Dir).TrimStart(';')) -Type ExpandString
+  $key.SetValue('Path', ((([string]$old) + ';' + $Dir).TrimStart(';')), 'ExpandString')
 } else {
   $b = Get-Content $bak -Raw | ConvertFrom-Json
-  if ($b.Present) { Set-ItemProperty $k -Name Path -Value $b.Value -Type $b.Kind } else { Remove-ItemProperty $k -Name Path -ErrorAction SilentlyContinue }
+  if ($b.Present) { $key.SetValue('Path', [string]$b.Value, [string]$b.Kind) } else { $key.DeleteValue('Path', $false) }
 }
+$key.Close()
 '@
 
 function Set-StdUserPath([string]$Action, [string]$Dir = '-') {
