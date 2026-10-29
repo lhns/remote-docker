@@ -94,11 +94,11 @@ those shells rewrite path arguments before this program sees them.
 # with a UI, and a feature tree
 msiexec /i remote-docker_0.6.0_windows_amd64.msi
 
-# silently, remote-docker.exe only
+# silently, with docker.exe and the PATH entry (the defaults)
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn
 
-# silently, and also as docker.exe
-msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName
+# silently, remote-docker.exe only
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path
 
 # silently, only for you, with no administrator rights
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn MSIINSTALLPERUSER=1
@@ -120,29 +120,40 @@ installed from, as yourself and without administrator rights (a different
 version of the MSI than the all-users one, since Windows Installer refuses the
 same package across the two). Another user's own copy is not noticed.
 
-**The `docker.exe` option is off by default.** Selected, it installs a second
-copy of the same binary as `docker.exe`, so `docker run ...` on this machine is
-this program. The copy is made at install and removed at uninstall, so it costs
-nothing to download.
+**`docker.exe` is installed by default.** It is a second copy of the same
+binary named `docker.exe`, so `docker run ...` on this machine is this program.
+The copy is made at install and removed at uninstall, so it costs nothing to
+download. Untick it in the feature tree, or leave `DockerName` out of
+`ADDLOCAL`, to keep the name.
 
-It does **not** take the name from anybody else. If a `docker.exe` is already
-installed, the install stops and says where:
+It does **not** take the name from anybody else. Only a `docker.exe` whose
+folder is on PATH counts, so a leftover Docker Desktop folder that PATH no
+longer names does not. What happens when one is on PATH depends on which PATH:
+
+- On the **system** PATH, or in an install **for you alone**: that one comes
+  first and keeps running as `docker`. docker.exe is installed anyway, and the
+  log says which file `docker` keeps running.
+- On **your own** PATH (winget's `Docker.DockerCLI` puts it there) when
+  installing **for all users**: ours would come first. The installer asks, with
+  "Leave it out" as the default. Silently, a default install leaves docker.exe
+  out and says why in the log, and an explicit `ADDLOCAL` that names
+  `DockerName` stops, since a script cannot be asked:
 
 ```
-A docker.exe is already installed at C:\Program Files\Docker\docker.exe, and
-the "docker" name would shadow it.
-  fix: leave that feature unselected, or pass ALLOWDOCKERSHADOW=1 to install it anyway.
+A docker.exe is already installed at C:\Users\alice\AppData\Local\Microsoft\WinGet\Links\docker.exe on your PATH, and an installation for all users would put docker.exe in front of it.
+  fix: leave DockerName out of ADDLOCAL, or pass ALLOWDOCKERSHADOW=1 to install it anyway.
 ```
 
 ```powershell
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName ALLOWDOCKERSHADOW=1
 ```
 
-The check reads four directories (the two system directories and Docker
-Desktop's two), not PATH, which Windows Installer cannot enumerate
-([ADR 0048](docs/adr/0048-a-windows-installer.md)). A `docker.exe` elsewhere on
-PATH is not noticed, and it keeps winning, because the install directory is
-appended.
+The check looks in six folders (System32, SysWOW64, Docker Desktop's two, and
+winget's two link folders) and reads PATH from the registry, because Windows
+Installer cannot list it ([ADR 0048](docs/adr/0048-a-windows-installer.md)). A
+`docker.exe` anywhere else is not noticed, and neither is another user's PATH.
+An upgrade keeps what was installed, so an install made without docker.exe does
+not gain it.
 
 **The Hyper-V workspace feature** ("Hyper-V workspace" in the feature tree,
 off by default) installs a service and one Linux VM on this machine, as the

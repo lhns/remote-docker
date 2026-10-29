@@ -1,5 +1,6 @@
 # The Windows installer, end to end: install, the PATH feature, the docker.exe
-# feature, the refusal that guards it, uninstall, the per-user install by a user
+# feature (on by default, and what happens when another docker.exe is on PATH),
+# uninstall, the per-user install by a user
 # with no administrator rights, and the optional Hyper-V workspace feature
 # (service, group, a machine, upgrade, removal, adding and removing it with
 # Modify) against a stand-in for Hyper-V.
@@ -10,7 +11,7 @@
 # Runs elevated and makes machine-wide changes: it installs to Program Files,
 # edits the system PATH, creates a standard local user to install as, and moves
 # any docker.exe it finds out of the way so the feature can be tested both with
-# and without one present. Meant for a throwaway machine, which is what
+# and without one present. Every PATH it edits is put back after the case. Meant for a throwaway machine, which is what
 # .github/workflows/msi.yml gives it.
 
 [CmdletBinding()]
@@ -114,18 +115,48 @@ function Assert-NotInstalled() {
   }
 }
 
+# What the install logged about the docker.exe that `docker` already runs, or
+# about leaving ours out: the value of the DOCKERNOTE property, or empty.
+function Docker-Note([string]$Tag) {
+  $log = Log-Of $Tag
+  return [regex]::Match($log, "(?m)^.*PROPERTY CHANGE: Adding DOCKERNOTE property\. Its value is '(.*)'.*$").Groups[1].Value
+}
+
+# A PATH value as the registry holds it, and put back. Written as REG_EXPAND_SZ
+# like the real ones, so the `#%` prefix a raw search puts on it is in play.
+$SystemPathKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+$script:pathBackup = @{}
+function Set-RegistryPath([string]$Key, [string]$Dir, [switch]$First) {
+  $item = Get-Item $Key
+  $old = [string]$item.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+  if (-not $script:pathBackup.ContainsKey($Key)) {
+    $present = $null -ne $item.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+    $script:pathBackup[$Key] = @{ Value = $old; Present = $present; Kind = $(if ($present) { $item.GetValueKind('Path') } else { 'ExpandString' }) }
+  }
+  $new = if ($First) { "$Dir;$old" } else { "$old;$Dir".TrimStart(';') }
+  Set-ItemProperty $Key -Name Path -Value $new -Type ExpandString
+}
+function Restore-RegistryPath([string]$Key) {
+  $b = $script:pathBackup[$Key]
+  if (-not $b) { return }
+  if ($b.Present) { Set-ItemProperty $Key -Name Path -Value $b.Value -Type $b.Kind } else { Remove-ItemProperty $Key -Name Path -ErrorAction SilentlyContinue }
+  $script:pathBackup.Remove($Key)
+}
+
 # ---------------------------------------------------------------------------
 Section 'a machine with no docker.exe anywhere the installer looks'
 
-# GitHub's Windows runners ship a docker.exe, which is exactly what the refusal
-# is about, so the positive cases need it out of the way first. Moved and
-# reported rather than deleted quietly. These four are what remote-docker.wxs
+# GitHub's Windows runners ship a docker.exe, which would be the docker.exe that
+# `docker` already runs, so the cases below need it out of the way first. Moved
+# and reported rather than deleted quietly. These are what remote-docker.wxs
 # searches.
 $candidates = @(
   (Join-Path $env:SystemRoot 'System32\docker.exe'),
   (Join-Path $env:SystemRoot 'SysWOW64\docker.exe'),
   (Join-Path $env:ProgramFiles 'Docker\docker.exe'),
-  (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe')
+  (Join-Path $env:ProgramFiles 'Docker\Dockeresourcesin\docker.exe'),
+  (Join-Path $env:ProgramFiles 'WinGet\Links\docker.exe'),
+  (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\docker.exe')
 )
 $moved = 0
 foreach ($c in $candidates) {
@@ -139,17 +170,18 @@ if ($moved -eq 0) { Ok 'none were present' }
 Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
-Section '1. a default install puts remote-docker.exe in Program Files, and no docker.exe'
+Section '1. a default install puts remote-docker.exe and docker.exe in Program Files'
 
 Invoke-Msi @('/i', $Msi) 'install-default' 0
 
 if (-not (Test-Path $Exe)) { Fail "missing $Exe" }
 Ok "$Exe is $((Get-Item $Exe).Length) bytes"
 
-if (Test-Path $Alias) { Fail "$Alias exists, and the feature was not selected" }
-Ok 'no docker.exe, which is the default'
+if (-not (Test-Path $Alias)) { Fail "$Alias is missing; docker.exe is on by default" }
+Ok "$Alias is $((Get-Item $Alias).Length) bytes, with nothing selected"
+if (Docker-Note 'install-default') { Fail "a default install with no other docker.exe logged: $(Docker-Note 'install-default')" }
+Ok 'and nothing was logged about another docker.exe'
 
-# ---------------------------------------------------------------------------
 Section '2. the install directory is on the system PATH, appended'
 
 $path = MachinePath
@@ -195,60 +227,134 @@ Assert-NotInstalled
 Ok 'both names are gone'
 
 # ---------------------------------------------------------------------------
-Section '7. the feature is refused when a docker.exe is already on PATH'
+Section '7. a docker.exe in System32 comes first, and ours is installed anyway'
 
 $stub = Join-Path $env:SystemRoot 'System32\docker.exe'
 Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $stub
-Ok "put a docker.exe at $stub, which is on the system PATH"
+Ok "put a docker.exe at $stub, which is on the system PATH and ahead of the install directory"
+
+Invoke-Msi @('/i', $Msi) 'docker-first' 0
+if (-not (Test-Path $Alias)) { Fail "$Alias is missing; a docker.exe that comes first shadows nothing" }
+$note = Docker-Note 'docker-first'
+Write-Host "  saw: [$note]"
+# Pins the SystemFolder/System64Folder search: System32 is the second of the two.
+if ($note -notmatch 'keeps running' -or $note -notmatch [regex]::Escape('System32\docker.exe')) {
+  Fail "the log does not say that docker keeps running $stub; note: [$note]"
+}
+Ok 'installed, and the log names the docker.exe that `docker` keeps running'
+Invoke-Msi @('/x', $Msi) 'uninstall-docker-first' 0
+Assert-NotInstalled
+
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName') 'docker-first-explicit' 0
+if (-not (Test-Path $Alias)) { Fail "$Alias is missing after an explicit ADDLOCAL beside a docker.exe in System32" }
+Ok 'an explicit ADDLOCAL is not refused either'
+Invoke-Msi @('/x', $Msi) 'uninstall-docker-first-explicit' 0
+Assert-NotInstalled
+
+# ---------------------------------------------------------------------------
+Section '8. a leftover Docker Desktop docker.exe whose folder is not on PATH counts for nothing'
+
+$desktopBin = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'
+New-Item -ItemType Directory -Force -Path $desktopBin | Out-Null
+Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') (Join-Path $desktopBin 'docker.exe')
+Remove-Item $stub -Force
+$sysPath = (Get-Item $SystemPathKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+if ($sysPath -like '*Docker\Docker\resources\bin*') { Fail "the runner's system PATH already names Docker Desktop: $sysPath" }
+Ok "put a docker.exe at $desktopBin, which is not on the system PATH"
+
+Invoke-Msi @('/i', $Msi) 'desktop-off-path' 0
+if (-not (Test-Path $Alias)) { Fail "$Alias is missing; a docker.exe off PATH must not count" }
+if (Docker-Note 'desktop-off-path') { Fail "the log mentions it: $(Docker-Note 'desktop-off-path')" }
+Ok 'installed, and nothing was logged about that file'
+Invoke-Msi @('/x', $Msi) 'uninstall-desktop-off-path' 0
+Assert-NotInstalled
+
+# ---------------------------------------------------------------------------
+Section '9. the same folder first on the system PATH (REG_EXPAND_SZ) is seen, and noted'
+
+Set-RegistryPath $SystemPathKey $desktopBin -First
+Invoke-Msi @('/i', $Msi) 'desktop-on-path' 0
+if (-not (Test-Path $Alias)) { Fail "$Alias is missing; a docker.exe that comes first shadows nothing" }
+$note = Docker-Note 'desktop-on-path'
+Write-Host "  saw: [$note]"
+if ($note -notmatch 'keeps running' -or $note -notmatch [regex]::Escape('Docker\Docker\resources\bin\docker.exe')) {
+  Fail "the log does not say that docker keeps running Docker Desktop's file; note: [$note]"
+}
+Ok 'installed, and the log names the docker.exe in Docker Desktop''s folder, found first on the PATH'
+Invoke-Msi @('/x', $Msi) 'uninstall-desktop-on-path' 0
+Restore-RegistryPath $SystemPathKey
+Remove-Item (Join-Path $env:ProgramFiles 'Docker') -Recurse -Force
+Assert-NotInstalled
+
+# ---------------------------------------------------------------------------
+Section '9a. an all-users install would shadow a docker.exe on the user PATH: a silent install leaves it out'
+
+# winget's command link, in the installing user's own PATH. A silent install
+# cannot be asked, so by default it leaves docker.exe out and says why; an
+# explicit ADDLOCAL is refused unless ALLOWDOCKERSHADOW=1.
+$wingetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+$userKey = 'HKCU:\Environment'
+New-Item -ItemType Directory -Force -Path $wingetLinks | Out-Null
+$wingetStub = Join-Path $wingetLinks 'docker.exe'
+Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $wingetStub
+Set-RegistryPath $userKey '%LOCALAPPDATA%\Microsoft\WinGet\Links'
+Ok "put a docker.exe at $wingetStub, on this user's PATH"
+
+Invoke-Msi @('/i', $Msi) 'user-path-default' 0
+if (-not (Test-Path $Exe)) { Fail "missing $Exe" }
+if (Test-Path $Alias) { Fail "$Alias exists; a silent default install must leave it out when it would shadow $wingetStub" }
+$note = Docker-Note 'user-path-default'
+Write-Host "  saw: [$note]"
+if ($note -notmatch 'left out' -or $note -notmatch [regex]::Escape('WinGet\Links\docker.exe')) {
+  Fail "the log does not say why docker.exe was left out; note: [$note]"
+}
+Ok 'remote-docker.exe installed, docker.exe left out, and the log names the file it would have shadowed'
+Invoke-Msi @('/x', $Msi) 'uninstall-user-path-default' 0
+Assert-NotInstalled
 
 # 1603 is what a type 19 error custom action gives a silent install.
 Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName') 'refusal' 1603
 Assert-NotInstalled
-Ok 'nothing was installed'
-
-$refusalLog = Get-Content (Join-Path $LogDir 'refusal.log') -Raw
+$refusalLog = Log-Of 'refusal'
 $tail = $refusalLog.Substring([Math]::Max(0, $refusalLog.Length - 2000))
-if ($refusalLog -notmatch 'would shadow it') {
-  Fail "the refusal message is not in the log; tail: $tail"
-}
-if ($refusalLog -notmatch [regex]::Escape('System32\docker.exe')) {
-  Fail "the refusal did not name the docker.exe it found; tail: $tail"
-}
-Ok 'the message names the docker.exe it found'
-
-# ---------------------------------------------------------------------------
-Section '8. a default install is not refused by the same docker.exe'
-
-Invoke-Msi @('/i', $Msi) 'install-alongside' 0
-if (Test-Path $Alias) { Fail "$Alias exists; the feature was not asked for" }
-Ok 'installed alongside it, without the feature'
-Invoke-Msi @('/x', $Msi) 'uninstall-alongside' 0
-Assert-NotInstalled
-
-# ---------------------------------------------------------------------------
-Section '9. ALLOWDOCKERSHADOW=1 overrides the refusal'
+if ($refusalLog -notmatch 'in front of it') { Fail "the refusal message is not in the log; tail: $tail" }
+if ($refusalLog -notmatch [regex]::Escape('WinGet\Links\docker.exe')) { Fail "the refusal did not name the docker.exe it found; tail: $tail" }
+Ok 'an explicit ADDLOCAL is refused, naming the docker.exe it found; nothing was installed'
 
 Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName', 'ALLOWDOCKERSHADOW=1') 'override' 0
 if (-not (Test-Path $Alias)) { Fail "the override was given and $Alias was not created" }
-Ok 'the copy was made'
+Ok 'ALLOWDOCKERSHADOW=1 overrides it: the copy was made'
 Invoke-Msi @('/x', $Msi) 'uninstall-override' 0
 Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
 Section '9b. docker.exe without the Path feature is installed beside another one'
 
-# The stub from section 7 is still in System32. Nothing is shadowed when the
-# install directory is not on PATH (ADR 0048).
-$stubBefore = (Get-FileHash $stub).Hash
+# Nothing is shadowed when the install directory is not on PATH (ADR 0048).
+$stubBefore = (Get-FileHash $wingetStub).Hash
 Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,DockerName') 'no-path-docker' 0
 if (-not (Test-Path $Alias)) { Fail "the feature was selected and $Alias was not created" }
-if (-not (Test-Path $stub)) { Fail "$stub was removed" }
-if ((Get-FileHash $stub).Hash -ne $stubBefore) { Fail "$stub was changed" }
+if (-not (Test-Path $wingetStub)) { Fail "$wingetStub was removed" }
+if ((Get-FileHash $wingetStub).Hash -ne $stubBefore) { Fail "$wingetStub was changed" }
 Ok 'installed beside the other docker.exe, which is untouched'
 Invoke-Msi @('/x', $Msi) 'uninstall-no-path-docker' 0
 Assert-NotInstalled
 
-Remove-Item $stub -Force
+# A per-user install puts ours after the user PATH's, so the same file shadows nothing.
+$userDir = Join-Path $env:LOCALAPPDATA 'Programs\remote-docker'
+Invoke-Msi @('/i', $Msi, 'MSIINSTALLPERUSER=1') 'user-path-per-user' 0
+if (-not (Test-Path (Join-Path $userDir 'docker.exe'))) { Fail "no $userDir\docker.exe in a per-user install beside a docker.exe on the same PATH" }
+$note = Docker-Note 'user-path-per-user'
+Write-Host "  saw: [$note]"
+if ($note -notmatch 'keeps running' -or $note -notmatch [regex]::Escape('WinGet\Links\docker.exe')) {
+  Fail "the log does not say that docker keeps running $wingetStub; note: [$note]"
+}
+Ok 'a per-user install is not asked: docker.exe goes in behind it, and the log says so'
+Invoke-Msi @('/x', $Msi) 'uninstall-user-path-per-user' 0
+Assert-NotInstalled
+
+Restore-RegistryPath $userKey
+Remove-Item $wingetStub -Force
 
 # ---------------------------------------------------------------------------
 Section '9c. the PATH entry is optional, and Modify adds and removes it'
@@ -275,7 +381,7 @@ Invoke-Msi @('/x', $Msi) 'uninstall-path-off' 0
 Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
-Section '9d. an upgrade from the latest released MSI keeps the PATH entry'
+Section '9d. an upgrade from the latest released MSI keeps the PATH entry and does not add docker.exe'
 
 # The only real check that the old product's PATH component, which lived in
 # Main, migrates into the Path feature. Needs the network and gh; a failure to
@@ -294,6 +400,9 @@ Invoke-Msi @('/i', $released[0].FullName) 'released-install' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the released MSI left PATH without $InstallDir : $(MachinePath)" }
 Invoke-Msi @('/i', $Msi) 'released-upgrade' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the upgrade dropped the PATH entry: $(MachinePath)" }
+# docker.exe is on by default now, but an upgrade keeps what was installed.
+if (Test-Path $Alias) { Fail "$Alias exists after an upgrade from a release that was installed without it" }
+Ok 'the upgrade did not add docker.exe to an install that never had it'
 Ok 'the system PATH still names the install directory'
 if ($null -eq (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Path -ErrorAction SilentlyContinue)) {
   Fail 'the Path registry value is missing after the upgrade'
@@ -411,6 +520,32 @@ if ($Cmd) {
 }
 '@
 
+# The standard user's own PATH value, added to and put back by a logon of that
+# user, since its registry hive is loaded only while it runs.
+$userPathScript = Join-Path $Pub 'userpath.ps1'
+Set-Content -Path $userPathScript -Encoding ascii -Value @'
+param($Action, $Dir)
+$k = 'HKCU:\Environment'
+$bak = 'C:\Users\Public\rdtest\userpath.json'
+$item = Get-Item $k
+$old = $item.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+if ($Action -eq 'Add') {
+  $kind = if ($null -ne $old) { [string]$item.GetValueKind('Path') } else { 'ExpandString' }
+  @{ Present = ($null -ne $old); Value = [string]$old; Kind = $kind } | ConvertTo-Json | Set-Content $bak
+  Set-ItemProperty $k -Name Path -Value ((([string]$old) + ';' + $Dir).TrimStart(';')) -Type ExpandString
+} else {
+  $b = Get-Content $bak -Raw | ConvertFrom-Json
+  if ($b.Present) { Set-ItemProperty $k -Name Path -Value $b.Value -Type $b.Kind } else { Remove-ItemProperty $k -Name Path -ErrorAction SilentlyContinue }
+}
+'@
+
+function Set-StdUserPath([string]$Action, [string]$Dir = '-') {
+  $p = Start-AsStd powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $userPathScript, $Action, $Dir) 'userpath'
+  if (-not $p.WaitForExit(180000) -or $p.ExitCode -ne 0) {
+    Fail "userpath $Action as $StdName failed: $((Get-Content "$Pub\userpath.out", "$Pub\userpath.err" -ErrorAction SilentlyContinue) -join ' | ')"
+  }
+}
+
 function Get-StdFacts([string]$Tag, [string]$Cmd = '') {
   $p = Start-AsStd powershell.exe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $factsScript, ('"' + $Cmd + '"')) $Tag
   if (-not $p.WaitForExit(180000)) { Fail "facts as $StdName did not finish" }
@@ -516,40 +651,63 @@ Invoke-AsStdMsi @('/x', $StdMsi) 'std-uninstall' 0
 Assert-StdNotInstalled 'after the per-user uninstall'
 
 # ---------------------------------------------------------------------------
-Section '9g. a per-user install with the docker.exe feature, and the refusal still fires'
+Section '9g. a per-user install has docker.exe by default, and another docker.exe in front of it is only noted'
 
-Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-feature' 0
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-feature' 0
 $f = Get-StdFacts 'facts-feature' 'docker remote --help'
 $stdDir = Join-Path $f.localappdata 'Programs\remote-docker'
-if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "the feature was selected and $stdDir\docker.exe was not created" }
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "$stdDir\docker.exe was not created; it is on by default" }
 if ($f.code -ne '0') { Fail "exit $($f.code) from 'docker remote --help' as $StdName; output: $($f.output)" }
+if (Docker-Note 'std-feature') { Fail "a per-user install with no other docker.exe logged: $(Docker-Note 'std-feature')" }
 Ok 'docker.exe beside remote-docker.exe, and a fresh shell reaches it as `docker`'
 Invoke-AsStdMsi @('/x', $StdMsi) 'std-feature-uninstall' 0
 Assert-StdNotInstalled 'after uninstalling the docker.exe feature'
 
 # System32 is a directory the standard user cannot write, which is the point:
-# the stub is the administrator's.
+# the stub is the administrator's. It comes first on PATH, so nothing is shadowed.
 $stub = Join-Path $env:SystemRoot 'System32\docker.exe'
 Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $stub
-Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-refusal' 1603
-$rl = Log-Of 'std-refusal'
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-first' 0
+$note = Docker-Note 'std-first'
 Remove-Item $stub -Force
-if ($rl -notmatch [regex]::Escape('System32\docker.exe')) { Fail 'the refusal did not name the docker.exe in System32' }
-Ok 'refused, naming the docker.exe it found in System32'
+Write-Host "  saw: [$note]"
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "$stdDir\docker.exe was not created beside a docker.exe in System32" }
+if ($note -notmatch 'keeps running' -or $note -notmatch [regex]::Escape('System32\docker.exe')) {
+  Fail "the log does not say that docker keeps running the docker.exe in System32; note: [$note]"
+}
+Ok 'installed, and the log names the docker.exe in System32'
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-first-uninstall' 0
 
 # Docker Desktop's directory is under the real Program Files, not under the
-# per-user "Programs" folder ProgramFiles64Folder means to this install.
+# per-user "Programs" folder ProgramFiles64Folder means to this install. Not on
+# PATH, so it counts for nothing.
 $desktopBin = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'
 New-Item -ItemType Directory -Force -Path $desktopBin | Out-Null
 Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') (Join-Path $desktopBin 'docker.exe')
-Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1', 'ADDLOCAL=Main,Path,DockerName') 'std-refusal-desktop' 1603
-$dl = Log-Of 'std-refusal-desktop'
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-desktop' 0
 Remove-Item (Join-Path $env:ProgramFiles 'Docker') -Recurse -Force
-if ($dl -notmatch [regex]::Escape('Docker\Docker\resources\bin\docker.exe')) {
-  Fail "the refusal did not find Docker Desktop's docker.exe in the real Program Files; tail: $($dl.Substring([Math]::Max(0, $dl.Length - 1500)))"
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "$stdDir\docker.exe was not created beside a leftover Docker Desktop file" }
+if (Docker-Note 'std-desktop') { Fail "the log mentions the leftover file: $(Docker-Note 'std-desktop')" }
+Ok "installed beside a leftover docker.exe in $env:ProgramFiles, which is not on PATH, and nothing was logged"
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-desktop-uninstall' 0
+
+# A docker.exe on that user's own PATH, in that user's own hive: this install goes after it.
+$links = Join-Path $f.localappdata 'Microsoft\WinGet\Links'
+New-Item -ItemType Directory -Force -Path $links | Out-Null
+Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') (Join-Path $links 'docker.exe')
+Set-StdUserPath 'Add' '%LOCALAPPDATA%\Microsoft\WinGet\Links'
+Invoke-AsStdMsi @('/i', $StdMsi, 'MSIINSTALLPERUSER=1') 'std-user-path' 0
+$note = Docker-Note 'std-user-path'
+Write-Host "  saw: [$note]"
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "$stdDir\docker.exe was not created beside a docker.exe on the user's PATH" }
+if ($note -notmatch 'keeps running' -or $note -notmatch [regex]::Escape('WinGet\Links\docker.exe')) {
+  Fail "the log does not say that docker keeps running the docker.exe on $StdName's PATH; note: [$note]"
 }
-Ok "refused for Docker Desktop's docker.exe in $env:ProgramFiles"
-Assert-StdNotInstalled 'after the refusals'
+Ok "installed behind a docker.exe on $StdName's own PATH, which only that user's hive shows"
+Invoke-AsStdMsi @('/x', $StdMsi) 'std-user-path-uninstall' 0
+Set-StdUserPath 'Restore'
+Remove-Item (Join-Path $f.localappdata 'Microsoft\WinGet') -Recurse -Force
+Assert-StdNotInstalled 'after the per-user docker.exe cases'
 
 # ---------------------------------------------------------------------------
 Section '9h. the Hyper-V workspace is refused in a per-user install, by name'
@@ -679,7 +837,8 @@ if ($entries.Count -eq 0 -or ($entries[-1] -ne ($stdDir + '\') -and $entries[-1]
   Fail "the install directory is not the last entry of $StdName's PATH: $($f.userpath)"
 }
 if ($f.code -ne '0') { Fail "exit $($f.code) from a fresh shell of $StdName; output: $($f.output)" }
-Ok "a standard user's /qr install with no properties went to $stdDir and the user PATH, and nothing machine-wide"
+if (-not (Test-Path (Join-Path $stdDir 'docker.exe'))) { Fail "no $stdDir\docker.exe after a /qr install by $StdName; it is on by default" }
+Ok "a standard user's /qr install with no properties went to $stdDir and the user PATH, with docker.exe, and nothing machine-wide"
 Invoke-AsStdMsi @('/x', $StdMsi) 'std-qr-uninstall' 0
 Assert-StdNotInstalled 'after the /qr per-user uninstall'
 
@@ -687,6 +846,7 @@ Assert-StdNotInstalled 'after the /qr per-user uninstall'
 Invoke-Msi @('/i', $Msi) 'qr-machine' 0 '/qr' 3
 Show-ScopeDefault (Log-Of 'qr-machine') $false
 if (-not (Test-Path $Exe)) { Fail "no $Exe after an elevated /qr install" }
+if (-not (Test-Path $Alias)) { Fail "no $Alias after an elevated /qr install; it is on by default" }
 Assert-MachineInstalled 'after the elevated /qr install'
 if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\remote-docker\remote-docker.exe')) { Fail 'the elevated /qr install also wrote a per-user copy' }
 Invoke-Msi @('/x', $Msi) 'qr-machine-uninstall' 0

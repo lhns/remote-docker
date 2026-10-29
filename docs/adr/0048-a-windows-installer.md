@@ -4,11 +4,15 @@
 - Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace feature), 2026-10-16
   (rollback guard, Restart Manager, run by hand), 2026-10-21 (PATH feature),
   2026-10-28 (installed per user without admin rights), 2026-10-29 (the
-  per-user default fired for nobody)
+  per-user default fired for nobody; `docker.exe` on by default and checked
+  against PATH)
 - Current answer: one MSI per architecture that installs for all users as an
   administrator, or for one user with no administrator rights, with three
-  features besides the required one: `Path` (on by default), `DockerName` and `HyperV`. The
-  `docker.exe` feature is a second file name and runs no code. The Hyper-V
+  features besides the required one: `Path` and `DockerName` (both on by default) and `HyperV`. The
+  `docker.exe` feature is a second file name and runs no code. It is left out of
+  a default all-users install, and asked about in the dialog, only when it
+  would put `docker` in front of a `docker.exe` on the installing user's PATH;
+  any other `docker.exe` is noted in the log and not refused. The Hyper-V
   workspace feature runs this program's own hidden commands as custom actions
   on install, upgrade and removal; the service they set up is
   [ADR 0055](0055-hyperv-machines-through-a-system-broker-service.md). Nothing
@@ -63,7 +67,7 @@ GoReleaser's own `msi` block is Pro-only (checked 2026-09-08 at
 available with GoReleaser Pro"), so this is a job after goreleaser and a
 `gh release upload`, not a line in `.goreleaser.yaml`.
 
-**`docker.exe` is a WiX Feature, off by default.** `<CopyFile FileId=...>` is a
+**`docker.exe` is a WiX Feature (off by default until 2026-10-29, see the amendment below).** `<CopyFile FileId=...>` is a
 `DuplicateFile` row: the binary ships once, the second name is made at install
 and removed at uninstall. The feature needs no custom action, no second payload
 and no code in the Go program: the name is the installation. So the option costs nothing to
@@ -78,14 +82,14 @@ download, and the MSI is smaller than the binary it carries:
 Measured in the `msi` workflow, 2026-09-08; re-check with `Get-ChildItem
 dist/msi` after a `build.ps1` run.
 
-- `Level="2"` against the default `INSTALLLEVEL=1`: visible in
+- `Level="2"` against the default `INSTALLLEVEL=1` (since 2026-10-29 the
+  level is 2 only when the amendment's shadow case holds): visible in
   `WixUI_FeatureTree`, unselected. `Level="0"` would hide it entirely.
 - Silently: `msiexec /i ... /qn ADDLOCAL=Main,DockerName`.
 
-**The feature is refused when a `docker.exe` is already installed.** A type 19
-error custom action, after `CostFinalize` in both sequences, conditioned on
-`NOT Installed AND &DockerName=3 AND &Path=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW`.
-The message names the file it found, and `ALLOWDOCKERSHADOW=1` overrides it.
+**The feature was refused when a `docker.exe` existed in one of four
+directories.** Replaced 2026-10-29 by a check against PATH and a dialog (see
+the amendment below); `ALLOWDOCKERSHADOW=1` is kept.
 
 Why refuse rather than win: a Windows machine commonly already has a
 `docker.exe`, and the README points at `winget install Docker.DockerCLI`
@@ -307,6 +311,71 @@ session adds the feature, takes `WORKSPACENAME`, `WORKSPACEIMAGE` and
   first upgrade from such a version still asks for it to be closed
   (`remote stop`, or end the process).
 
+## `docker.exe` is on by default, and PATH decides (2026-10-29)
+
+- **Forced by:** a machine with a leftover Docker Desktop `docker.exe` in
+  `C:\Program Files\Docker\Docker\resources\bin`, a folder not on PATH, was
+  refused the feature outright (1603). The check asked only whether the file
+  existed. The refusal also ended the whole install, and the feature was off
+  by default, which made `docker` the one thing a default install did not give.
+- **Decision:** `DockerName` is `Level="1"`. A `docker.exe` counts only if its
+  folder is on PATH. Three outcomes, by which PATH it is on and the scope:
+
+| `docker.exe` found on | all-users install | per-user install |
+|---|---|---|
+| system PATH | installed; log: `docker` keeps running that file | same |
+| user PATH | would be shadowed: see below | installed; log: `docker` keeps running that file |
+| not on PATH, or absent | installed, nothing logged | installed, nothing logged |
+
+- **Why the table is that way.** A process's PATH is the system PATH followed
+  by the user's. This install appends to the PATH of its own context, so an
+  all-users install comes after every system entry and before every user entry,
+  and a per-user one after everything. Only an all-users install in front of a
+  user-PATH `docker.exe` changes what `docker` runs for anybody. If a system
+  one exists as well, it comes first and nothing is shadowed.
+- **The shadow case** (`ALLUSERS=1 AND DOCKERUSERFILE AND NOT DOCKERSYSFILE`,
+  written out where it acts, since the scope is chosen in `ScopeDlg` after
+  `CostFinalize` and an early property would read the wrong one):
+  - interactive: `DockerShadowDlg` after the feature tree (and `HyperVDlg`),
+    shown when this session adds `DockerName`, with "Leave it out" as the
+    default button (`Remove` event) and "Install docker.exe" (sets
+    `ALLOWDOCKERSHADOW=1`). The feature also starts at level 2 there, so it is
+    asked about only when somebody ticks it. Modify is covered too.
+  - silent without `ADDLOCAL`: `DockerName` is level 2, the install succeeds
+    and the log says why (`DOCKERNOTE`).
+  - silent with `ADDLOCAL` naming `DockerName`: refused (1603) unless
+    `ALLOWDOCKERSHADOW=1`. A script cannot be asked, and an explicit request
+    that changes what `docker` runs for somebody should not be quietly
+    dropped.
+- **What is searched.** `[System64Folder]` (System32) and `[SystemFolder]`
+  (SysWOW64), always on the system PATH; Docker Desktop's
+  `Program Files\Docker\Docker\resources\bin` and `Program Files\Docker`; and
+  winget's command links, `%LocalAppData%\Microsoft\WinGet\Links` and
+  `Program Files\WinGet\Links`. The two Docker Desktop folders are matched against
+  both PATHs, winget's user links against the user PATH and its machine links
+  against the system PATH. Matching is on the folder's tail, case-insensitively (`~><`), with and
+  without a trailing backslash, because a `RegistrySearch` of a
+  `REG_EXPAND_SZ` returns `#%` plus the unexpanded string.
+- **Upgrades keep what was installed** (`MigrateFeatureStates`), so a machine
+  that installed without `docker.exe` does not gain it. `test/msi.ps1` 9d
+  upgrades from the latest released MSI and checks that.
+- **Where winget puts it.** `winget install Docker.DockerCLI` is a portable zip
+  with `PortableCommandAlias: docker`, which winget exposes as a symlink in a
+  Links folder and adds to PATH: `%LocalAppData%\Microsoft\WinGet\Links` on the
+  user PATH for the default user scope, `Program Files\WinGet\Links` for machine
+  scope. Checked 2026-10-29; re-check with
+  `gh api repos/microsoft/winget-pkgs/contents/manifests/d/Docker/DockerCLI/<version>/Docker.DockerCLI.installer.yaml --jq .content | base64 -d`
+  and
+  `gh api 'repos/microsoft/winget-cli/contents/doc/specs/%23182%20-%20Support%20for%20installation%20of%20portable%20standalone%20apps.md' --jq .content | base64 -d | grep Links`.
+- **Not covered, by design.** A `docker.exe` in a folder none of the six is, a
+  PATH entry that names a folder through an environment variable the tail does
+  not match, and other users' PATHs. An all-users install can still shadow
+  those. The dialog is built and never clicked by CI.
+- **Cost:** an administrator who picks "Only for me" after the feature tree was
+  costed for all users sees `docker.exe` unselected in the tree if a user-PATH
+  `docker.exe` existed, and ticks it if wanted.
+- **Covered by** `test/msi.ps1` 1, 7 to 9b and 9g to 9l.
+
 ## Run by hand (2026-10-16)
 
 - **Once, on one computer** (Windows 11 Pro 25H2, real Hyper-V), as a standard
@@ -326,19 +395,15 @@ session adds the feature, takes `WORKSPACENAME`, `WORKSPACEIMAGE` and
   release's MSI to the next; changing it leaves two installs side by side, two
   entries in Programs and Features, and two copies on PATH. Written in capitals
   in the `.wxs` for that reason.
-- **The refusal reads four directories, not PATH.** Windows Installer's
-  `AppSearch` cannot enumerate `PATH`, and there is no locator that does. So
-  `DOCKERONPATH` is a `DirectorySearch` over the two system directories and
-  Docker Desktop's two locations, each of which is on PATH when it holds a
-  `docker.exe`. In a 64-bit package `SystemFolder` is **SysWOW64** and
+- **The check reads six folders and PATH, not every folder on it.** Windows
+  Installer's `AppSearch` cannot enumerate `PATH`, and there is no locator that
+  does. So the six folders below are searched and a file counts only if its
+  folder is on the PATH read from the registry. In a 64-bit package `SystemFolder` is **SysWOW64** and
   `System64Folder` is **System32**, the reverse of what the names suggest;
   searching only the first builds, installs, and misses the directory that was
-  meant. A `docker.exe` elsewhere on PATH is not noticed and is shadowed,
-  because the install directory is appended and therefore loses: the failure is
-  that the user does not get the name they asked for, not that they lose the
-  other tool.
-  The alternative was a custom action DLL, which is a C project and a second
-  thing to build.
+  meant. A `docker.exe` in any other folder is not noticed and is shadowed by an
+  all-users install, and other users' PATHs are not read. The alternative was a
+  custom action DLL, which is a C project and a second thing to build.
 - **The MSI is unsigned.** The repository has no code-signing certificate; the
   only secret any workflow uses is `GITHUB_TOKEN`. SmartScreen will warn. This
   is in the README and on CLAUDE.md's not-tested list.

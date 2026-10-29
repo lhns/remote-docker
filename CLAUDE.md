@@ -1558,15 +1558,22 @@ deliberate are tabulated in README under "What differs from a bind mount".
 Program Files, the install directory APPENDED to the system PATH and not
 prepended, `remote-docker remote --help` running from a shell whose PATH came
 from the registry rather than from this process, the `docker.exe` feature
-absent by default and working when `ADDLOCAL` asks for it, the refusal firing
-against a `docker.exe` in System32 with a message naming it, the override, and
-an uninstall that takes both names and the PATH entry with it. PATH is a
+installed by default (ADR 0048, 2026-10-29) and also by `ADDLOCAL`; a
+`docker.exe` in System32 or on the system PATH (Docker Desktop's folder added as
+REG_EXPAND_SZ) coming first and named in the log; a leftover Docker Desktop file
+whose folder is NOT on PATH ignored; a `docker.exe` on the installing user's
+PATH leaving it out of a silent all-users install with the reason logged,
+refusing an explicit `ADDLOCAL` and installing with `ALLOWDOCKERSHADOW=1`, and
+installing in a per-user one; and an uninstall that takes both names and the
+PATH entry with it. PATH is a
 feature that can be left out, added and removed by Modify, and is kept across
 an upgrade from the latest released MSI (9b to 9d). Sections 9e to 9k run as a
 STANDARD local user, never elevated (ADR 0048, 2026-10-28): a silent install
 with no arguments refused with error 1925, one with `MSIINSTALLPERUSER=1`
 going to `%LocalAppData%\Programs` and the user PATH and touching nothing
-machine-wide, the `docker.exe` feature and its refusals, the Hyper-V refusal,
+machine-wide, the `docker.exe` feature beside a System32 file, a leftover
+Docker Desktop one and one on that user's own PATH (set in that user's hive),
+the Hyper-V refusal,
 a per-user install over an all-users one refused, an all-users install over
 the installing user's copy warning in the log and that user then removing
 their copy with `msiexec /x`, and a per-user upgrade. Section 9l installs with
@@ -1717,15 +1724,23 @@ its pure planning function was.
   (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
   warning is therefore expected rather than a symptom, and the MSIs are not in
   `checksums.txt` either, because goreleaser writes that before they exist.
-- **The `docker.exe` refusal reads four directories, not PATH.** Windows
-  Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
-  anywhere but the two system directories or Docker Desktop's two locations is
-  not found and is shadowed. `test/msi.ps1` section 7 asserts the refusal
-  against a System32 stub, which is a real PATH directory and the only one it
-  can assert about. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
+- **The `docker.exe` check reads six folders and PATH, not every folder on
+  PATH.** Windows Installer's AppSearch cannot enumerate PATH (ADR 0048,
+  2026-10-29), so a `docker.exe` in a folder other than System32, SysWOW64,
+  Docker Desktop's two and winget's two link folders is not seen: an all-users
+  install shadows it without asking. Other users' PATHs are not read either, and
+  a PATH entry spelled through an environment variable the folder tail does not
+  match is missed. `test/msi.ps1` sections 7 to 9a assert the folders they
+  create. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
   `[System64Folder]` is System32, which is the reverse of what the names say:
   searching only the first builds, installs, and misses the directory people
   mean. CI caught it because the runner had a `docker.exe` in each.
+- **The shadow dialog is never clicked.** `DockerShadowDlg` (shown when an
+  all-users install would put docker.exe in front of one on the user PATH) is
+  built by every `msi.yml` run and clicked by none, like `ScopeDlg`; what CI
+  runs is the same condition through the silent and `ADDLOCAL` paths. Its
+  Remove event, the default button and the Back chain through `HyperVDlg` are
+  unrun.
 - **A signal arriving anywhere but during an attached `docker run`.** 6e sends
   SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
   a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
