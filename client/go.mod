@@ -9,9 +9,9 @@ go 1.26.8
 require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/compose-spec/compose-go/v2 v2.16.1
-	github.com/docker/buildx v0.38.0
-	github.com/docker/cli v29.9.1+incompatible
-	github.com/docker/compose/v5 v5.6.0
+	github.com/docker/buildx v0.38.1
+	github.com/docker/cli v29.9.2+incompatible
+	github.com/docker/compose/v5 v5.6.1
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/klauspost/compress v1.20.3
 	github.com/lhns/remote-docker/core v0.0.0
