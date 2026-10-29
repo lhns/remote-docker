@@ -23,11 +23,9 @@ software.
   though nothing ran it. It now counts a `docker.exe` only if its folder is on
   PATH.
 - **The installer asks instead of failing when it would take over `docker`.**
-  An install for all users that would put `docker.exe` in front of one on your
-  own PATH (winget's, for example) asks, and leaves it out by default. A silent
-  install leaves it out and says why in the log; `ADDLOCAL` naming `DockerName`
-  stops unless `ALLOWDOCKERSHADOW=1` is passed. A `docker.exe` that already
-  comes first on PATH is noted in the log and no longer blocks anything.
+  That happens only when an install for all users would come before a
+  `docker.exe` on your own PATH, such as winget's. A silent install leaves it
+  out and says why in the log.
 
 ## 0.16.3 — 2026-10-29
 

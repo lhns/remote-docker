@@ -529,7 +529,7 @@
         docker.exe does not gain it.
       -->
       <Feature Id="DockerName" Title="Also install it as docker.exe" Level="1" AllowAdvertise="no"
-               Description="A second copy named docker.exe, so `docker` on this machine is this program. Not installed by default when an all-users install would take over a docker.exe on your PATH.">
+               Description="A second copy named docker.exe, so &quot;docker&quot; on this machine is this program. Not installed by default when an all-users install would take over a docker.exe on your PATH.">
         <Level Value="2" Condition="$(Shadowed)" />
         <Component Id="C.DockerAlias" Directory="INSTALLFOLDER" Condition="ALLUSERS=1">
           <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="DockerAlias"
@@ -688,7 +688,7 @@
         <Control Id="Description" Type="Text" X="25" Y="23" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
                  Text="Another docker.exe is already on your PATH." />
         <Control Id="Question" Type="Text" X="20" Y="60" Width="335" Height="60" NoPrefix="yes"
-                 Text="`docker` currently runs [DOCKERUSERFILE]. Installing docker.exe for all users makes `docker` run remote-docker instead." />
+                 Text="&quot;docker&quot; currently runs [DOCKERUSERFILE]. Installing docker.exe for all users makes &quot;docker&quot; run remote-docker instead." />
         <Control Id="Hint" Type="Text" X="20" Y="130" Width="335" Height="40" NoPrefix="yes"
                  Text="remote-docker is still available under its own name either way." />
       </Dialog>
