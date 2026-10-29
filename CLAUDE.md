@@ -1569,7 +1569,10 @@ going to `%LocalAppData%\Programs` and the user PATH and touching nothing
 machine-wide, the `docker.exe` feature and its refusals, the Hyper-V refusal,
 a per-user install over an all-users one refused, an all-users install over
 the installing user's copy warning in the log and that user then removing
-their copy with `msiexec /x`, and a per-user upgrade. The Windows Installer
+their copy with `msiexec /x`, and a per-user upgrade. Section 9l installs with
+reduced UI (`/qr`), which runs the InstallUISequence with no dialog: with no
+properties a standard user gets a per-user install and the elevated runner an
+all-users one (the identity default, 2026-10-29). The Windows Installer
 premises behind it are printed from the logs.
 Sections 11 to 19
 run the optional Hyper-V workspace against a STAND-IN for Hyper-V (the
@@ -1607,11 +1610,12 @@ Keep this list honest, and name the assertion rather than the area: "the
 its pure planning function was.
 
 - **A per-user MSI install from the dialog, or by another user.** CI installs
-  per user silently as a standard local user (9f to 9k) and builds the scope
-  dialog (`ScopeDlg`), but no CI clicks it, so the identity default
-  (`NOT AdminUser`, with `MSIUSEREALADMINDETECTION`), the shield, the folder it
-  sets and Back navigation are unrun, and the all-users-over-per-user warning
-  is in the log only. In an unelevated administrator's shell AdminUser is
+  per user silently as a standard local user (9f to 9k) and with reduced UI
+  and no properties (9l), which runs the identity default
+  (`NOT AdminUser`, with `MSIUSEREALADMINDETECTION`) and its folder. It builds
+  the scope dialog (`ScopeDlg`) but no CI clicks it, so the dialog itself, its
+  shield and Back navigation are unrun, and the all-users-over-per-user
+  warning is in the log only. In an unelevated administrator's shell AdminUser is
   false, so the dialog defaults to "Only for me" there (choose "For all
   users"); a silent install there is per machine and fails with 1925. Another
   user's per-user copy is not detected by an all-users install.

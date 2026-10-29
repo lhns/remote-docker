@@ -3,7 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace feature), 2026-10-16
   (rollback guard, Restart Manager, run by hand), 2026-10-21 (PATH feature),
-  2026-10-28 (installed per user without admin rights)
+  2026-10-28 (installed per user without admin rights), 2026-10-29 (the
+  per-user default fired for nobody)
 - Current answer: one MSI per architecture that installs for all users as an
   administrator, or for one user with no administrator rights, with three
   features besides the required one: `Path` (on by default), `DockerName` and `HyperV`. The
@@ -181,16 +182,29 @@ fires, which is silent for a release cycle.
 - **The `docker.exe` refusal reads Docker Desktop's directories through
   `%ProgramW6432%`.** `ProgramFiles64Folder` is `%LocalAppData%\Programs` in
   a per-user install, so searching it would have stopped refusing.
+- **Amended 2026-10-29: the default did not work, and 9l found it.** The
+  condition was `NOT AdminUser AND NOT MSIINSTALLPERUSER AND NOT ALLUSERS="1"`.
+  Windows Installer resolves `ALLUSERS=2` to 1 before any sequence runs
+  (measured on `windows-latest`: a standard user's `/qr` log shows
+  `Modifying ALLUSERS property. Its current value is '2'. Its new value: '1'`
+  first), so the last term was always false for that user, who got a
+  per-machine install and error 1925 (released in 0.16.2). The term is gone:
+  `ALLUSERS` cannot tell an explicit choice from the default, and a user
+  without administrator rights cannot install for all users whatever they
+  pass.
 - **Covered by** `test/msi.ps1` 9e to 9k, run as a standard local user: the
   silent no-argument refusal (error 1925), the install with
   `MSIINSTALLPERUSER=1`, PATH, the `docker` feature and its refusals, the Hyper-V
   refusal, the per-user-over-all-users refusal, the all-users-over-per-user
   warning and the user then removing their copy (9j), an in-place upgrade and
-  the uninstall.
+  the uninstall. Section 9l (2026-10-29) installs with reduced UI (`/qr`),
+  which runs the InstallUISequence with no authored dialog: with no
+  properties a standard user gets a per-user install and the elevated runner
+  an all-users one, so the identity default, `MSIUSEREALADMINDETECTION`
+  included, and the folder it sets are run.
   Each premise above is printed from the log it came from.
-- **Not covered:** the dialog (built, never clicked: whether the identity
-  default, `MSIUSEREALADMINDETECTION` included, and the folder it sets work as
-  intended), and another user's copy. In an unelevated administrator's shell
+- **Not covered:** clicking the dialog (`ScopeDlg`, its shield, Back
+  navigation), an unelevated administrator's default, and another user's copy. In an unelevated administrator's shell
   `AdminUser` is false, so the dialog defaults to "Only for me" there; choose
   "For all users" for the other. A silent install there is per machine and
   fails with 1925, like any install without administrator rights.

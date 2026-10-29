@@ -12,6 +12,9 @@ software.
 
 ### Fixes
 
+- **The Windows installer offered "For all users" to people without
+  administrator rights.** It now preselects "Only for me" when it runs without
+  them, as intended.
 - **The SBOM of a client archive gave the program's own version as v5.6.0.**
   That is the embedded Compose's version. Every SBOM now names the commit the
   program was built from, as a `v0.0.0-<time>-<revision>` version.
