@@ -1504,15 +1504,15 @@ source, if that matters to you.
 |---|---|
 | signature | none. No code-signing certificate exists for this project and SmartScreen will warn. It is also **not** in `checksums.txt`, which goreleaser writes before the installer is built |
 | scope | `perMachine`: Program Files, elevated, system PATH |
-| the `docker.exe` name | a WiX Feature, `Level="2"`, unselected by default; `<CopyFile>` makes the second name at install and removes it at uninstall |
-| the refusal | a type 19 custom action when `DOCKERONPATH` finds a `docker.exe`, overridable with `ALLOWDOCKERSHADOW=1` |
-| what it searches | four directories (`System64Folder`, `SystemFolder`, Docker Desktop's two), because Windows Installer's `AppSearch` cannot enumerate PATH |
+| the `docker.exe` name | a WiX Feature, selected by default since 2026-10-29 (left out of a default all-users install that would shadow one, see below); `<CopyFile>` makes the second name at install and removes it at uninstall |
+| the refusal | a type 19 custom action for an explicit `ADDLOCAL` naming the feature when an all-users install would go in front of a `docker.exe` on the user PATH (`DOCKERUSERFILE`), overridable with `ALLOWDOCKERSHADOW=1`; the interactive install asks instead |
+| what it searches | six folders (`System64Folder`, `SystemFolder`, Docker Desktop's two, winget's two link folders), counted only when the folder is on the PATH read from the registry, because Windows Installer's `AppSearch` cannot enumerate PATH |
 | custom actions | only with the Hyper-V workspace feature: this program's own hidden commands, as SYSTEM (`sc`, service setup and teardown) and as the installing user (create, `rm`), never a script (ADR 0048; the service is flow 11) |
 
-So a `docker.exe` anywhere else on PATH is not noticed. The install directory is
-appended (`Environment Part="last"`), never prepended, so ours is the one
-shadowed: the failure is the user not getting the name they asked for, not
-losing the other vendor's tool. *Covered by* `test/msi.ps1`, which installs,
+So a `docker.exe` in any other folder is not noticed. The install directory is
+appended (`Environment Part="last"`), never prepended, so ours loses to every
+system PATH entry and to a per-user install's whole PATH. Only an all-users
+install comes before the user PATH, which is the case the installer asks about. *Covered by* `test/msi.ps1`, which installs,
 runs the binary out of a fresh shell's PATH and uninstalls, on a Windows runner.
 An MSI built by an actual tag release has never run: `msi.yml` triggers on
 changes under `installer/windows/`, and the release job that uploads it is

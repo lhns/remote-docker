@@ -8,6 +8,25 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The Windows installer installs `docker.exe` by default.** Untick it in the
+  feature tree, or leave `DockerName` out of `ADDLOCAL`, to keep the name. An
+  upgrade keeps what you had, so an install made without it does not gain it.
+
+### Fixes
+
+- **A leftover `docker.exe` that is not on PATH no longer blocks `docker.exe`.**
+  The installer refused when it found Docker Desktop's file in its folder even
+  though nothing ran it. It now counts a `docker.exe` only if its folder is on
+  PATH.
+- **The installer asks instead of failing when it would take over `docker`.**
+  That happens only when an install for all users would come before a
+  `docker.exe` on your own PATH, such as winget's. A silent install leaves it
+  out and says why in the log.
+
 ## 0.16.3 — 2026-10-29
 
 ### Fixes
