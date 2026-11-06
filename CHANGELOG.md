@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.16.5 — 2026-11-06
 
 ### New
 
@@ -19,8 +19,8 @@ software.
   a local MCP server. Nothing is forwarded unless listed, and every container
   of the account can then reach those ports. `remote host-ports ls`, `add`,
   `rm` and `set` edit the list, and a running session applies it with no
-  restart. `remote status` lists them. Needs
-  a workspace at this release; an older one is named in a warning. TCP only.
+  restart. `remote status` lists them. Needs a workspace at this release; an
+  older one is named in a warning. TCP only.
   Not covered: `docker build` `RUN` steps, UDP, and a workspace daemon started
   with `--host-gateway-ip`.
   [ADR 0057](docs/adr/0057-containers-reach-listed-ports-on-the-client.md)
