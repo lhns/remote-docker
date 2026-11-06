@@ -80,6 +80,19 @@
   host port holds no gate lease, but it is counted, so the connection and its
   forwards are not released under it.
 - **`remote status`** lists each port: forwarded, or why not.
+- **`remote host-ports ls|add|rm|set <port>...` edit the same field**, so the
+  environment variable and `remote set --host-ports` keep working and the
+  variable overrides the file; `ls` says when it does, and an edit made under
+  it is saved and said to be overridden. `add` and `rm` are idempotent.
+  - A running session applies the change without a restart: the command POSTs
+    `host-ports?ports=` to the session's control endpoint
+    (`Control.SetHostPorts`), which binds the new ports, closes the removed
+    ones and retries a port that was refused, all under one lock per
+    connection. The same call turns the container alias on or off, so a
+    container created after the first `add` has it. A session that cannot be
+    reached is not an error: the next one reads the file.
+  - `Status.Settings["host-ports"]` reports the list in force, so a later
+    command does not call a live change a pending restart.
 
 ## What it costs
 

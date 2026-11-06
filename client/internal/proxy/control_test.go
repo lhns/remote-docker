@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,12 +25,23 @@ type fakeControl struct {
 	safe      bool
 	clientErr error
 	shutdowns atomic.Int64
+
+	mu           sync.Mutex
+	hostPorts    [][]int
+	hostPortsErr error
 }
 
 func (f *fakeControl) Status() any { return f.status }
 func (f *fakeControl) Idle() any   { return Idle{Safe: f.safe} }
 func (f *fakeControl) Run() any    { return Run{Run: "0123"} }
 func (f *fakeControl) Shutdown()   { f.shutdowns.Add(1) }
+
+func (f *fakeControl) SetHostPorts(ports []int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hostPorts = append(f.hostPorts, ports)
+	return f.hostPortsErr
+}
 
 func (f *fakeControl) Client(context.Context) (any, error) {
 	if f.clientErr != nil {
@@ -238,5 +250,56 @@ func TestClientNamesTheRunOrSaysWhyNot(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "unreachable") {
 		t.Errorf("a failed lookup answered %s: %s", resp.Status, body)
+	}
+}
+
+func TestHostPortsAreAppliedByAPost(t *testing.T) {
+	ctrl := &fakeControl{}
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
+
+	for query, want := range map[string][]int{"3000%2C8931": {3000, 8931}, "": nil} {
+		resp, err := http.Post("http://"+addr+ControlPrefix+"host-ports?ports="+query, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("ports=%q returned %d, want 200", query, resp.StatusCode)
+		}
+		ctrl.mu.Lock()
+		got := ctrl.hostPorts[len(ctrl.hostPorts)-1]
+		ctrl.mu.Unlock()
+		if len(got) != len(want) {
+			t.Errorf("ports=%q applied %v, want %v", query, got, want)
+		}
+	}
+}
+
+// A GET must not change what containers can reach, and a bad number is refused
+// before the session sees it.
+func TestHostPortsRefuseAGetAndABadPort(t *testing.T) {
+	ctrl := &fakeControl{}
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
+
+	resp, err := http.Get("http://" + addr + ControlPrefix + "host-ports?ports=3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET returned %d, want 405", resp.StatusCode)
+	}
+	resp, err = http.Post("http://"+addr+ControlPrefix+"host-ports?ports=70000", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a bad port returned %d, want 400", resp.StatusCode)
+	}
+	ctrl.mu.Lock()
+	defer ctrl.mu.Unlock()
+	if len(ctrl.hostPorts) != 0 {
+		t.Errorf("the session was asked to apply %v", ctrl.hostPorts)
 	}
 }

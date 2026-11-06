@@ -407,8 +407,9 @@ jobs:
           try {
             $up = $false
             for ($i = 0; $i -lt 20 -and -not $up; $i++) {
-              try { $up = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:18090/marker).Content -eq 'from the runner' }
-              catch { Start-Sleep -Seconds 1 }
+              # curl.exe, not Invoke-WebRequest: an unknown type comes back as bytes.
+              $up = ((curl.exe -s http://127.0.0.1:18090/marker) -join '') -eq 'from the runner'
+              if (-not $up) { Start-Sleep -Seconds 1 }
             }
             if (-not $up) { throw "the local test server never answered" }
 

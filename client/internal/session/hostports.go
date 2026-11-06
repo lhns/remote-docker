@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/core/tunnel"
 )
 
@@ -33,11 +33,6 @@ type hostForward struct {
 	listener net.Listener
 	// problem is why there is no listener, empty when there is one.
 	problem string
-}
-
-// hostPortList parses the setting, with an error only for a malformed one.
-func (s *Session) hostPortList() ([]int, error) {
-	return config.ParseHostPorts(s.opts.Config.HostPorts)
 }
 
 // hostGateway is the address the workspace reports for host forwards, asked
@@ -60,12 +55,66 @@ func (s *Session) hostGateway(ctx context.Context, live *liveConn) string {
 // connection: a port that cannot be forwarded is warned about and shown by
 // `status`, and the session carries on with the rest.
 func (s *Session) startHostPorts(ctx context.Context, live *liveConn) {
-	ports, err := s.hostPortList()
-	if err != nil {
-		s.log().Warn("ignoring " + err.Error())
+	s.hostMu.Lock()
+	ports := slices.Clone(s.hostPorts)
+	s.hostMu.Unlock()
+
+	live.hostMu.Lock()
+	live.hostCtx = ctx
+	live.hostMu.Unlock()
+	s.applyHostPorts(ctx, live, ports)
+	if len(ports) > 0 {
+		s.hostConnects.Add(1)
+	}
+}
+
+// SetHostPorts replaces the listed ports, satisfying proxy.Control: the next
+// connection starts from this list, and a live one binds the new ports and
+// closes the removed ones without a restart (ADR 0057).
+func (s *Session) SetHostPorts(ports []int) error {
+	ports = slices.Clone(ports)
+	s.hostMu.Lock()
+	s.hostPorts = ports
+	s.hostMu.Unlock()
+
+	live, ok := s.gate.currentLive()
+	if !ok || live == nil {
+		return nil
+	}
+	live.hostMu.Lock()
+	ctx := live.hostCtx
+	live.hostMu.Unlock()
+	if ctx == nil {
+		return nil // not a hosting connection
+	}
+	s.applyHostPorts(ctx, live, ports)
+	return nil
+}
+
+// applyHostPorts makes the connection's forwards the listed ports: keeps what
+// is bound, closes what is no longer listed, and binds the rest. A port that
+// was refused before is tried again, since a person adding it back is the
+// moment the cause may have gone.
+func (s *Session) applyHostPorts(ctx context.Context, live *liveConn, ports []int) {
+	live.hostMu.Lock()
+	defer live.hostMu.Unlock()
+	if live.hostClosed {
 		return
 	}
+
+	var kept []hostForward
+	for _, f := range live.hostForwards {
+		switch {
+		case f.listener != nil && slices.Contains(ports, f.port):
+			kept = append(kept, f)
+		case f.listener != nil:
+			_ = f.listener.Close()
+		}
+	}
+	live.hostForwards = kept
+
 	if len(ports) == 0 {
+		live.rewriter.SetHostGateway("")
 		return
 	}
 
@@ -75,20 +124,26 @@ func (s *Session) startHostPorts(ctx context.Context, live *liveConn) {
 			s.log().Warn("host-ports is set, but this workspace reports no host gateway, so containers cannot reach them\n" +
 				"  fix: upgrade the workspace to a release with host-ports; if it is current, its log says why")
 		})
+		live.rewriter.SetHostGateway("")
 		for _, port := range ports {
-			live.hostForwards = append(live.hostForwards, hostForward{port: port, problem: "this workspace reports no host gateway"})
+			if !live.hostBound(port) {
+				live.hostForwards = append(live.hostForwards, hostForward{port: port, problem: "this workspace reports no host gateway"})
+			}
 		}
+		live.sortHostForwards()
 		return
 	}
-
 	// The create rewrite names the same address, so a container's
 	// host.docker.internal is where the listeners are.
-	live.rewriter.HostGateway = gateway
+	live.rewriter.SetHostGateway(gateway)
 
 	// A second connection is a reconnect, and the previous one's listeners may
 	// still be held by the workspace for a while.
-	reconnect := s.hostConnects.Add(1) > 1
+	reconnect := s.hostConnects.Load() > 0
 	for _, port := range ports {
+		if live.hostBound(port) {
+			continue
+		}
 		addr := net.JoinHostPort(gateway, strconv.Itoa(port))
 		l, err := live.ssh.Listen(addr)
 		if err != nil {
@@ -103,6 +158,28 @@ func (s *Session) startHostPorts(ctx context.Context, live *liveConn) {
 		}
 		live.hostForwards = append(live.hostForwards, hostForward{port: port, listener: l})
 		live.wg.Go(func() { serveHostPort(ctx, l, port, s.log().Warn) })
+	}
+	live.sortHostForwards()
+}
+
+// hostBound reports whether a port has a listener, under hostMu.
+func (live *liveConn) hostBound(port int) bool {
+	return slices.ContainsFunc(live.hostForwards, func(f hostForward) bool { return f.port == port && f.listener != nil })
+}
+
+func (live *liveConn) sortHostForwards() {
+	slices.SortFunc(live.hostForwards, func(a, b hostForward) int { return a.port - b.port })
+}
+
+// closeHostForwards ends every listener and stops later ones from being made.
+func (live *liveConn) closeHostForwards() {
+	live.hostMu.Lock()
+	defer live.hostMu.Unlock()
+	live.hostClosed = true
+	for _, f := range live.hostForwards {
+		if f.listener != nil {
+			_ = f.listener.Close()
+		}
 	}
 }
 
@@ -140,6 +217,8 @@ func serveHostPort(ctx context.Context, l net.Listener, port int, warn func(stri
 
 // hostForwardStatus is one line per listed port for `remote status`.
 func (live *liveConn) hostForwardStatus() []string {
+	live.hostMu.Lock()
+	defer live.hostMu.Unlock()
 	var out []string
 	for _, f := range live.hostForwards {
 		if f.problem != "" {

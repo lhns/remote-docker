@@ -43,7 +43,9 @@ func TestTheHostAliasIsAddedOnlyWhereItCanWork(t *testing.T) {
 		{"off, and the user's own are untouched", "", `{"HostConfig":{"ExtraHosts":["db:10.0.0.9"]}}`, []string{"db:10.0.0.9"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := extraHosts(t, &Rewriter{HostGateway: tc.gateway}, tc.body)
+			r := &Rewriter{}
+			r.SetHostGateway(tc.gateway)
+			got := extraHosts(t, r, tc.body)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("ExtraHosts = %v, want %v", got, tc.want)
 			}

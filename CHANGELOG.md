@@ -17,7 +17,9 @@ software.
   3000,8931`) and a container created through this client can dial
   `host.docker.internal:3000`, which arrives at `localhost:3000` here, such as
   a local MCP server. Nothing is forwarded unless listed, and every container
-  of the account can then reach those ports. `remote status` lists them. Needs
+  of the account can then reach those ports. `remote host-ports ls`, `add`,
+  `rm` and `set` edit the list, and a running session applies it with no
+  restart. `remote status` lists them. Needs
   a workspace at this release; an older one is named in a warning. TCP only.
   Not covered: `docker build` `RUN` steps, UDP, and a workspace daemon started
   with `--host-gateway-ip`.

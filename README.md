@@ -380,6 +380,7 @@ that is ours lives under `remote`:
 | `remote-docker remote stop` | stop it |
 | `remote-docker remote restart` | stop and start |
 | `remote-docker remote status` | is it working, and what is it talking to; exits 1 when not ready |
+| `remote-docker remote host-ports ls\|add\|rm\|set` | the local ports [containers reach](#reaching-your-machine-from-a-container) as `host.docker.internal` |
 | `remote-docker remote gc` | remove share volumes nothing is using |
 | `remote-docker remote version` | |
 | `remote-docker remote create <name> --token …` | enrol this machine's key with an [enrolment token](#enrolment), then add the workspace |
@@ -528,10 +529,16 @@ an AI tool or a development database, is out of reach. List the ports you want
 containers to see:
 
 ```bash
-REMOTE_DOCKER_HOST_PORTS=3000,8931 remote-docker remote start
-remote-docker remote set dev --host-ports 3000,8931   # or in the workspace's config
+remote-docker remote host-ports add 3000 8931   # applied to a running session at once
+remote-docker remote host-ports ls              # each port, and whether it is forwarded
+remote-docker remote host-ports rm 8931         # also: set <port>...
 docker run --rm alpine:3 wget -qO- http://host.docker.internal:3000/
 ```
+
+The same list is the workspace's `host-ports` setting, so
+`REMOTE_DOCKER_HOST_PORTS=3000,8931` and `remote set dev --host-ports 3000,8931`
+work too. The variable overrides the file, and `ls` says so when it does. `add`
+and `rm` are idempotent and check the number (1 to 65535).
 
 Containers you create then have `host.docker.internal`, and a connection to a
 listed port on it arrives at `localhost:<port>` on your machine, IPv4 or IPv6.

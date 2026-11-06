@@ -9,6 +9,17 @@ import (
 // HostAlias is the name a container uses for this machine, Docker Desktop's.
 const HostAlias = "host.docker.internal"
 
+// SetHostGateway sets the address HostAlias points at; empty turns it off.
+func (r *Rewriter) SetHostGateway(addr string) { r.hostGateway.Store(&addr) }
+
+// HostGateway is the address HostAlias points at, empty when off.
+func (r *Rewriter) HostGateway() string {
+	if p := r.hostGateway.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
 // addHostAlias gives a container HostAlias, pointing at the gateway where the
 // host forwards listen (ADR 0057). The address, not `host-gateway`: the daemon
 // resolves that word from its own settings, which may name another address.
@@ -19,7 +30,8 @@ const HostAlias = "host.docker.internal"
 // container's (`container:<id>`), which the daemon refuses to combine with
 // extra hosts.
 func (r *Rewriter) addHostAlias(hostConfig map[string]json.RawMessage, changed *bool) error {
-	if r.HostGateway == "" {
+	gateway := r.HostGateway()
+	if gateway == "" {
 		return nil
 	}
 
@@ -45,7 +57,7 @@ func (r *Rewriter) addHostAlias(hostConfig map[string]json.RawMessage, changed *
 		}
 	}
 
-	encoded, err := json.Marshal(append(hosts, HostAlias+":"+r.HostGateway))
+	encoded, err := json.Marshal(append(hosts, HostAlias+":"+gateway))
 	if err != nil {
 		return fmt.Errorf("rewrite: encoding ExtraHosts: %w", err)
 	}

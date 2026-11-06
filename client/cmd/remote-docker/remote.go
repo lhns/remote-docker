@@ -58,6 +58,7 @@ workspace the current docker context names.`,
 		newKeyCommand(),
 
 		// The rest.
+		newHostPortsCommand(),
 		newMachineCommand(),
 		newEnrollCommand(),
 		newGCCommand(),

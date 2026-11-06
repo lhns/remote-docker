@@ -719,14 +719,19 @@ else
 fi
 docker rm -f itest-hp-off >/dev/null 2>&1
 
-# host-ports is read when the session starts.
-stop_pid "$CLIENT_PID"
-CLIENT_PID=""
-REMOTE_DOCKER_HOST_PORTS=$HP "$WORK/remote-docker" remote start --foreground >"$WORK/hp-up.log" 2>&1 &
-CLIENT_PID=$!
-if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    bad "the client with host-ports never came up"
-    sed 's/^/        /' "$WORK/hp-up.log"
+# `host-ports add` is applied by the running session with no restart. Its own
+# HOME keeps the config file it writes away from the later sections.
+hp() { HOME="$WORK/hp-home" "$WORK/remote-docker" remote host-ports "$@"; }
+mkdir -p "$WORK/hp-home"
+if outputs "^$HP  " hp add "$HP"; then
+    ok "host-ports add reports the port: $LAST_OUTPUT"
+else
+    bad "host-ports add said [$LAST_OUTPUT]"
+fi
+if outputs "^$HP  " hp add "$HP" && outputs "^$HP  " hp ls; then
+    ok "adding it again is harmless, and ls lists it"
+else
+    bad "a repeated add or ls said [$LAST_OUTPUT]"
 fi
 
 GET="wget -qO- -T 5 http://host.docker.internal:$HP/marker"
@@ -791,7 +796,7 @@ if dockert run -d --name itest-hp-poll alpine:3 sh -c \
         ok "the forward stayed up under a running container past the idle release"
     else
         bad "the forward failed while a container ran: $(tr '\n' ' ' <<<"$polled" | tail -c 200)"
-        sed 's/^/        /' "$WORK/hp-up.log" | tail -10
+        sed 's/^/        /' "$WORK/up.log" | tail -10
     fi
 else
     bad "could not start the polling container"
@@ -804,19 +809,18 @@ else
     bad "remote status does not list the host port: [$LAST_OUTPUT]"
 fi
 
+# Removing it is applied live too: the listener closes, so the same request
+# is refused now.
+hp rm "$HP" >/dev/null 2>&1
+if out=$(dockert run --rm alpine:3 wget -qO- -T 5 "http://host.docker.internal:$HP/marker" 2>&1); then
+    bad "a container still reached $HP after host-ports rm: [$out]"
+else
+    ok "after host-ports rm the port is no longer reachable: $(echo "$out" | head -1)"
+fi
+
 docker network rm itest-hp-net >/dev/null 2>&1
 kill "$HP_PID" "$UNLISTED_PID" 2>/dev/null
 wait "$HP_PID" "$UNLISTED_PID" 2>/dev/null
-
-# Back to the session every later section expects.
-stop_pid "$CLIENT_PID"
-CLIENT_PID=""
-"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
-CLIENT_PID=$!
-if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    bad "the client never came back up after 10c"
-    sed 's/^/        /' "$WORK/up.log"
-fi
 
 echo
 echo "== 11. named volumes are left alone =="

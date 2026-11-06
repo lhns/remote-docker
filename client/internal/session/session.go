@@ -126,7 +126,11 @@ type Session struct {
 	// per reconnect; hostConnects counts connections that tried host forwards,
 	// so a refusal on a later one can say the previous may still be held.
 	hostNoGateway sync.Once
-	hostConnects  atomic.Int32
+	// hostPorts is the list now in force: the setting at start, then whatever
+	// `remote host-ports` last sent. Under hostMu.
+	hostMu       sync.Mutex
+	hostPorts    []int
+	hostConnects atomic.Int32
 
 	// rtt is the tunnel's last measured round trip in nanoseconds, for prefetch.
 	rtt atomic.Int64
@@ -176,7 +180,10 @@ type liveConn struct {
 	ports     *ports.Manager
 
 	// hostForwards is each listed host port and what became of it (ADR 0057).
+	hostMu       sync.Mutex
 	hostForwards []hostForward
+	hostCtx      context.Context // the connection's, set at connect
+	hostClosed   bool
 
 	// clientID names this machine, or this run of an ephemeral account. Here
 	// rather than on Session, which the idle sweep reads while a reconnect
@@ -238,6 +245,11 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		stopped:  make(chan struct{}),
 		registry: nfsserve.NewRegistry(defaultAttrs(opts.Config.ShareUID, opts.Config.ShareGID, opts.Config.ShareFileMask, opts.Config.ShareDirMask)),
 	}
+	ports, err := config.ParseHostPorts(opts.Config.HostPorts)
+	if err != nil {
+		s.log().Warn("ignoring " + err.Error())
+	}
+	s.hostPorts = ports
 	// Set before the first share is registered, whose filesystem is built with it.
 	s.registry.Log = opts.Log
 

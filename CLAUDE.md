@@ -342,7 +342,8 @@ premise of the project, and it applies to building it too. So:
 - **A host forward dials the port it was registered for and nothing the
   workspace names, and its bind is allowed only on the account's own bridge
   gateway** (ADR 0057). `host-ports` lists local ports containers reach as
-  `host.docker.internal`. The client asks for a reverse forward on the daemon's
+  `host.docker.internal`; `remote host-ports add|rm|set|ls` edit the same field
+  and a running session applies it live (`Control.SetHostPorts`). The client asks for a reverse forward on the daemon's
   default bridge gateway per port, and `serveHostPort` carries each connection
   to `localhost:<port>`; the channel's destination is never read, or the
   workspace could reach any local port. `reversePolicy.Allow` takes the branch

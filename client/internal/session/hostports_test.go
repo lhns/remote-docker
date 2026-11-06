@@ -193,7 +193,8 @@ func TestStatusNamesEachHostPort(t *testing.T) {
 // through this client carries the account and machine labels even with no
 // mounts at all, and hasLiveDependents counts any such running container.
 func TestARunningContainerWithNoMountsKeepsTheConnection(t *testing.T) {
-	r := &rewrite.Rewriter{Owner: "alice", Client: "machine-1", HostGateway: "172.17.0.1"}
+	r := &rewrite.Rewriter{Owner: "alice", Client: "machine-1"}
+	r.SetHostGateway("172.17.0.1")
 	out, err := r.ContainerCreate(t.Context(), []byte(`{"Image":"alpine","HostConfig":{}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -216,5 +217,57 @@ func TestARunningContainerWithNoMountsKeepsTheConnection(t *testing.T) {
 	busy, err := s.hasLiveDependents(t.Context(), live)
 	if err != nil || !busy {
 		t.Errorf("busy = %v, %v for a running container with labels %v, want busy", busy, err, created.Labels)
+	}
+}
+
+// Removing a port closes its listener and keeps the others; emptying the list
+// turns the container alias off. Everything still listed is already bound, so
+// no connection is needed.
+func TestChangingTheListClosesWhatWasRemoved(t *testing.T) {
+	open := func() net.Listener {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = l.Close() })
+		return l
+	}
+	l3000, l8931 := open(), open()
+	rw := &rewrite.Rewriter{}
+	rw.SetHostGateway("172.17.0.1")
+	live := &liveConn{
+		info:     workspace.Info{HostGateway: "172.17.0.1"},
+		rewriter: rw,
+		hostForwards: []hostForward{
+			{port: 3000, listener: l3000},
+			{port: 8931, listener: l8931},
+		},
+	}
+	s := &Session{}
+
+	s.applyHostPorts(t.Context(), live, []int{8931})
+	if _, err := l3000.Accept(); err == nil {
+		t.Error("the removed port's listener is still open")
+	}
+	if status := live.hostForwardStatus(); len(status) != 1 || !strings.HasPrefix(status[0], "8931:") {
+		t.Errorf("status = %q, want only 8931", status)
+	}
+	if rw.HostGateway() != "172.17.0.1" {
+		t.Errorf("the alias went off with a port still listed")
+	}
+
+	s.applyHostPorts(t.Context(), live, nil)
+	if _, err := l8931.Accept(); err == nil {
+		t.Error("the last listener is still open")
+	}
+	if rw.HostGateway() != "" || len(live.hostForwardStatus()) != 0 {
+		t.Errorf("an empty list left the alias %q and status %q", rw.HostGateway(), live.hostForwardStatus())
+	}
+
+	// A closed connection takes no more changes.
+	live.closeHostForwards()
+	s.applyHostPorts(t.Context(), live, []int{8931})
+	if len(live.hostForwardStatus()) != 0 {
+		t.Error("a closed connection bound a port")
 	}
 }
