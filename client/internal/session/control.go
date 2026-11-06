@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -101,6 +102,7 @@ func (live *liveConn) close() {
 	if live.nfsTunnel != nil {
 		_ = live.nfsTunnel.Close()
 	}
+	live.closeHostForwards()
 	_ = live.ssh.Close()
 	live.wg.Wait()
 
@@ -234,12 +236,17 @@ func (s *Session) Status() any {
 		Tracing:   proxy.Tracing(),
 		Settings:  s.opts.Config.SessionSettings(),
 	}
+	// What is in force, which `remote host-ports` may have changed since start.
+	s.hostMu.Lock()
+	st.Settings["host-ports"] = config.HostPortList(s.hostPorts)
+	s.hostMu.Unlock()
 	if drops, last := s.gate.dropped(); drops > 0 {
 		st.Drops = drops
 		st.LastDrop = last.Format(time.RFC3339)
 	}
 	if connected {
 		st.Storage = live.info.Storage
+		st.HostForwards = live.hostForwardStatus()
 	}
 	st.Caches = s.cacheStatus()
 	st.WriteBack = s.writeBackStatus()

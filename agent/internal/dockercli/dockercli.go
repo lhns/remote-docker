@@ -27,6 +27,14 @@ func ServerVersionArgs() []string {
 	return []string{"version", "--format", "{{.Server.Version}}"}
 }
 
+// BridgeGatewayArgs asks a daemon for the IPv4 gateways of its default bridge,
+// one per line: where a container reaches the daemon's host, and the address
+// `host-gateway` resolves to unless the daemon was told another (ADR 0057).
+func BridgeGatewayArgs() []string {
+	return []string{"network", "inspect", "bridge",
+		"--format", `{{range .IPAM.Config}}{{.Gateway}}{{"\n"}}{{end}}`}
+}
+
 // Cmd builds a command against this daemon, for callers that need to own the
 // process: streaming its output, forwarding signals to it.
 func (c CLI) Cmd(ctx context.Context, args ...string) *exec.Cmd {

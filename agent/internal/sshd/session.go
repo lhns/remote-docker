@@ -123,6 +123,9 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		// This workspace's clock, so the client can measure the offset between
 		// the two machines rather than assume they agree (ADR 0044).
 		Now: time.Now().UnixNano(),
+
+		// Where a container reaches the client's host forwards (ADR 0057).
+		HostGateway: s.hostGatewayInfo(session.Context(), account.Name()),
 	}
 	// The client cannot derive a run's id alone (ADR 0050).
 	if account.ephemeral {

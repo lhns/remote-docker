@@ -287,6 +287,71 @@ for corner in "read=direct,write=back" "read=direct,write=ephemeral"; do
 done
 
 echo
+echo "== 7d. host ports: each account binds its own gateway (ADR 0057) =="
+# Both accounts list SHARED, and each also lists a port of its own. With a
+# daemon per account the two bind the same gateway address in different network
+# namespaces, so one reservation map keyed by (host, port) would refuse the
+# second. Both clients are on this runner, so they dial one localhost: what is
+# asserted is that both bind and reach, and that a port only the other account
+# listed is not reachable. Two servers on one port needs two machines.
+SHARED=18095
+ONLY_A=18096
+ONLY_B=18097
+HOSTSRV="$WORK/hostsrv"
+HOSTSRV_PIDS=()
+mkdir -p "$HOSTSRV"
+echo "from the client machine" >"$HOSTSRV/marker"
+for port in $SHARED $ONLY_A $ONLY_B; do
+    python3 -m http.server "$port" --bind 127.0.0.1 --directory "$HOSTSRV" >/dev/null 2>&1 &
+    HOSTSRV_PIDS+=("$!")
+done
+
+stop_pid "$CLIENT_A_PID"
+stop_pid "$CLIENT_B_PID"
+CLIENT_A_PID=$(start_session "$WORK/state-$A" "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A" \
+    REMOTE_DOCKER_IDLE_TIMEOUT=8s REMOTE_DOCKER_HOST_PORTS="$SHARED,$ONLY_A")
+CLIENT_B_PID=$(start_session "$WORK/state-$B" "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B" \
+    REMOTE_DOCKER_IDLE_TIMEOUT=8s REMOTE_DOCKER_HOST_PORTS="$SHARED,$ONLY_B")
+if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || ! wait_endpoint "$B_SOCK" "$CLIENT_B_PID"; then
+    bad "a client with host-ports never came up"
+    sed 's/^/    A: /' "$WORK/a.log" | tail -20
+    sed 's/^/    B: /' "$WORK/b.log" | tail -20
+fi
+
+reach() {
+    local runner=$1 port=$2
+    "$runner" run --rm alpine:3 wget -qO- -T 5 "http://host.docker.internal:$port/marker" 2>&1
+}
+for who in a b; do
+    case "$who" in a) runner=da; account=$A; own=$ONLY_A; other=$ONLY_B ;; *) runner=db; account=$B; own=$ONLY_B; other=$ONLY_A ;; esac
+    if out=$(reach "$runner" "$SHARED") && [ "$out" = "from the client machine" ]; then
+        ok "$account's container reaches the port both accounts listed"
+    else
+        bad "$account's container did not reach $SHARED: [$out]"
+        sed "s/^/    $who: /" "$WORK/$who.log" | tail -8
+    fi
+    if out=$(reach "$runner" "$own") && [ "$out" = "from the client machine" ]; then
+        ok "$account's container reaches its own port $own"
+    else
+        bad "$account's container did not reach $own: [$out]"
+    fi
+    if out=$(reach "$runner" "$other"); then
+        bad "SECURITY: $account's container reached $other, which only the other account listed: [$out]"
+    else
+        ok "$account's container cannot reach $other: $(echo "$out" | head -1)"
+    fi
+done
+
+for pid in "${HOSTSRV_PIDS[@]}"; do kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; done
+stop_pid "$CLIENT_A_PID"
+stop_pid "$CLIENT_B_PID"
+CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A")
+CLIENT_B_PID=$(session "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B")
+if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || ! wait_endpoint "$B_SOCK" "$CLIENT_B_PID"; then
+    bad "the sessions never came back up after 7d"
+fi
+
+echo
 echo "== 8. two accounts publish, and the limit is this machine =="
 # The port is the client's (ADR 0008), so only the CLIENT can refuse, and both
 # accounts here share one runner: on two machines both would get 18090.

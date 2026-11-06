@@ -112,7 +112,9 @@ the user asking for any port.
     which is correct from where it sits.
   - A container dialling the workspace host (`host.docker.internal:8080`)
     reaches the daemon's number, not the one asked for. That was true before
-    and the display does not change it.
+    and the display does not change it. A port listed in `host-ports` is the
+    exception since ADR 0057: it reaches the service on this machine, through a
+    listener of its own and not through a published port.
 - **The client binds ports on the user's machine because a container started
   elsewhere.** Every forward opened or closed is reported, never silent.
 - **A local port already in use cannot be honoured.** Report and leave it

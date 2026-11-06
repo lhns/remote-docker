@@ -237,7 +237,8 @@ it, so `docs/testing-machines.md` is how to check it on yours.
   workspace's number here too, as Docker would. The workspace's own number is
   in `docker exec <workspace> docker ps`. A container reaching the workspace
   host as `host.docker.internal:8080` does not get your port, because that
-  address is the workspace's.
+  address is the workspace's, unless you list the port in `host-ports`: see
+  [Reaching your machine from a container](#reaching-your-machine-from-a-container).
   **UDP works too** ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)), but
   datagrams travel inside the SSH stream, so a delayed one delays those behind
   it. Fine for DNS, syslog and metrics; not for measuring latency.
@@ -379,6 +380,7 @@ that is ours lives under `remote`:
 | `remote-docker remote stop` | stop it |
 | `remote-docker remote restart` | stop and start |
 | `remote-docker remote status` | is it working, and what is it talking to; exits 1 when not ready |
+| `remote-docker remote host-ports ls\|add\|rm\|set` | the local ports [containers reach](#reaching-your-machine-from-a-container) as `host.docker.internal` |
 | `remote-docker remote gc` | remove share volumes nothing is using |
 | `remote-docker remote version` | |
 | `remote-docker remote create <name> --token …` | enrol this machine's key with an [enrolment token](#enrolment), then add the workspace |
@@ -449,6 +451,7 @@ single mount can carry are in [Mount options](#mount-options).
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree`. The default for mounts naming no `prefetch=` |
+| `REMOTE_DOCKER_HOST_PORTS` | `hostPorts` | `remote set --host-ports` | none; local TCP ports, such as `3000,8931`, that containers reach as `host.docker.internal`. See [Reaching your machine from a container](#reaching-your-machine-from-a-container) |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid:gid` every file in a share reports (gid defaults to the uid). The default for mounts naming no `owner=`. See [A container that is not root](#a-container-that-is-not-root) |
@@ -517,6 +520,47 @@ address, port and user belong to the machine: change the port or user with
 
 `remote create` on an existing name replaces every setting, and refuses to for
 a workspace on this machine.
+
+## Reaching your machine from a container
+
+A container runs in the workspace, so `localhost` in it is the container and the
+docker host is the workspace. A server on your machine, such as an MCP server for
+an AI tool or a development database, is out of reach. List the ports you want
+containers to see:
+
+```bash
+remote-docker remote host-ports add 3000 8931   # applied to a running session at once
+remote-docker remote host-ports ls              # each port, and whether it is forwarded
+remote-docker remote host-ports rm 8931         # also: set <port>...
+docker run --rm alpine:3 wget -qO- http://host.docker.internal:3000/
+```
+
+The same list is the workspace's `host-ports` setting, so
+`REMOTE_DOCKER_HOST_PORTS=3000,8931` and `remote set dev --host-ports 3000,8931`
+work too. The variable overrides the file, and `ls` says so when it does. `add`
+and `rm` are idempotent and check the number (1 to 65535).
+
+Containers you create then have `host.docker.internal`, and a connection to a
+listed port on it arrives at `localhost:<port>` on your machine, IPv4 or IPv6.
+Nothing is forwarded unless you list it, because **every container of your
+account can then reach that port** (on a workspace with one shared daemon, every
+account's containers and every shell on it can). Do not list a service that
+trusts whoever connects from `localhost`.
+
+- TCP only, and the same number on both ends. A port with nothing listening
+  here closes the container's connection.
+- The name is added unless the container already has one (a Docker Desktop
+  compose file's `extra_hosts` often does), and is left off `--network host`
+  and `container:<id>` networks.
+- A `docker build` `RUN` step does not get it: pass your own
+  `--add-host host.docker.internal:host-gateway`.
+- It needs a workspace that reports a host gateway. An older one is named in a
+  warning and everything else keeps working.
+- `remote status` lists each port and whether it is forwarded. Two machines of
+  one account listing the same port: the second is refused by the workspace.
+
+[ADR 0057](docs/adr/0057-containers-reach-listed-ports-on-the-client.md)
+says why, and `docs/threat-model.md` flow 12 what it exposes.
 
 ## Mount options
 
@@ -1638,6 +1682,9 @@ Beyond that:
   non-root mkdir and the conformance probe), on one runner image and one WSL
   kernel. The rest of the Windows client is unit tested only, and **Hyper-V has
   run by hand on one computer**, never in CI.
+- **Host ports** (`host-ports`) are exercised from the default bridge, a
+  user-defined network, compose and a WSL machine. Not tested: `docker build`
+  `RUN` steps, UDP, and a workspace daemon started with `--host-gateway-ip`.
 - **Swarm itself** needs a real cluster; only the elevation mechanism is tested.
   The systemd unit is not exercised either.
 - **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount

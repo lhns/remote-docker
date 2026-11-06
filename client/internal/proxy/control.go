@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/lhns/remote-docker/client/internal/config"
 )
 
 // ControlPrefix is the session's own API, served on the Docker endpoint so it
@@ -34,6 +36,12 @@ type Control interface {
 	// Client names the client the workspace knows this session as, connecting
 	// if it must: an ephemeral run's id is derived there (ADR 0050).
 	Client(ctx context.Context) (any, error)
+
+	// SetHostPorts replaces the ports containers reach on this machine, binding
+	// the new ones and closing the removed ones on the live connection (ADR
+	// 0057). An error is a list this session cannot take, not a failed bind:
+	// those are reported by Status.
+	SetHostPorts(ports []int) error
 }
 
 func isControl(req *http.Request) bool {
@@ -66,6 +74,22 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 			return
 		}
 		writeControl(client, http.StatusOK, answer)
+
+	case "host-ports":
+		if req.Method != http.MethodPost {
+			writeControl(client, http.StatusMethodNotAllowed,
+				map[string]string{"message": "host-ports must be POSTed"})
+			return
+		}
+		ports, err := config.ParseHostPorts(req.URL.Query().Get("ports"))
+		if err == nil {
+			err = p.Control.SetHostPorts(ports)
+		}
+		if err != nil {
+			writeControl(client, http.StatusBadRequest, map[string]string{"message": err.Error()})
+			return
+		}
+		writeControl(client, http.StatusOK, map[string]string{"status": "applied"})
 
 	case "shutdown":
 		if req.Method != http.MethodPost {
@@ -122,6 +146,10 @@ type Status struct {
 	// WriteBack is what carrying a container's writes back is doing, one line
 	// per share and then one per thing left behind (ADR 0044).
 	WriteBack []string `json:"writeBack,omitempty"`
+
+	// HostForwards is one line per port listed in host-ports and whether
+	// containers reach it (ADR 0057).
+	HostForwards []string `json:"hostForwards,omitempty"`
 
 	// Drops counts reconnects after a dead connection; otherwise invisible.
 	Drops    int    `json:"drops,omitempty"`

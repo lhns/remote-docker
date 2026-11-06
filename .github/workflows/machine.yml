@@ -393,6 +393,43 @@ jobs:
           }
           .\client\rd.exe rm -f wbexisting
 
+      # The setup this feature is for (ADR 0057): a server on the Windows side
+      # that a container in the machine reaches as host.docker.internal. The
+      # session reads host-ports when it starts, so it is restarted with it.
+      - name: a container reaches a listed port on this runner
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          New-Item -ItemType Directory hostsrv | Out-Null
+          Set-Content -NoNewline -Path hostsrv\marker -Value 'from the runner'
+          $server = Start-Process python -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-m', 'http.server', '18090', '--bind', '127.0.0.1', '--directory', "$PWD\hostsrv")
+          try {
+            $up = $false
+            for ($i = 0; $i -lt 20 -and -not $up; $i++) {
+              # curl.exe, not Invoke-WebRequest: an unknown type comes back as bytes.
+              $up = ((curl.exe -s http://127.0.0.1:18090/marker) -join '') -eq 'from the runner'
+              if (-not $up) { Start-Sleep -Seconds 1 }
+            }
+            if (-not $up) { throw "the local test server never answered" }
+
+            .\client\rd.exe remote stop
+            $env:REMOTE_DOCKER_HOST_PORTS = '18090'
+            .\client\rd.exe remote start
+            if ($LASTEXITCODE -ne 0) { throw "the session with host-ports did not start" }
+
+            $out = (.\client\rd.exe run --rm alpine:3 wget -qO- -T 5 http://host.docker.internal:18090/marker) -join "`n"
+            "got [$out]"
+            if ($out -notmatch 'from the runner') {
+              .\client\rd.exe remote status
+              throw "a container did not reach the server on the runner: [$out]"
+            }
+            .\client\rd.exe remote status
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:REMOTE_DOCKER_HOST_PORTS -ErrorAction SilentlyContinue
+          }
+
       # A distribution left behind is a running Linux system nothing names.
       - name: rm takes the machine with it
         shell: pwsh

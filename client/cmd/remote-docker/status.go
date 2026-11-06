@@ -119,6 +119,9 @@ func reportStatus(out io.Writer, f facts) {
 	for _, line := range f.local.WriteBack {
 		row(out, "write-back", line)
 	}
+	for _, line := range f.local.HostForwards {
+		row(out, "host port", line)
+	}
 
 	// Which builds are in play.
 	_, _ = fmt.Fprintln(out)

@@ -101,6 +101,13 @@ type Info struct {
 	// run has no port until it binds one.
 	Client string
 
+	// HostGateway is the IPv4 gateway of the account's default Docker bridge,
+	// which `host-gateway` resolves to and where a client's host forwards are
+	// bound (ADR 0057). Empty from an agent that predates the key, whose daemon
+	// has no such bridge, or whose daemon has not started: the client asks again
+	// once its tunnel is up before concluding which.
+	HostGateway string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -121,6 +128,7 @@ const (
 	keyUnion       = "WORKSPACE_UNION"
 	keyNow         = "WORKSPACE_NOW"
 	keyClient      = "WORKSPACE_CLIENT"
+	keyHostGateway = "WORKSPACE_HOST_GATEWAY"
 )
 
 // What Union says. A reason rather than a boolean: "no" with nothing after it
@@ -221,6 +229,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Now, err = strconv.ParseInt(value, 10, 64)
 		case keyDocker:
 			info.Docker = value
+		case keyHostGateway:
+			info.HostGateway = value
 		case keyClient:
 			// It names volumes, so a malformed one is refused here.
 			if !validClientID(value) {
@@ -282,6 +292,9 @@ func (i Info) Encode(w io.Writer) error {
 	}
 	if i.Client != "" {
 		pairs = append(pairs, [2]string{keyClient, i.Client})
+	}
+	if i.HostGateway != "" {
+		pairs = append(pairs, [2]string{keyHostGateway, i.HostGateway})
 	}
 
 	for _, k := range slices.Sorted(maps.Keys(i.Extra)) {

@@ -57,6 +57,9 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	if _, err := config.ParseHostPorts(cfg.HostPorts); err != nil {
+		return err
+	}
 
 	s, err := session.Open(ctx, session.Options{
 		Config:      cfg,

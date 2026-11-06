@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -133,6 +134,12 @@ type Rewriter struct {
 	// It applies only where the mode prefetches at all.
 	Prefetch workspace.Prefetch
 
+	// hostGateway is the address host.docker.internal is given in a container
+	// that has none (ADR 0057): the daemon's bridge gateway, where the host
+	// forwards listen. Empty is the feature off, and nothing is added. Atomic
+	// because `remote host-ports add` changes it while requests are served.
+	hostGateway atomic.Pointer[string]
+
 	// StartWatcher makes the file watcher run, and is called when a mount
 	// resolves to watching. Nil is a session that cannot watch, and such a
 	// mount is refused rather than served stale.
@@ -246,6 +253,15 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		}
 
 		if requested, err = r.rewritePorts(hostConfig, &hostChanged); err != nil {
+			return nil, err
+		}
+	}
+
+	if r.HostGateway() != "" {
+		if hostConfig == nil {
+			hostConfig = map[string]json.RawMessage{}
+		}
+		if err := r.addHostAlias(hostConfig, &hostChanged); err != nil {
 			return nil, err
 		}
 	}

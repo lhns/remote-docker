@@ -86,6 +86,46 @@ else
 fi
 
 echo
+echo "== 3b. host-ports against a workspace that cannot serve them (ADR 0057) =="
+# An agent that predates host ports reports no gateway. The client says so once,
+# with a remedy, and everything else carries on: the bind mount still works.
+# The client stays on this setting for the sections below.
+stop_pid "$CLIENT_PID"
+CLIENT_PID=$(start_session "$WORK/state" "$ACCOUNT" "$SOCK" "$WORK/host.log" "$WORK/project" \
+    REMOTE_DOCKER_HOST_PORTS=18095)
+if ! wait_endpoint "$SOCK" "$CLIENT_PID"; then
+    bad "the client with host-ports never came up against the old workspace"
+    tail -20 "$WORK/host.log" | sed 's/^/    /'
+    exit 1
+fi
+saw=$(d run --rm -v "$WORK/project:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
+if [ "$saw" = "written on this machine" ]; then
+    ok "a bind mount still works with host-ports set"
+else
+    bad "the container read: $saw"
+fi
+if outputs 'host-ports is set, but this workspace reports no host gateway' cat "$WORK/host.log"; then
+    ok "the workspace is named as unable to forward host ports"
+else
+    bad "nothing said host-ports could not be served: [$LAST_OUTPUT]"
+fi
+if grep -q 'fix: upgrade the workspace' <<<"$LAST_OUTPUT"; then
+    ok "and what to do about it"
+else
+    bad "the warning carries no remedy: [$LAST_OUTPUT]"
+fi
+if [ "$(grep -c 'reports no host gateway' "$WORK/host.log")" = 1 ]; then
+    ok "it said so once"
+else
+    bad "the warning was repeated: $(grep -c 'reports no host gateway' "$WORK/host.log") times"
+fi
+if outputs 'host port +18095: not forwarded' env REMOTE_DOCKER_STATE_DIR="$WORK/state"     REMOTE_DOCKER_HOST=127.0.0.1 REMOTE_DOCKER_PORT="$SSH_PORT" REMOTE_DOCKER_USER="$ACCOUNT"     REMOTE_DOCKER_ENDPOINT="$SOCK" "$WORK/remote-docker" remote status; then
+    ok "remote status shows the port as not forwarded"
+else
+    bad "remote status does not show it: [$LAST_OUTPUT]"
+fi
+
+echo
 echo "== 4. a mount that needs the cache is refused, naming itself =="
 # Refused rather than quietly served as write=through: a silent downgrade moves
 # where somebody's writes live.

@@ -280,3 +280,36 @@ func TestInfoClient(t *testing.T) {
 		t.Error("port 0 was accepted without a run")
 	}
 }
+
+// The gateway is a key added after the format was in use: an old agent sends
+// none, an old client keeps it in Extra, and a new pair round trips it.
+func TestHostGatewayIsBackwardCompatible(t *testing.T) {
+	old, err := ParseInfo(strings.NewReader(oldAgentOutput))
+	if err != nil {
+		t.Fatalf("ParseInfo: %v", err)
+	}
+	if old.HostGateway != "" {
+		t.Errorf("HostGateway = %q from a reply that had none", old.HostGateway)
+	}
+
+	var buf strings.Builder
+	if err := (Info{User: "alice", NFSPort: 30000, HostGateway: "172.17.0.1"}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := ParseInfo(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatalf("ParseInfo: %v", err)
+	}
+	if got.HostGateway != "172.17.0.1" || len(got.Extra) != 0 {
+		t.Errorf("round trip = %+v, want the gateway and no extra keys", got)
+	}
+
+	// Not emitted when empty, so a workspace without a bridge says nothing.
+	buf.Reset()
+	if err := (Info{User: "alice", NFSPort: 30000}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if strings.Contains(buf.String(), keyHostGateway) {
+		t.Errorf("Encode() = %q, want no %s", buf.String(), keyHostGateway)
+	}
+}

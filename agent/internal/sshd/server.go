@@ -125,6 +125,9 @@ const (
 
 // Server serves SSH for the workspace.
 type Server struct {
+	// gatewayWarned holds the accounts whose missing bridge gateway was logged.
+	gatewayWarned sync.Map
+
 	cfg     Config
 	forward *ForwardPolicy
 	ssh     *gssh.Server

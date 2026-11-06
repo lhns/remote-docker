@@ -37,7 +37,7 @@ STRIDE letters are used where they apply and left out where they do not.
 | whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, every container's contents |
 | somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates, and a live token's id lets a connection do one thing, redeem it (flow 1b) |
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
-| an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
+| an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3. With `host-ports`, the listed local ports (flow 12) |
 | a pod in the same cluster | the pod network | the workspace's ports, and the metrics port when it is on (flow 10). The export is loopback inside a namespace of its own, so it is not among them |
 | another local user on a Windows computer with the Hyper-V service | logged on at the same computer | the service's pipe: one refusal, unless a direct member of `remote-docker-users`; a member makes, starts and destroys only machines it created (flow 11) |
 | whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, a share record that is refused wholesale when another machine or account wrote it, and a machine's host key, the public half only |
@@ -1476,6 +1476,59 @@ administrator chose.
 a domain group that is a member of `remote-docker-users` is refused, and told
 the command that adds them. A stricter reading is the safe direction.
 
+## Flow 12: a container reaches a listed port on the client
+
+Off unless the client lists ports in `host-ports` (ADR 0057). Then a container
+can dial `host.docker.internal:<port>` and reach that port on the user's
+machine.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K as a container (any of the account's)
+    participant G as listener on the bridge gateway, in the daemon's netns
+    participant P as reversePolicy.Allow
+    participant C as the client session
+    participant L as localhost:port on the user's machine
+
+    C->>P: tcpip-forward <gateway>:<port>
+    P->>P: host is this account's own bridge gateway? port 1..65535?
+    P-->>C: allowed, token 0, no reservation
+    K->>G: connect to host.docker.internal:<port>
+    G->>C: forwarded-tcpip channel
+    C->>L: dial localhost:<port>, the port this listener was registered for
+    Note over K,L: bytes both ways until either side closes
+```
+
+**I, E — every container of the account reaches the listed ports (1, 4).**
+Not only the one that wanted it: the listener is on the daemon's bridge, and a
+container on any network of that daemon can route to it. A listed port is
+therefore open to whatever the account runs, including an image the user does
+not trust. *Accepted*, because it is the feature and it is opt-in per port;
+README says not to list a service that trusts `localhost`. With a shared daemon
+(ADR 0012) the listener is in the namespace every account's containers and
+shells share, so it is open to every account on the workspace.
+
+**S/E — the workspace names no destination (1).** The client dials the port a
+listener was registered for and never the address in the channel's payload, so
+a workspace cannot use the forward to reach any other local port, nor another
+host. *Covered by* `TestAHostPortConnectionReachesLocalhostOnItsOwnPort`.
+
+**E — the policy branch widens one address and nothing else (3).**
+`allowHostForward` allows a port on exactly the IPv4 gateway the account's own
+daemon reports. Every other non-loopback host, `0.0.0.0` and the empty string
+included, meets the loopback rule as before, and port 0 is refused, so no
+listener appears on `0.0.0.0`, on another account's gateway or on the
+workspace's external interface. *Covered by* `TestOtherHostsAreLeftToTheLoopbackRule`,
+`TestTheGatewayIsAskedOfTheAccountsOwnDaemon` and `TestAHostForwardRefusesWhatIsNoPort`.
+
+**D — a port can be held by a stranger (1).** There is no reservation, so the
+kernel decides who binds first: an account's own process in a shared daemon's
+namespace can take a gateway port before the client does, and the client is
+refused with a warning. It can serve that port's connections itself, which is
+the same trust as any process on a shared daemon, and no more than flow 5 already
+accepts.
+
 ---
 
 ## The software you run
@@ -1555,6 +1608,9 @@ Stated here rather than buried, because each is a deliberate trade.
   interface, is the operator's to add. Neither keeps out an account's own shell,
   so every enrolled account can see which accounts are connected; flow 10 says
   why that is accepted.
+- **A listed host port is open to every container of the account** (ADR 0057).
+  Off by default and per port. Flow 12 says what that means, and that on a
+  shared daemon the account is every account.
 - **An admin can become any account.** `key add` and a bound token both put
   the admin's key on it, an operator-enrolled account included, since the
   enrolled directory's keys merge with the operator's (ADR 0052, ADR 0053);
