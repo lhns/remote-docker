@@ -1410,6 +1410,18 @@ and the daemon must come back after `docker restart -t 0` with the planted pid
 gone. Both halves, because a daemon that happened to start would otherwise hide
 a missing mount until the next coincidence.
 
+Host ports (ADR 0057), green on PR 367 (2026-11-06): in `integration.sh` 10c a
+container on the default bridge and one on a user-defined network reading a
+server on the runner's loopback through `host.docker.internal`, a port that is
+not listed refused, a compose `extra_hosts` entry kept and not duplicated, no
+extra host added with the setting off, the forward surviving the idle release
+under a running container, `remote host-ports add` and `rm` applied to the
+running session, and `remote status` listing the port; in `per-user-dind.sh` 7d
+two accounts binding the same port at once and neither reaching the other's; in
+`old-workspace.sh` 3b a 0.5.1 workspace named once as unable to serve it while
+a bind mount still works; and in `machine.yml` a container in the WSL machine
+reading a server on the Windows runner.
+
 A container's exit status reaching the user, in `integration.sh` 6c: `exit 7`
 giving the client 7 rather than 1 or 0, the same with stdin attached (`-i`),
 42 through the EMBEDDED CLI, which is the only place `exitCode` runs, a
