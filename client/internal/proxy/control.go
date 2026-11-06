@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/lhns/remote-docker/client/internal/config"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/lhns/remote-docker/client/internal/config"
 )
 
 // ControlPrefix is the session's own API, served on the Docker endpoint so it
