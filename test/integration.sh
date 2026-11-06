@@ -684,6 +684,141 @@ fi
 rm -f "$PROJECT/udpecho"
 
 echo
+echo "== 10c. a container reaches a listed port on this machine (ADR 0057) =="
+# A server on this machine's loopback, which no container can reach by default:
+# `localhost` in a container is the container and the docker host is the
+# workspace. HP is listed in host-ports, UNLISTED is served too and is not.
+HP=18090
+UNLISTED=18091
+HOSTSRV="$WORK/hostsrv"
+mkdir -p "$HOSTSRV"
+echo "from the client machine" >"$HOSTSRV/marker"
+python3 -m http.server "$HP" --bind 127.0.0.1 --directory "$HOSTSRV" >/dev/null 2>&1 &
+HP_PID=$!
+python3 -m http.server "$UNLISTED" --bind 127.0.0.1 --directory "$HOSTSRV" >/dev/null 2>&1 &
+UNLISTED_PID=$!
+if ! wait_url "http://127.0.0.1:$HP/marker" "from the client machine" 15; then
+    bad "the local test server never answered, so nothing below can be concluded"
+fi
+
+# The setting is off in this session: no container is touched. Asserted first,
+# because an injected name on every container is the regression to catch.
+if dockert run -d --name itest-hp-off alpine:3 sleep 600 >/dev/null 2>&1; then
+    if outputs '^(null|\[\])$' dockert inspect itest-hp-off --format '{{json .HostConfig.ExtraHosts}}'; then
+        ok "with host-ports off no extra host is added to a container: $LAST_OUTPUT"
+    else
+        bad "with host-ports off the container has ExtraHosts $LAST_OUTPUT"
+    fi
+    if outputs 'bad address|not found' dockert exec itest-hp-off wget -qO- -T 3 "http://host.docker.internal:$HP/marker"; then
+        ok "and host.docker.internal does not resolve there"
+    else
+        bad "host.docker.internal answered with host-ports off: [$LAST_OUTPUT]"
+    fi
+else
+    bad "could not start the control container"
+fi
+docker rm -f itest-hp-off >/dev/null 2>&1
+
+# host-ports is read when the session starts.
+stop_pid "$CLIENT_PID"
+CLIENT_PID=""
+REMOTE_DOCKER_HOST_PORTS=$HP "$WORK/remote-docker" remote start --foreground >"$WORK/hp-up.log" 2>&1 &
+CLIENT_PID=$!
+if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+    bad "the client with host-ports never came up"
+    sed 's/^/        /' "$WORK/hp-up.log"
+fi
+
+GET="wget -qO- -T 5 http://host.docker.internal:$HP/marker"
+
+# The default bridge, where the forward is bound.
+expect_output "a container on the default bridge reaches the listed port" "from the client machine" \
+    -- --rm alpine:3 sh -c "$GET"
+
+# A user-defined network reaches the docker0 address through the workspace's
+# routing: a premise of the design, proven here and not assumed.
+if docker network create itest-hp-net >/dev/null 2>&1; then
+    expect_output "a container on a user-defined network reaches it too" "from the client machine" \
+        -- --rm --network itest-hp-net alpine:3 sh -c "$GET"
+else
+    bad "could not create the user-defined network"
+fi
+
+# Only the listed port: the other server is up on this machine and not forwarded.
+if out=$(dockert run --rm alpine:3 wget -qO- -T 5 "http://host.docker.internal:$UNLISTED/marker" 2>&1); then
+    bad "SECURITY: a container reached $UNLISTED, which is not in host-ports: [$out]"
+else
+    ok "a port that is not listed is not reachable: $(echo "$out" | head -1)"
+fi
+
+# A compose file that names the address itself, as Docker Desktop's often do.
+# It keeps what it asked for, and the one entry resolves to the same gateway.
+cat >"$PROJECT/hp-compose.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    command: sleep 600
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+COMPOSE
+if timeout 180 docker compose -p ithp -f "$PROJECT/hp-compose.yaml" up -d >"$WORK/hp-compose.log" 2>&1; then
+    cid=$(docker compose -p ithp -f "$PROJECT/hp-compose.yaml" ps -q app 2>/dev/null)
+    if outputs '^\["host.docker.internal:host-gateway"\]$' dockert inspect "$cid" --format '{{json .HostConfig.ExtraHosts}}'; then
+        ok "a compose extra_hosts entry is kept and not duplicated: $LAST_OUTPUT"
+    else
+        bad "the compose container has ExtraHosts $LAST_OUTPUT"
+    fi
+    if outputs '^from the client machine$' docker compose -p ithp -f "$PROJECT/hp-compose.yaml" exec -T app sh -c "$GET"; then
+        ok "a compose service with extra_hosts reaches the listed port"
+    else
+        bad "the compose service got [$LAST_OUTPUT]"
+    fi
+    docker compose -p ithp -f "$PROJECT/hp-compose.yaml" down -v >/dev/null 2>&1
+else
+    bad "compose up failed"
+    sed 's/^/        /' "$WORK/hp-compose.log" | tail -10
+fi
+
+# The forward outlives the idle release while a container runs: that container
+# holds no gate lease. It asks every two seconds and logs the answer, so a
+# release in the window shows as a failed line and not as a reconnect hidden
+# behind the docker command that reads the result.
+if dockert run -d --name itest-hp-poll alpine:3 sh -c \
+    "while true; do $GET >/dev/null 2>&1 && echo ok || echo FAIL; sleep 2; done" >/dev/null 2>&1; then
+    sleep 24 # three times the 8s idle release
+    polled=$(dockert logs itest-hp-poll 2>&1)
+    if [ "$(grep -c '^ok$' <<<"$polled")" -ge 8 ] && ! grep -q FAIL <<<"$polled"; then
+        ok "the forward stayed up under a running container past the idle release"
+    else
+        bad "the forward failed while a container ran: $(tr '\n' ' ' <<<"$polled" | tail -c 200)"
+        sed 's/^/        /' "$WORK/hp-up.log" | tail -10
+    fi
+else
+    bad "could not start the polling container"
+fi
+docker rm -f itest-hp-poll >/dev/null 2>&1
+
+if outputs "host port +$HP: containers reach it as host.docker.internal:$HP" "$WORK/remote-docker" remote status; then
+    ok "remote status lists the host port"
+else
+    bad "remote status does not list the host port: [$LAST_OUTPUT]"
+fi
+
+docker network rm itest-hp-net >/dev/null 2>&1
+kill "$HP_PID" "$UNLISTED_PID" 2>/dev/null
+wait "$HP_PID" "$UNLISTED_PID" 2>/dev/null
+
+# Back to the session every later section expects.
+stop_pid "$CLIENT_PID"
+CLIENT_PID=""
+"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
+CLIENT_PID=$!
+if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+    bad "the client never came back up after 10c"
+    sed 's/^/        /' "$WORK/up.log"
+fi
+
+echo
 echo "== 11. named volumes are left alone =="
 docker volume create itest-named >/dev/null 2>&1
 if out=$(dockert run --rm -v itest-named:/data alpine:3 sh -c 'echo ok > /data/f && cat /data/f' 2>&1); then

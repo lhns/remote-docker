@@ -8,6 +8,21 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **Containers can reach ports on your machine.** List them in `host-ports`
+  (`REMOTE_DOCKER_HOST_PORTS=3000,8931`, or `remote set <name> --host-ports
+  3000,8931`) and a container created through this client can dial
+  `host.docker.internal:3000`, which arrives at `localhost:3000` here, such as
+  a local MCP server. Nothing is forwarded unless listed, and every container
+  of the account can then reach those ports. `remote status` lists them. Needs
+  a workspace at this release; an older one is named in a warning. TCP only.
+  Not covered: `docker build` `RUN` steps, UDP, and a workspace daemon started
+  with `--host-gateway-ip`.
+  [ADR 0057](docs/adr/0057-containers-reach-listed-ports-on-the-client.md)
+
 ## 0.16.4 — 2026-10-30
 
 ### New

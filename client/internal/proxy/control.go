@@ -123,6 +123,10 @@ type Status struct {
 	// per share and then one per thing left behind (ADR 0044).
 	WriteBack []string `json:"writeBack,omitempty"`
 
+	// HostForwards is one line per port listed in host-ports and whether
+	// containers reach it (ADR 0057).
+	HostForwards []string `json:"hostForwards,omitempty"`
+
 	// Drops counts reconnects after a dead connection; otherwise invisible.
 	Drops    int    `json:"drops,omitempty"`
 	LastDrop string `json:"lastDrop,omitempty"`

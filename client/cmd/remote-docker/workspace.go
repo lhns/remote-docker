@@ -225,6 +225,7 @@ until "remote restart".`,
 // workspaceFlags are the settings create and set share.
 type workspaceFlags struct {
 	host, user, endpoint, watch, consistency, caFile string
+	hostPorts                                        string
 	port                                             int
 	insecure                                         bool
 
@@ -245,6 +246,8 @@ func (f *workspaceFlags) register(cmd *cobra.Command, hostUsage string) {
 	f.set.StringVar(&f.watch, "watch", "", "replay file changes: off, partial or coarse")
 	f.set.StringVar(&f.consistency, "consistency", "",
 		"how shares are mounted: read=<direct|cached>,write=<through|back|ephemeral>")
+	f.set.StringVar(&f.hostPorts, "host-ports", "",
+		"local TCP ports containers reach as host.docker.internal, such as 3000,8931; empty for none")
 	cmd.Flags().AddFlagSet(f.set)
 }
 
@@ -280,6 +283,9 @@ func (f *workspaceFlags) apply(ws *config.Workspace) {
 	}
 	if given("consistency") {
 		ws.Consistency = f.consistency
+	}
+	if given("host-ports") {
+		ws.HostPorts = f.hostPorts
 	}
 	if given("ca-file") {
 		ws.CAFile = f.caFile
@@ -377,6 +383,9 @@ func resolveChecked(file config.File, name string) (config.Config, error) {
 		return cfg, err
 	}
 	if _, err := workspace.ParseMode(cfg.Consistency); err != nil {
+		return cfg, err
+	}
+	if _, err := config.ParseHostPorts(cfg.HostPorts); err != nil {
 		return cfg, err
 	}
 	_, err = cfg.Transport()
@@ -737,6 +746,9 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			row(out, "docker context", cfg.ContextName())
 			row(out, "watch", cfg.Watch)
 			row(out, "consistency", cfg.Consistency)
+			if cfg.HostPorts != "" {
+				row(out, "host ports", cfg.HostPorts)
+			}
 			for _, ex := range cfg.WatchExclude {
 				row(out, "watch exclude", ex)
 			}

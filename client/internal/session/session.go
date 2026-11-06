@@ -122,6 +122,12 @@ type Session struct {
 	shares *shareStore
 	cache  *dircache.Cache // ADR 0044
 
+	// hostNoGateway makes the "no host gateway" warning once per process, not
+	// per reconnect; hostConnects counts connections that tried host forwards,
+	// so a refusal on a later one can say the previous may still be held.
+	hostNoGateway sync.Once
+	hostConnects  atomic.Int32
+
 	// rtt is the tunnel's last measured round trip in nanoseconds, for prefetch.
 	rtt atomic.Int64
 
@@ -168,6 +174,9 @@ type liveConn struct {
 	guard     *rewrite.Guard
 	nfsTunnel net.Listener
 	ports     *ports.Manager
+
+	// hostForwards is each listed host port and what became of it (ADR 0057).
+	hostForwards []hostForward
 
 	// clientID names this machine, or this run of an ephemeral account. Here
 	// rather than on Session, which the idle sweep reads while a reconnect

@@ -39,6 +39,7 @@ func (c Config) SessionSettings() map[string]string {
 		"cache-files":       fmt.Sprint(c.CacheFiles),
 		"cache-bytes":       fmt.Sprint(c.CacheBytes),
 		"prefetch":          canonicalPrefetch(c.Prefetch),
+		"host-ports":        canonicalHostPorts(c.HostPorts),
 		"share-owner":       c.shareOwnerSetting(),
 		"share-fmask":       maskSetting(c.ShareFMask, c.ShareFileMask, workspace.ParseFileMask),
 		"share-dmask":       maskSetting(c.ShareDMask, c.ShareDirMask, workspace.ParseDirMask),
@@ -103,6 +104,16 @@ func canonicalPrefetch(s string) string {
 	return p.String()
 }
 
+// canonicalHostPorts is the list sorted and without repeats, so 8931,3000 and
+// 3000,8931 compare equal. A value that does not parse is kept as written.
+func canonicalHostPorts(s string) string {
+	ports, err := ParseHostPorts(s)
+	if err != nil {
+		return s
+	}
+	return HostPortList(ports)
+}
+
 // notSessionSettings is every Config field SessionSettings leaves out, and
 // why. A new field must be in one place or the other (settings_test.go).
 var notSessionSettings = map[string]string{
@@ -138,6 +149,7 @@ var settingEnv = map[string]string{
 	"cache-files":    EnvCacheFiles,
 	"cache-bytes":    EnvCacheBytes,
 	"prefetch":       EnvPrefetch,
+	"host-ports":     EnvHostPorts,
 	"share-owner":    EnvShareOwner,
 	"share-fmask":    EnvShareFMask,
 	"share-dmask":    EnvShareDMask,

@@ -67,6 +67,11 @@ type Config struct {
 	// Prefetch is "off", "eager" or "tree" (ADR 0045).
 	Prefetch string
 
+	// HostPorts is a comma-separated list of local TCP ports containers may
+	// reach as host.docker.internal (ADR 0057). Raw, like Watch: ParseHostPorts
+	// reports a bad value where the session starts.
+	HostPorts string
+
 	// WatchExclude replaces the default list of directory names never watched.
 	WatchExclude []string
 
@@ -156,6 +161,7 @@ type Workspace struct {
 	CacheFiles    int      `json:"cacheFiles,omitempty"`
 	CacheBytes    int64    `json:"cacheBytes,omitempty"`
 	Prefetch      string   `json:"prefetch,omitempty"`
+	HostPorts     string   `json:"hostPorts,omitempty"`
 	WatchExclude  []string `json:"watchExclude,omitempty"`
 	IdleTimeout   string   `json:"idleTimeout,omitempty"`
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
@@ -276,6 +282,7 @@ const (
 	EnvCacheFiles    = "REMOTE_DOCKER_CACHE_FILES"
 	EnvCacheBytes    = "REMOTE_DOCKER_CACHE_BYTES"
 	EnvPrefetch      = "REMOTE_DOCKER_PREFETCH"
+	EnvHostPorts     = "REMOTE_DOCKER_HOST_PORTS"
 	EnvWatchExclude  = "REMOTE_DOCKER_WATCH_EXCLUDE"
 	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
 	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
@@ -442,6 +449,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Prefetch != "" {
 		cfg.Prefetch = ws.Prefetch
 	}
+	if ws.HostPorts != "" {
+		cfg.HostPorts = ws.HostPorts
+	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -538,6 +548,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvPrefetch); v != "" {
 		cfg.Prefetch = v
+	}
+	if v := os.Getenv(EnvHostPorts); v != "" {
+		cfg.HostPorts = v
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)

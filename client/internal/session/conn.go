@@ -121,6 +121,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// started there only prints errors about work nobody asked for.
 	if s.opts.Role.hosting() {
 		s.startPorts(liveCtx, live)
+		s.startHostPorts(liveCtx, live)
 		s.startNotify(live)
 
 		// Idle until a share has a complete cache (ADR 0044).

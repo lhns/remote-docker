@@ -101,6 +101,11 @@ func (live *liveConn) close() {
 	if live.nfsTunnel != nil {
 		_ = live.nfsTunnel.Close()
 	}
+	for _, f := range live.hostForwards {
+		if f.listener != nil {
+			_ = f.listener.Close()
+		}
+	}
 	_ = live.ssh.Close()
 	live.wg.Wait()
 
@@ -240,6 +245,7 @@ func (s *Session) Status() any {
 	}
 	if connected {
 		st.Storage = live.info.Storage
+		st.HostForwards = live.hostForwardStatus()
 	}
 	st.Caches = s.cacheStatus()
 	st.WriteBack = s.writeBackStatus()

@@ -80,6 +80,12 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
   - Any other method, path (`/containers/{id}/json/...`, stats, events),
     status or content type, a body that does not parse, and one over the bound
     are relayed byte for byte.
+- **Amendment, 2026-11-06: `/containers/create` also gets `ExtraHosts`.** With
+  `host-ports` set (ADR 0057), `host.docker.internal:<gateway>` is added to
+  `HostConfig.ExtraHosts` unless the name is already there or the network is
+  `host` or `container:<id>`. It is the same generic-JSON edit as the
+  rewrites above: one field of `HostConfig` decoded as a list of strings, every
+  other field untouched.
 - The proxy sees every request, which is what makes ADR 0008's automatic port
   forwarding possible at no extra architectural cost.
 - Requests we do not understand are forwarded verbatim rather than rejected.

@@ -44,6 +44,14 @@ func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64
 			"host", host, "port", port, "account", account.Name())
 		return 0, 0, false
 	}
+	// Before runPort: a host forward is no run's port, and an ephemeral run
+	// would be told "not this run's port" for it.
+	if handled, ok := s.allowHostForward(ctx, account, host, port); handled {
+		if !ok {
+			return 0, 0, false
+		}
+		return 0, port, true
+	}
 	if account.ephemeral {
 		if port, ok = s.runPort(account, port); !ok {
 			return 0, 0, false

@@ -319,7 +319,8 @@ premise of the project, and it applies to building it too. So:
 - **Only `/containers/create`, the error message of a start or restart that
   failed to mount a share volume, and the port fields of `GET /containers/json`
   and `GET /containers/{id}/json` are ever decoded** (ADR 0005, amended
-  2026-10-14 and 2026-10-20). Everything else is copied through. Bodies are
+  2026-10-14, 2026-10-20 and 2026-11-06, the last for `HostConfig.ExtraHosts`
+  under `host-ports`). Everything else is copied through. Bodies are
   handled as generic JSON, never typed structs, so unknown fields survive. The
   error is read bounded at 64 KiB and only when it matches; the two port
   responses at 16 MiB, chunked included (moby sends JSON over about 2 KiB
@@ -338,6 +339,23 @@ premise of the project, and it applies to building it too. So:
   deletion, because the daemon rejects it on a volume mount. Unit tests pin
   both, and `test/integration.sh` section 9b pins the end of it: the container
   is refused AND the directory on this machine is unchanged.
+- **A host forward dials the port it was registered for and nothing the
+  workspace names, and its bind is allowed only on the account's own bridge
+  gateway** (ADR 0057). `host-ports` lists local ports containers reach as
+  `host.docker.internal`. The client asks for a reverse forward on the daemon's
+  default bridge gateway per port, and `serveHostPort` carries each connection
+  to `localhost:<port>`; the channel's destination is never read, or the
+  workspace could reach any local port. `reversePolicy.Allow` takes the branch
+  BEFORE `runPort` (an ephemeral run would be refused as "not this run's
+  port"), skips the reservation map and returns token 0, because alice and bob
+  both bind `172.17.0.1:3000` in different namespaces and the kernel's
+  `EADDRINUSE` is the arbiter. Never widen the loopback rule for it, and never
+  bind `0.0.0.0`: in shared mode that is the workspace's external interface.
+  The gateway rides workspace-info (`Lookup`, never `Ensure`), so a daemon not
+  yet booted answers empty and the client asks again after its NFS tunnel has
+  started it; only a second empty answer means "too old". The create rewrite
+  names the gateway ADDRESS, not `host-gateway`, which the daemon resolves from
+  `--host-gateway-ip` when that is set.
 - **A published port is the CLIENT's number, not the workspace's** (ADR 0008).
   The rewriter empties `HostPort` so the daemon picks, and records what was
   asked for in `PortsLabel`; the ports manager opens that number locally in
@@ -1641,6 +1659,12 @@ its pure planning function was.
   backends start the agent with its defaults, so pruning is on there, and no
   suite runs it: `machine.yml` lasts minutes and its disk is a machine of its
   own far from the threshold, so it sets nothing.
+- **Host forwards beyond the integration suites' one path.** Not tested:
+  `docker build` `RUN` steps (BuildKit creates those containers, so no extra
+  host is added and only the user's own `--add-host` works), UDP, and a workspace daemon started with `--host-gateway-ip`
+  (a compose file's own `host-gateway` would then resolve elsewhere; the
+  address we inject is unaffected, and that is read from the dockerd
+  reference on 2026-11-06, not a run; ADR 0057 has the re-check command).
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
   through the routing mesh -- needs a real cluster. CI cannot cover it. The
