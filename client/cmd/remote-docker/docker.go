@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	rdebug "runtime/debug"
 
 	buildxcommands "github.com/docker/buildx/commands"
+	buildxversion "github.com/docker/buildx/version"
 
 	// Drivers register themselves in init, normally from buildx's main.
 	// Without them `docker build` answers "no drivers available".
@@ -16,7 +18,9 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
+	"github.com/docker/cli/cli/debug"
 	cliflags "github.com/docker/cli/cli/flags"
+	"github.com/moby/buildkit/util/appcontext"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -93,7 +97,7 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	}
 
 	commands.AddCommands(cmd, dockerCli)
-	installModernBuilder(cmd, dockerCli)
+	installBuildx(cmd, dockerCli)
 	installCompose(cmd, dockerCli, sessionClient(endpoint))
 
 	// Raised when a command runs, never by leaving commands out of the tree:
@@ -188,12 +192,24 @@ func invokingDocker() bool {
 	return true
 }
 
-// installModernBuilder replaces `build` with buildx's, as docker does when
-// the plugin is present. docker/cli alone silently builds with the classic
-// builder, even with DOCKER_BUILDKIT=1 (ADR 0009).
-func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
-	root := buildxcommands.NewRootCmd("buildx", true, dockerCli)
+// installBuildx wires all of buildx: `docker buildx`, and buildx's build as
+// `docker build`, as docker does when the plugin is present. docker/cli alone
+// silently builds with the classic builder, even with DOCKER_BUILDKIT=1
+// (ADR 0009).
+func installBuildx(cmd *cobra.Command, dockerCli *command.DockerCli) {
+	setBuildxVersion()
 
+	// Plugin mode, though this is not a plugin: otherwise buildx initialises
+	// dockerCli again with default options, dropping --context and the
+	// session's endpoint that newDockerCommand has set up.
+	group := buildxcommands.NewRootCmd("buildx", true, dockerCli)
+	group.PersistentPreRunE = buildxPreRun
+	cmd.AddCommand(group)
+
+	// A command has one parent, so `docker build` comes from a second root.
+	// Its logrus hooks are registered again, which filters the same entries
+	// twice and is harmless.
+	root := buildxcommands.NewRootCmd("buildx", true, dockerCli)
 	for _, sub := range root.Commands() {
 		if sub.Name() != "build" {
 			continue
@@ -208,9 +224,45 @@ func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 		cmd.AddCommand(sub)
 		break
 	}
+}
 
-	// The buildx root is not registered: without the plugin harness,
-	// `docker buildx version` panics on a nil dereference.
+// buildxPreRun is buildx's own PersistentPreRunE minus its call into docker's
+// plugin harness, a nil function outside the harness that panics. Then the
+// docker root's, so a session or credential error surfaces as for every other
+// command; looked up now because newDockerCommand assigns it after installing,
+// and cobra runs only the closest.
+func buildxPreRun(cmd *cobra.Command, args []string) error {
+	if f := cmd.Flags().Lookup("debug"); f != nil && f.Value.String() == "true" {
+		debug.Enable()
+	}
+	cmd.SetContext(appcontext.Context())
+	if pre := cmd.Root().PersistentPreRunE; pre != nil {
+		return pre(cmd, args)
+	}
+	return nil
+}
+
+// setBuildxVersion takes buildx's version from the module this binary was
+// built with. buildx has it set at link time, which nothing here does, and
+// `docker buildx version` would print v0.0.0+unknown; setup-buildx-action
+// reads that to decide which features to use.
+func setBuildxVersion() {
+	if buildxversion.Version != "v0.0.0+unknown" {
+		return
+	}
+	info, ok := rdebug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == buildxversion.Package {
+			if dep.Replace != nil {
+				dep = dep.Replace
+			}
+			buildxversion.Version = dep.Version
+			return
+		}
+	}
 }
 
 // newRootCommand is the Docker CLI with ours under `remote` (ADR 0024).

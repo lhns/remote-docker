@@ -148,7 +148,6 @@ require (
 	github.com/mattn/go-shellwords v1.0.15 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
-	github.com/moby/buildkit v0.34.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.3 // indirect
 	github.com/moby/locker v1.0.1 // indirect
@@ -273,6 +272,7 @@ exclude google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4
 require (
 	github.com/lhns/remote-docker/dircache v0.0.0
 	github.com/lhns/remote-docker/machine v0.0.0
+	github.com/moby/buildkit v0.34.0
 	github.com/spf13/pflag v1.0.10
 	gopkg.in/yaml.v3 v3.0.1
 )

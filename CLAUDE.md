@@ -1349,7 +1349,9 @@ which inotify event), an edit here firing inotify inside a container with
 mismatch, self-reclaim), `start && docker run` and `stop && start && docker
 run` with nothing between the commands, `docker build` through the proxy --
 asserted to be BuildKit and not the classic builder wearing its name, with
-`COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
+`COPY`, `ADD` and `.dockerignore` checked through file CONTENT, `docker buildx`
+(`version`, `ls`, `build --load` on the docker driver and on a docker-container
+builder, `bake`) -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
