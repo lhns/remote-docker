@@ -1689,6 +1689,82 @@ fi
 timeout 60 docker rmi -f itest-build itest-ignore >/dev/null 2>&1
 
 echo
+echo "== 13d. docker buildx =="
+# The command group GitHub's docker actions call (setup-buildx-action,
+# build-push-action, bake-action). Its root panicked on a nil function in
+# docker's plugin harness, so it used to be an unknown command (ADR 0009).
+# The docker-container driver is the part that reaches the daemon through the
+# proxy in a new way: it creates a BuildKit container and talks to it over a
+# hijacked exec stream.
+BX="$WORK/remote-docker"
+BXCTX="$WORK/buildxctx"
+mkdir -p "$BXCTX"
+echo "buildx-content-from-the-client-machine" >"$BXCTX/marker.txt"
+cat >"$BXCTX/Dockerfile" <<'DOCKERFILE'
+FROM alpine:3
+COPY marker.txt /marker.txt
+DOCKERFILE
+cat >"$BXCTX/docker-bake.hcl" <<'BAKE'
+target "default" {
+  context    = "."
+  tags       = ["itest-bake"]
+  output     = ["type=docker"]
+}
+BAKE
+
+if outputs '^github.com/docker/buildx v[0-9]+\.[0-9]+\.[0-9]+' "$BX" buildx version \
+    && ! grep -q 'v0.0.0+unknown' <<<"$LAST_OUTPUT"; then
+    ok "buildx version reports a real version"
+else
+    bad "buildx version: $LAST_OUTPUT"
+fi
+
+if outputs 'NAME/NODE' "$BX" buildx ls; then
+    ok "buildx ls lists the builders"
+else
+    bad "buildx ls: $LAST_OUTPUT"
+fi
+
+if outputs 'Successfully|DONE|exporting' bash -c "cd '$BXCTX' && timeout 300 '$BX' buildx build -t itest-bx --load ."; then
+    ok "buildx build --load with the docker driver"
+else
+    bad "buildx build --load (docker driver): $(echo "$LAST_OUTPUT" | tail -5 | tr '\n' ' ')"
+fi
+if outputs 'buildx-content-from-the-client-machine' timeout 120 "$WORK/remote-docker" run --rm itest-bx cat /marker.txt; then
+    ok "the image it loaded runs and carries the file from this machine"
+else
+    bad "the loaded image: $LAST_OUTPUT"
+fi
+
+if outputs '.' timeout 300 "$BX" buildx create --name itest --driver docker-container --use; then
+    ok "buildx create --driver docker-container"
+else
+    bad "buildx create: $LAST_OUTPUT"
+fi
+if outputs 'Status:[[:space:]]+running' timeout 300 "$BX" buildx inspect --bootstrap itest; then
+    ok "the BuildKit container started over the proxy and answered"
+else
+    bad "buildx inspect --bootstrap: $(echo "$LAST_OUTPUT" | tail -8 | tr '\n' ' ')"
+fi
+if outputs 'exporting' bash -c "cd '$BXCTX' && timeout 300 '$BX' buildx build --builder itest -t itest-bx2 --load ."; then
+    ok "buildx build --load through the docker-container driver"
+else
+    bad "buildx build (docker-container): $(echo "$LAST_OUTPUT" | tail -8 | tr '\n' ' ')"
+fi
+if outputs 'buildx-content-from-the-client-machine' timeout 120 "$WORK/remote-docker" run --rm itest-bx2 cat /marker.txt; then
+    ok "and that image runs with the file from this machine"
+else
+    bad "the loaded image (docker-container): $LAST_OUTPUT"
+fi
+if outputs 'exporting' bash -c "cd '$BXCTX' && timeout 300 '$BX' buildx bake"; then
+    ok "buildx bake builds the target"
+else
+    bad "buildx bake: $(echo "$LAST_OUTPUT" | tail -8 | tr '\n' ' ')"
+fi
+timeout 120 "$BX" buildx rm itest >/dev/null 2>&1
+timeout 60 "$BX" rmi -f itest-bx itest-bx2 itest-bake >/dev/null 2>&1
+
+echo
 echo "== 14. elevate =="
 # Swarm cannot run privileged tasks, so the service relaunches itself with
 # `docker run` (ADR 0013), which is what runs here; no Swarm is needed. The

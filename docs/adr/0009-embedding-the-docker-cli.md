@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-07, last measured 2026-08-19
 - Current answer: **all three are embedded** — `docker/cli`, `buildx` (so
-  `docker build` is BuildKit) and `compose/v5`. 95 MB, no fork, no downgrade.
+  `docker build` is BuildKit, and `docker buildx` is registered) and `compose/v5`. 95 MB, no fork, no downgrade.
 
 ## Context
 
@@ -38,10 +38,9 @@ initialise a second CLI over the one already pointed at our endpoint:
 - **buildx's drivers register via blank imports in buildx's own `main`.**
   Without them the command is present, correctly wired, and answers "no drivers
   available".
-- **buildx's ROOT command is not registered.** Its subcommands expect the harness
-  to have run, and `docker buildx version` panics on a nil dereference without
-  it. `build` is what docker's tree exposes anyway, and upstream `docker build`
-  IS `docker buildx build` — so `build` is REPLACED, not added beside.
+- **buildx's ROOT command is registered as `docker buildx`** (amended
+  2026-11-10; see below). `docker build` is buildx's `build`, REPLACING docker's:
+  upstream `docker build` IS `docker buildx build`.
 - **compose is `pluginMain` minus the harness**: build a `BackendOptions`
   carrying the confirmation prompt, call `commands.RootCommand(cli, opts)`, add
   `HooksCommand`. `plugin.Run` is deliberately not used.
@@ -121,3 +120,28 @@ check:
 - **The trees must be registered so `--help`, completion and plugin discovery
   behave like the real thing.** A client that is fully fledged except that
   `docker build --help` is wrong is not fully fledged.
+
+## Amendment 2026-11-10: `docker buildx` is registered
+
+GitHub's docker actions (setup-buildx-action, build-push-action, bake-action)
+call `docker buildx version`, `create`, `use`, `inspect`, `ls`, `build` and
+`bake`, so a runner whose `docker` is this client failed on an unknown command.
+
+- **The panic was one call.** With `isPlugin=true` the root's `PersistentPreRunE`
+  ends in `plugin.PersistentPreRunE`, a package variable only docker's plugin
+  harness assigns. `NewRootCmd("buildx", true, cli)` is kept in plugin mode
+  (non-plugin mode initialises the CLI again with default options, dropping
+  `--context` and the session's endpoint) and its pre-run is replaced by
+  `buildxPreRun`: `--debug`, the signal context, then the docker root's own
+  deferred-error pre-run, looked up at run time because it is assigned after the
+  install functions and cobra runs only the closest one.
+- **`docker build` comes from a second `NewRootCmd`**, since a command has one
+  parent. Its logrus hooks register twice, which filters the same entries twice.
+- **`docker buildx version` reports the linked version.** buildx's
+  `version.Version` is set at link time and nothing here does, so it reads
+  `v0.0.0+unknown`, which setup-buildx-action parses. It is taken from the
+  `github.com/docker/buildx` entry of `debug.ReadBuildInfo()`, present with
+  `-trimpath` too, while the default is still in place.
+- **The proxy is unchanged.** The docker-container driver creates a BuildKit
+  container through `/containers/create` and speaks to it over a hijacked exec
+  stream; `--load` posts to `/images/load`. `integration.sh` 13d proves both.

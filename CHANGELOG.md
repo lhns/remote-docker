@@ -8,6 +8,14 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`docker buildx` works.** It was an unknown command, so GitHub's
+  setup-buildx-action, build-push-action and bake-action failed on a runner
+  whose `docker` is this client. `buildx version` reports the real version.
+
 ## 0.16.5 — 2026-11-06
 
 ### New

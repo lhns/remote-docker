@@ -127,3 +127,54 @@ func TestAnInitialisationErrorSurfaces(t *testing.T) {
 		t.Errorf("ps --help failed beside a client that would not initialise: %v", err)
 	}
 }
+
+// buildxOut runs a docker command line and returns what it printed. Built
+// inside captureStdout because the CLI binds stdout when constructed.
+func buildxOut(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	t.Setenv(NoSessionEnv, "1") // nothing here may start a session
+	withArgs(t, append([]string{"docker"}, args...))
+	var err error
+	out := captureStdout(t, func() {
+		root := newTestRoot(t)
+		root.SetArgs(args)
+		err = root.Execute()
+	})
+	return out, err
+}
+
+// buildx's root panicked on a nil function in docker's plugin harness, so the
+// group was left out and `docker buildx` was an unknown command (ADR 0009).
+func TestBuildxRunsAndReportsItsVersion(t *testing.T) {
+	out, err := buildxOut(t, "buildx", "version")
+	if err != nil {
+		t.Fatalf("buildx version: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "github.com/docker/buildx") || strings.Contains(out, "v0.0.0+unknown") {
+		t.Errorf("buildx version printed %q, want the linked buildx version", out)
+	}
+
+	out, err = buildxOut(t, "buildx", "--help")
+	if err != nil || !strings.Contains(out, "Extended build capabilities") {
+		t.Errorf("buildx --help: err %v, output %q", err, out)
+	}
+}
+
+func TestBuildxAndBuildAreBothInTheTree(t *testing.T) {
+	withArgs(t, []string{"docker"})
+	root := newTestRoot(t)
+	for _, path := range [][]string{{"buildx"}, {"buildx", "build"}, {"buildx", "bake"}, {"build"}} {
+		if c, _, err := root.Find(path); err != nil || c.Name() != path[len(path)-1] {
+			t.Errorf("%v is not in the tree: %v", path, err)
+		}
+	}
+}
+
+// A session or credential error is raised by a buildx subcommand as by any
+// other, which needs buildx's own pre-run to chain to the root's.
+func TestBuildxRaisesTheDeferredError(t *testing.T) {
+	_, err := buildxOut(t, "--host", "tcp://127.0.0.1:1", "--context", "bob-ws", "buildx", "ls")
+	if err == nil || !strings.Contains(err.Error(), "cannot specify both --host and --context") {
+		t.Errorf("buildx ls: got %v, want the conflict between --host and --context", err)
+	}
+}

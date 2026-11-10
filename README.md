@@ -63,8 +63,8 @@ docker run --rm -v .:/w alpine ls /w
 
 That is the whole installation: the Docker CLI is this program's root command
 ([ADR 0024](docs/adr/0024-the-docker-cli-is-the-root.md)), so the file's name
-decides how you spell it. `docker compose` and `docker build` (BuildKit,
-through buildx) are included. A standalone docker CLI also exists
+decides how you spell it. `docker compose`, `docker build` (BuildKit,
+through buildx) and `docker buildx` are included. A standalone docker CLI also exists
 (`winget install Docker.DockerCLI`, or the static zip from download.docker.com)
 if you prefer one. *(Checked 2026-09-23 with
 `winget show --id Docker.DockerCLI --exact`.)*
