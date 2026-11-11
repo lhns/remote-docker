@@ -22,7 +22,8 @@ STRIDE letters are used where they apply and left out where they do not.
 2. **The user's SSH private key**, `~/.config/remote-docker/id_ed25519`, which
    is the only credential in the system.
 3. **The registry credentials in `~/.docker/config.json`** or the keychain a
-   credential helper fronts. They do not stay here: see flow 3.
+   credential helper fronts. They do not stay here: a pull sends one (flow 3),
+   and a build lets the workspace ask for any of them (flow 14).
 4. **Each account's images, containers and volumes** on the workspace.
 5. **The node's Docker socket**, where Swarm deployments run.
 
@@ -31,10 +32,10 @@ STRIDE letters are used where they apply and left out where they do not.
 | adversary | how they arrive | what they get |
 |---|---|---|
 | a process running as the user | an npm postinstall, an editor extension, anything the user runs | the local endpoint, which is total authority over the workspace. The control is that it is owner-only and never TCP |
-| another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation. With metrics on, the names of the accounts connected and of the ephemeral ones, and their activity (flow 10) |
+| another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation. By filling the disk, the removal of your unused images (flow 13). With metrics on, the names of the accounts connected and of the ephemeral ones, and their activity (flow 10) |
 | an admin | an account the operator names in `WORKSPACE_ADMINS` | tokens that create accounts, removing accounts an operator directory does not enrol, and adding a key to any account, operator-enrolled included, which is logging in as it (flow 1c) |
 | another holder of an ephemeral account's key | a second CI job sharing the key | every run of that account: its daemon, and every run's export (flow 1d) |
-| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, every container's contents |
+| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every stored registry login while a build runs (flow 14), every directory exported while a session is live, writable even where the bind said `:ro` (flow 3), every container's contents |
 | somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates, and a live token's id lets a connection do one thing, redeem it (flow 1b) |
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
 | an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3. With `host-ports`, the listed local ports (flow 12) |
@@ -763,7 +764,8 @@ read it out of the daemon's request. Encrypted in transit by SSH, exposed at
 the far end to whoever runs the workspace. Nothing here mitigates that, and it
 is the reason a workspace should be as trusted as the registries you use from
 it. Docker works this way everywhere; it is only worth stating because here the
-daemon is somebody else's.
+daemon is somebody else's. A build hands over more, and on the workspace's
+choosing rather than the user's: flow 14.
 
 **T — the workspace writes to this machine's files, attributes included (10,
 11).** Content writes have always been real; that is the product. What is new is
@@ -773,10 +775,38 @@ accepted and discarded, so the client was told a chmod had succeeded and nothing
 had changed.
 
 Ownership stays unwritable: `Chown` and `Lchown` are accepted and dropped
-because ownership is synthesised, so no chmod/chown pair hands a file to another
-uid. Mode bits are reported wide (0666/0777, ADR 0046): the boundary is the
-tunnel and the account, and a plain mount was already granted every request by
-ACCESS, so nothing changes at the boundary. *Covered by* `nfsserve/chmod_test.go`.
+(`core-client/nfsserve/attrs.go`) because ownership is synthesised, so no
+chmod/chown pair hands a file to another uid. A mode set through a share lands
+as `mode|0600` with setuid and setgid masked off, so a container can make a
+file group- or world-writable here on a unix client and no more. Mode bits are
+reported wide (0666/0777, ADR 0046): the boundary is the tunnel and the
+account, and a plain mount was already granted every request by ACCESS, so
+nothing changes at the boundary. *Covered by* `nfsserve/chmod_test.go` for the
+mode, and for chown only by `test/fs-conformance.sh`, whose `attrs/chown-*`
+steps are listed deviations: no unit test asserts that chown is dropped.
+
+**T — `:ro` is the workspace's promise, not the export's (10, 11).** A
+read-only bind keeps its `ro` through the rewrite, and the workspace's daemon
+enforces it on the container. The export behind it is read-write
+(`rewrite.go`, `fileMount`), and `ro` is not part of a share's variant, so
+whoever reaches the export (the workspace's operator, a host-networked
+container, every shell on a shared daemon) can write to a directory the user
+bound read-only. That holds against containers, which is what CLAUDE.md
+promises, and not against the workspace itself. *Covered by* `integration.sh`
+section 9b, for the container.
+
+**I — share variants change what is reported, not what is enforced (10, 11).**
+`owner=`, `fmask=` and `dmask=` give one directory an export per combination
+(`workspace.ShareIDFor`), and each reports its own owner and mode bits
+(`nfsserve/attrs.go`). The server enforces no mode: go-nfs grants ACCESS by
+write capability alone and every operation runs as the client process, so a
+mask is honoured by the workspace kernel's NFS client and nobody else. The id is
+not secret (it is in the volume's options), and anything that reaches the port
+can mount any variant of any directory shared in the session; on this machine
+every variant of a path is the same directory with the same access, so choosing
+one gains nothing here. *Covered by* `mask_test.go` (`TestMasksClearReportedBits`,
+`TestMasksArePerShare`), `TestRegisterOwnerIsPerShare` and
+`TestServeReportsSynthesisedOwnership`.
 
 **T — a symlink in a share cannot name a path on this machine (10, 11).** The
 server stores link text and never resolves it: NFSv3 leaves that to the client,
@@ -1039,6 +1069,27 @@ This sits inside ADR 0012's stated assumption rather than outside it, and it is
 one more thing the default mode does not have: with a daemon per account, the
 labels a client reads were written by that account alone.
 
+**T/D — the proxy reads three kinds of response the workspace wrote (1–2).**
+Everything else is copied through; these are decoded (ADR 0005, amended
+2026-10-14, 2026-10-20 and 2026-11-06):
+
+| response | read | bound | on anything unexpected |
+|---|---|---|---|
+| a failed `start` or `restart` naming a share volume | the error message, matched against the volume name, a port and "connection refused" | 64 KiB, and only for a JSON status of 300 or more | relayed byte for byte |
+| `GET /containers/json` and `GET /containers/{id}/json` | the port fields, rewritten to the number the client asked for | 16 MiB, chunked included, and only for a 200 JSON | relayed byte for byte |
+
+Both build text for the CLI and open nothing: the listeners still come only from
+the ports manager's own container list and `ports.Rule`, so a response the
+workspace forges changes what `docker ps` prints and not what this machine
+listens on (`client/internal/proxy/portview.go`, `mountfailure.go`,
+`client/internal/rewrite/portview.go`). *Covered by*
+`TestProxyRewritesPortsOfAListAndAnInspect`, `TestProxyRelaysOtherResponsesUnchanged`
+(a chunked body past the bound), `TestProxyExplainsAMountFailureOnStart` and
+`TestProxyLeavesOtherResponsesAlone`. What is NOT bounded is the manager's own
+list (`proxy/api.go`, `APIClient.ListContainers`) and the number of containers
+it forwards for: each label is capped at 1024 ports, and the operating system
+caps the total at one listener per loopback port.
+
 ---
 
 ## Flow 6: replaying a change as a real syscall
@@ -1276,31 +1327,58 @@ gone.
 
 **T — write-back moves a container's output onto the user's own disk.** The one
 direction here that writes outside the workspace, and the store it reads from is
-the workspace, so `dircache` treats every path it names as untrusted. Three
-rules, in `dircache/decide.go` and `dircache/writeback.go`:
+the workspace, so `dircache` treats every path, time and marker it names as
+untrusted. Since 0.15.0 that includes deletions, replaced directories and links,
+and since 0.16.1 files the cache never held (ADR 0044, amended 2026-10-21 and
+2026-10-26). The rules, in `dircache/decide.go`, `dircache/writeback.go` and
+`client/internal/session`:
 
-- **Nothing is written back from an incomplete cache.** A file the fill never
-  sent looks exactly like one the container created, and the cost of that
-  confusion is content appearing in somebody's source tree that they never
-  wrote. `decide` returns nothing while the fill is not complete. *Covered by*
-  `TestDecideRefusesAnIncompleteCache`.
-- **A file deleted here is not resurrected.** The client records every path a
-  batch sent, and `decide` refuses a recorded path this machine no longer has,
-  since it is in the cache because a batch put it there, not because a
-  container wrote it. The record is read BEFORE the round asks for the changes
-  (`writeBackShare`): read after, a reconcile landing in between took the
-  deleted file out of the record while the changes still listed it, and it came
-  back as the container's. *Covered by*
-  `TestWriteBackRefusesARecordedFileDeletedHere`, which caught that as an
-  intermittent CI failure.
 - **A path must stay under the share root, links included.** A round opens
-  the share once with `os.OpenRoot`, and every write, delete and the stat
-  `decide` relies on goes through that handle, so `..`, an absolute symlink, a
-  symlink pointing out of the share and, on Windows, any junction are refused.
-  A link that stays inside the share still works. *Covered by*
-  `TestWriteUnderRefusesALinkLeavingTheShare`,
+  the share once with `os.OpenRoot`, and every write, delete, mkdir, chmod,
+  link and the stat `decide` relies on goes through that handle, so `..`, an
+  absolute symlink, a symlink pointing out of the share and, on Windows, any
+  junction are refused. A link that stays inside the share still works.
+  *Covered by* `TestWriteUnderRefusesALinkLeavingTheShare`,
   `TestWriteBackShareDoesNotDeleteThroughALink` (each also through a junction
   on Windows) and `TestWriteUnderFollowsALinkInsideTheShare`.
+- **The fill's own copies are not the container's.** A file a batch sent is
+  compared against what was sent, and a copy (same size and time to the second)
+  is not a change. *Covered by* `TestDecideIgnoresWhatTheFillItselfWrote` and
+  `TestACopyOfAnExistingFileIsNotAChange`.
+- **A file deleted here is not resurrected.** The client records every path a
+  batch sent, and `decide` refuses a recorded path this machine no longer has.
+  The record is read BEFORE the round asks for the changes (`writeBackShare`).
+  *Covered by* `TestWriteBackRefusesARecordedFileDeletedHere`.
+- **A file the cache never held goes to whoever wrote it last, by change
+  times.** The completeness gate that used to refuse such files is gone, since
+  a session closing mid-fill then lost the container's work
+  (`TestAnIncompleteCacheStillCarriesBack`). The container's ctime, less the
+  measured skew, must be later than this machine's by more than half the round
+  trip; a time either side cannot give keeps the file here, and mtimes, which
+  tools set, decide nothing. *Covered by*
+  `TestDecideAFileTheCacheNeverHeldByWhoWroteLast`,
+  `TestUnknownTimesNeverWriteOrDelete` and `TestModificationTimesAToolSetDoNotDecide`.
+- **A deletion the workspace implies is confirmed first.** A whiteout or a
+  replaced directory expands into deletions of what the fill sent under it and,
+  when the removal has a time, of what this machine has there; each must be
+  absent from the container's merged view (`OpPresent`, an lstat), and
+  present, an error or an agent that cannot answer means keep. A directory goes
+  only while empty. `.wh.` names are never written here. *Covered by*
+  `TestAFileTheClientWroteIntoAReplacedDirectoryIsNeverDeleted`,
+  `TestNothingIsDeletedUnderADirectoryWhenThePresenceCannotBeAsked`,
+  `TestAReplacedDirectoryDeletesWhatTheFillSentUnderIt` and
+  `TestAnOverlayMarkerFromAnOlderAgentIsNeverWritten`.
+- **Each action re-checks the file first.** `stillAsSeen` compares a fresh stat
+  with what `decide` saw, since a pass runs for minutes. *Covered by*
+  `TestAFileChangedHereWhileThePassRanIsNotOverwritten`.
+
+**T — a lying workspace and the change times (all of the above).** The times
+come from the agent, so a workspace that forges them wins every
+last-writer decision for files the cache never held, and a forged `OpPresent`
+answer lets an implied deletion through. Neither reaches past the share root,
+and neither is new reach: whoever runs the workspace already holds the share's
+read-write export (flow 3). A container cannot forge a ctime; its kernel sets
+it.
 
 A conflict is reported by path whichever way it resolves rather than silently
 taking a side.
@@ -1416,6 +1494,7 @@ sequenceDiagram
     S->>S: name valid, machine recorded for this SID
     S->>H: the same PowerShell the direct path runs
     S-->>C: answer
+    S->>H: create only: download Flatcar, compare its SHA512
 ```
 
 **E — a caller who is not allowed (3).** The pipe grants Authenticated Users
@@ -1477,6 +1556,37 @@ administrator chose.
 a domain group that is a member of `remote-docker-users` is refused, and told
 the command that adds them. A stricter reading is the safe direction.
 
+**D — anyone logged on can start the service (1).** Its SDDL (`CA.SvcSdset` in
+`installer/windows/remote-docker.wxs`) gives Authenticated Users query, start
+and read control, and no stop, pause, configuration or DACL right, so a standard
+user starting a stopped service is how the client reaches it. *Covered by*
+`test/msi.ps1` section 14, whose check refuses only `WD`, `DC`, `SD` and `WO`
+for that group: a grant of stop or pause would pass it.
+
+**T — the machine image the service downloads (9).** For a machine made
+through the service, SYSTEM downloads Flatcar from a pinned https URL, through
+a proxy the member may name, capped at 1 GiB, and compares its SHA512 with the
+pinned one before anything unpacks it; on a mismatch nothing is kept
+(`machine/flatcar.go`). The proxy chooses where the bytes come from and not what
+they are, so the worst it can do is hold the one download slot until the
+30-minute deadline. The unpacked disk is kept under the protected directory
+above and reused while it is not empty, without hashing it again, so its
+integrity after that rests on that directory's DACL. *Covered by*
+`TestEnsureFlatcarDownloadsVerifiesAndReuses`,
+`TestEnsureFlatcarRefusesABadHashAndCachesNothing` and
+`TestEnsureFlatcarRefusesADownloadOverTheCap`, against a stand-in server; the
+real download runs only by hand.
+
+**E — the service's binary is where the install put it (7, 9).** The service runs
+`[INSTALLFOLDER]remote-docker.exe` as SYSTEM, so the folder must not be one a
+user can write. An all-users install puts it under Program Files. A per-user
+install, in `%LocalAppData%`, is refused the Hyper-V feature on
+`MSIINSTALLPERUSER=1` (`RefuseHyperVPerUser`, and the feature's level), which
+`test/msi.ps1` 9h asserts for a fresh silent install by a standard user. Not
+tested: an elevated Modify adding the feature to a product already installed per
+user, where that property is not set, and nothing asserts the directory the
+registered service points at.
+
 ## Flow 12: a container reaches a listed port on the client
 
 Off unless the client lists ports in `host-ports` (ADR 0057). Then a container
@@ -1523,12 +1633,145 @@ listener appears on `0.0.0.0`, on another account's gateway or on the
 workspace's external interface. *Covered by* `TestOtherHostsAreLeftToTheLoopbackRule`,
 `TestTheGatewayIsAskedOfTheAccountsOwnDaemon` and `TestAHostForwardRefusesWhatIsNoPort`.
 
+**S — the gateway is the workspace's word (1).** It arrives in
+`workspace-info`; the client takes it only as an IPv4 literal
+(`netip.ParseAddr`, `hostGateway` in `client/internal/session/hostports.go`) and
+writes the canonical form into both the forward request and `ExtraHosts`, so a
+hostname or anything with more in it turns the feature off rather than
+reaching either. The client does not refuse `0.0.0.0` or a loopback address
+itself; the agent does (`allowHostForward`), and both only decide where on the
+workspace a listener goes, which the workspace controls anyway. *Covered by*
+`TestOnlyAnIPv4AddressIsAHostGateway`.
+
+**E — who lists the ports (1).** The local user only: the environment, the
+0600 config file, `remote create|set --host-ports`, and `remote host-ports
+add|rm|set`, which writes the file and posts to the control path on the Docker
+endpoint itself, so reaching it is reaching the endpoint (flow 3). Every path
+goes through `config.ParseHostPorts`: whole numbers 1 to 65535, and a bad list
+is refused rather than shortened. There is no cap on how many. *Covered by*
+`TestHostPortsAreAppliedByAPost` and `TestHostPortsRefuseAGetAndABadPort`.
+
 **D — a port can be held by a stranger (1).** There is no reservation, so the
 kernel decides who binds first: an account's own process in a shared daemon's
 namespace can take a gateway port before the client does, and the client is
 refused with a warning. It can serve that port's connections itself, which is
 the same trust as any process on a shared daemon, and no more than flow 5 already
 accepts.
+
+## Flow 13: pruning removes images nobody uses
+
+On by default (ADR 0056): the agent, as root, removes images and build cache
+from the daemons it serves, on a timer and when the disk is full. The one place
+here where the agent deletes an account's asset (4) without being asked.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as timer, or disk above WORKSPACE_PRUNE_ABOVE
+    participant A as agent (root)
+    participant P as parent daemon
+    participant D as each account's daemon (Lookup, never Ensure)
+
+    T->>A: prune
+    A->>P: list images (images only, never containers)
+    A->>D: list images, containers, build cache
+    D-->>A: its own answers, untrusted
+    A->>A: age from the record under <state>/prune/
+    A->>D: image rm <ref> without -f, builder prune
+    A->>P: image rm <ref>, never the dind image
+```
+
+**T — a daemon's answers decide only removals on that daemon (4, 6, 7).** An
+account is root in its own daemon and its listing is untrusted, so each
+listing is paired with the daemon it came from and every removal goes back to
+the same one (`agent/cmd/remote-dockerd/prune.go`). The record is written to
+`<state>/prune/<name>.json` where the name is `_parent`, `_shared` or a
+validated account name; image ids are only keys inside it. *Covered by*
+`TestAgePerAccount`, `TestParentNeverLosesContainers` and `test/prune.sh`.
+
+**T — nothing in use, and nothing that is data (6, 7).** No volume operation
+exists in the pruner, so `rd-*-cache` volumes behind a union, which the daemon
+always calls unused, are out of reach. An image goes by each reference, without
+`-f`, so Docker itself refuses one a stopped container still uses. A stopped
+container goes only with `WORKSPACE_PRUNE_CONTAINERS`, never on the parent and
+never one named `rd-*`, and without `-v`. A daemon that is not running is never
+started for this. *Covered by* `TestAgeKeepsWhatDockerRefuses`,
+`TestAgeContainers` and `test/prune.sh` in both daemon modes.
+
+**D — one account's disk use removes another's images (1, 6).** The threshold
+is the parent's `DockerRootDir`, which holds every account's `-lib` volume. Above
+it, the agent prunes build cache on each account's daemon and then removes
+unused images from every daemon, oldest use first, until usage is below the
+threshold. So an account that fills the disk costs another account its unused
+images and build cache, and that account pulls or builds again; nothing running
+or in use is touched, and no image used within the last hour. *Covered by* `TestPressure` and
+`TestPressureFloorHolds`, on a shared daemon; no test covers the order across
+accounts.
+
+## Flow 14: a build session
+
+`docker build` is buildx's build command, and since 0.16.6 `docker buildx` and
+`bake` are there too (ADR 0009). BuildKit, in the workspace's daemon or in a
+`docker-container` builder the workspace runs, calls back to the client over a
+hijacked `/session` stream, which the proxy passes through undecoded. What the
+client then serves is upstream behaviour, read in buildx v0.38.1 and BuildKit
+v0.34.0 on 2026-11-11; re-check against the versions in `client/go.mod`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as docker build (this machine)
+    participant BK as BuildKit (workspace)
+
+    CLI->>BK: POST /session (hijacked), then the build
+    BK->>CLI: filesync: send me "context" with these filters
+    CLI-->>BK: files of the registered directories
+    BK->>CLI: auth: credentials for host H
+    CLI-->>BK: the stored login for H, whatever H is
+    BK->>CLI: secrets / ssh, by id
+    CLI-->>BK: only ids the build was given
+    CLI->>BK: buildx create --driver docker-container
+```
+
+**I — every stored registry login, for the length of a build (4, 5).** buildx
+attaches its auth provider to every build and every bake
+(buildx's `commands/build.go`, `runBuild`; BuildKit's `session/auth/authprovider`). It answers
+for whichever host the daemon names, from `~/.docker/config.json` or the
+credential helper, with the raw password or identity token, and can be told to
+send it to a token realm the daemon chooses. A pull hands over the login for
+the image the user named (flow 3); a build hands over any login the user has,
+on the workspace's choosing. Stock Docker against a remote daemon does the same.
+Creating a `docker-container` builder also pulls its image with the Docker Hub
+login. Nothing here mitigates it.
+
+**I — the directories a build registers, whole (2, 3).** The daemon can ask
+only for directories the client registered: the context, the Dockerfile's
+directory, each local `--build-context` and a temporary one for stdin
+(buildx's `build/opt.go`, `loadInputs`). Inside those it chooses the filter, so
+`.dockerignore` keeps nothing from the workspace, and `-f` naming a Dockerfile
+elsewhere registers that file's whole directory. The walk does not follow
+links; a file swapped for a link between the walk and the open is followed
+(fsutil's `NewFS`, a plain `os.Open`), which a container writing into a context
+that is also a share could race.
+
+**I — what the build is given (6, 7).** `--secret` serves only the ids it names,
+and `--ssh` forwards an agent that can sign but not add or remove keys, for the
+length of the build. A context that is an SSH git URL forwards the default agent
+without `--ssh`. `--buildkitd-config` copies the CA and key pair files it names
+into the builder container and into the local builder record under
+`~/.docker/buildx`. A `type=gha` cache takes `ACTIONS_RUNTIME_TOKEN`, and a
+`type=s3` one the AWS credentials, from the environment and sends them as cache
+attributes; `--build-arg NAME` with no value sends the environment's value.
+
+**E — a `docker-container` builder is privileged (8).** buildx creates it with
+`Privileged: true` and no way to turn it off. It runs in the account's own
+daemon, which is already privileged (ADR 0019), so it changes nothing about
+the boundary between accounts. The rewriter leaves its state volume alone and,
+with `host-ports` on, gives it the `host.docker.internal` alias like any other
+container.
+
+*Covered by* `integration.sh` 13d and `docker_test.go` for the commands working;
+nothing tests what a build session hands over, since it is upstream's.
 
 ---
 
@@ -1546,7 +1789,8 @@ does not say is that the code is correct, only that nobody replaced the artifact
 after it was built.
 
 **The client archives are not signed.** A GitHub release carries
-`checksums.txt` and the archives, and the checksums are only as good as the
+`checksums.txt`, the archives and an SBOM beside each, none of them signed
+(`.goreleaser.yaml` has no `signs:`), and the checksums are only as good as the
 release they sit in: whoever could replace an archive could replace the file
 listing its hash. Verify the checksum against a second source, or build from
 source, if that matters to you.
@@ -1557,27 +1801,34 @@ source, if that matters to you.
 | | |
 |---|---|
 | signature | none. No code-signing certificate exists for this project and SmartScreen will warn. It is also **not** in `checksums.txt`, which goreleaser writes before the installer is built |
-| scope | `perMachine`: Program Files, elevated, system PATH |
+| scope | either, chosen at install (ADR 0048, 2026-10-28): all users is Program Files, elevated and the system PATH; per user is `%LocalAppData%\Programs
+emote-docker`, unelevated and the user PATH, and never the Hyper-V feature (flow 11) |
 | the `docker.exe` name | a WiX Feature, selected by default since 2026-10-29 (left out of a default all-users install that would shadow one, see below); `<CopyFile>` makes the second name at install and removes it at uninstall |
 | the refusal | a type 19 custom action for an explicit `ADDLOCAL` naming the feature when an all-users install would go in front of a `docker.exe` on the user PATH (`DOCKERUSERFILE`), overridable with `ALLOWDOCKERSHADOW=1`; the interactive install asks instead |
 | what it searches | six folders (`System64Folder`, `SystemFolder`, Docker Desktop's two, winget's two link folders), counted only when the folder is on the PATH read from the registry, because Windows Installer's `AppSearch` cannot enumerate PATH |
-| custom actions | only with the Hyper-V workspace feature: this program's own hidden commands, as SYSTEM (`sc`, service setup and teardown) and as the installing user (create, `rm`), never a script (ADR 0048; the service is flow 11) |
+| custom actions | property sets and refusals (type 51 and 19) in every install, running nothing. With the Hyper-V workspace feature, `sc`, `net` and this program's own hidden commands, by absolute path, as SYSTEM (service create, sdset, setup, teardown, and their rollbacks) and as the installing user (`refuse-existing`, create, `rm`), never a script (ADR 0048; the service is flow 11). Closing a running session on upgrade is Restart Manager, not an action |
 
 So a `docker.exe` in any other folder is not noticed. The install directory is
 appended (`Environment Part="last"`), never prepended, so ours loses to every
 system PATH entry and to a per-user install's whole PATH. Only an all-users
 install comes before the user PATH, which is the case the installer asks about. *Covered by* `test/msi.ps1`, which installs,
-runs the binary out of a fresh shell's PATH and uninstalls, on a Windows runner.
-An MSI built by an actual tag release has never run: `msi.yml` triggers on
-changes under `installer/windows/`, and the release job that uploads it is
-behind `github.ref_type == 'tag'`.
+runs the binary out of a fresh shell's PATH and uninstalls, on a Windows runner;
+its section 9d downloads the latest RELEASED amd64 MSI, installs it and upgrades
+from it, so a tag-built MSI has run there. The arm64 MSI has never been
+installed. `msi.yml` runs on changes under `installer/windows/`, so a tag
+publishes without waiting for it.
 
 **The NFS server library is a fork this project controls** (ADR 0047). Both
 `core-client/go.mod` and `client/go.mod` `replace github.com/willscott/go-nfs`
-with `github.com/lhns/go-nfs`, pinned by pseudo-version. It carries five
-conformance fixes and a handle-cache fix and nothing else, and is dropped when
-upstream merges them. It is in the client's trusted computing base: it parses
-what the workspace sends.
+with `github.com/lhns/go-nfs`, pinned by pseudo-version. It carries the fixes
+ADR 0047 lists (conformance, the handle cost, concurrent dispatch and three
+resource leaks) and is dropped when upstream merges them. It is in the client's
+trusted computing base: it parses what the workspace sends. Concurrent dispatch
+reads up to 8 request bodies of up to 2 MiB each per connection into memory,
+which bounds what one connection can make the client hold.
+
+**The Hyper-V machine image is pinned by hash** (`machine/flatcar.go`): flow 11
+has the download.
 
 **Chart `0.2.0` is unsigned**, because the signing step could not authenticate
 to the registry it had just pushed to. Fixed for `0.2.1` and after; the tag
@@ -1671,9 +1922,10 @@ Stated here rather than buried, because each is a deliberate trade.
   logged; what a container did with a mounted directory is not.
 - **The Windows MSI is unsigned and outside `checksums.txt`.** Nothing in the
   download path authenticates it; the remedy is the zip, which is the same
-  binary and is in `checksums.txt`. Its `docker.exe` feature is off by default
-  and refused when a `docker.exe` is found, but the search reads four
-  directories rather than PATH.
+  binary and is in `checksums.txt`. Its `docker.exe` feature is on by default
+  and left out of an all-users install that would go in front of a
+  `docker.exe` on the user PATH, but the search reads six folders, counted when
+  they are on PATH, rather than every folder on PATH.
 - **Windows and macOS clients are less exercised.** The endpoint code and the
   file-watching backends are where they diverge. Windows takes a session end to
   end only in the machine workflow; macOS has never run a test of any kind.
