@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core-agent/netns"
-	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core-agent/union"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
@@ -112,9 +111,10 @@ type Manager struct {
 	probe   func(context.Context, union.Spec) error
 	onStart func(union.Spec)
 
-	// lchown is os.Lchown, replaced by a test: the paths a test prepares name
-	// no real directory.
-	lchown func(path string, uid, gid int) error
+	// chown gives a union's upper its owner. Nil in production, where it is
+	// chownIn; a test replaces it because the paths a test prepares name no
+	// real directory.
+	chown func(spec union.Spec, uid, gid int) error
 
 	// command builds the child. Nil in production, where it is union.Reexec of
 	// Self; tests substitute a process that exits or stays up.
@@ -221,29 +221,91 @@ func (m *Manager) share(account, client, export string) (*live, bool) {
 	return l, ok
 }
 
-// relocate maps one of this union's paths, which is a path in the daemon's own
-// filesystem, into the agent's view of it.
-func (l *live) relocate(p string) (string, error) {
-	return replay.Relocate(p, func() (string, error) { return l.spec.Root(), nil })
+// openIn opens a directory of the daemon's own filesystem, named by a path the
+// daemon reported, as a Root confined to that filesystem.
+//
+// The account is root inside its daemon and chooses every directory in it, the
+// cache volume's included, so a path joined onto /proc/<pid>/root is not
+// contained: an absolute link in the middle of it resolves against the AGENT's
+// root. The daemon's root is opened once, which is the one place the /proc link
+// is followed on purpose, and everything below it is resolved by the kernel
+// relative to that descriptor with links that leave it refused. The lexical
+// check in replay.Relocate cannot see a link and is not enough alone.
+//
+// With the shared daemon (the agent's own root, ADR 0012) the data root is the
+// operator's and may itself be reached through a link, so the path is followed
+// as it always was down to the cache volume's directory, and only what is
+// under that, which the account writes, is contained.
+func openIn(spec union.Spec, p string) (*os.Root, error) {
+	return openAt(spec.Root(), spec.CacheDir, p)
+}
+
+// openAt is openIn for a daemon root and cache directory given.
+func openAt(daemonRoot, cacheDir, p string) (*os.Root, error) {
+	p = path.Clean("/" + p)
+
+	if daemonRoot == "" || daemonRoot == "/" {
+		base, tail := p, "."
+		if cd := path.Clean("/" + cacheDir); cacheDir != "" && (p == cd || strings.HasPrefix(p, cd+"/")) {
+			base, tail = cd, strings.TrimPrefix(strings.TrimPrefix(p, cd), "/")
+			if tail == "" {
+				tail = "."
+			}
+		}
+		r, err := os.OpenRoot(base)
+		if err != nil || tail == "." {
+			return r, err
+		}
+		defer func() { _ = r.Close() }()
+		return r.OpenRoot(tail)
+	}
+
+	daemon, err := os.OpenRoot(daemonRoot)
+	if err != nil {
+		return nil, fmt.Errorf("opening the daemon's filesystem: %w", err)
+	}
+	defer func() { _ = daemon.Close() }()
+
+	rel := strings.TrimPrefix(p, "/")
+	if rel == "" {
+		rel = "."
+	}
+	return daemon.OpenRoot(rel)
 }
 
 // chownUpper gives the union's upper directory, which is the merged root, to
-// the owner a prepare names. Through the daemon's filesystem as the agent sees
-// it, relocated and never following a link: the daemon's answers are untrusted
-// (replay.Relocate).
-func (m *Manager) chownUpper(l *live, want union.Spec) error {
-	upper, err := l.relocate(want.Upper())
-	if err != nil {
-		return fmt.Errorf("unions: finding the cache layer of %s: %w", want.Export, err)
+// the owner a prepare names. Through a descriptor opened inside the daemon's
+// filesystem: the daemon's answers are untrusted (openIn).
+func (m *Manager) chownUpper(want union.Spec) error {
+	chown := m.chown
+	if chown == nil {
+		chown = chownIn
 	}
-	chown := os.Lchown
-	if m.lchown != nil {
-		chown = m.lchown
-	}
-	if err := chown(upper, int(want.UID), int(want.GID)); err != nil {
+	if err := chown(want, int(want.UID), int(want.GID)); err != nil {
 		return fmt.Errorf("unions: giving the root of %s to %d:%d: %w", want.Export, want.UID, want.GID, err)
 	}
 	return nil
+}
+
+// chownIn chowns a union's upper directory itself, by descriptor so that no
+// link is followed at the end either.
+func chownIn(spec union.Spec, uid, gid int) error {
+	return chownAt(spec.Root(), spec.CacheDir, spec.Upper(), uid, gid)
+}
+
+// chownAt is chownIn for a daemon root and cache directory given.
+func chownAt(daemonRoot, cacheDir, upperPath string, uid, gid int) error {
+	upper, err := openAt(daemonRoot, cacheDir, upperPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = upper.Close() }()
+	dir, err := upper.OpenFile(".", os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Chown(uid, gid)
 }
 
 // ErrNoShare is what every op answers for a share this workspace is not
@@ -403,7 +465,7 @@ func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec unio
 	// Also for a union ADOPTED rather than mounted by this child: its upper
 	// was made by whichever agent mounted it, with whatever owner that one
 	// was given.
-	if err := m.chownUpper(l, spec); err != nil {
+	if err := m.chownUpper(spec); err != nil {
 		// Discarded, or a union serving the wrong owner stays registered and
 		// every later Prepare for the share is refused over it.
 		m.discard(k, l)

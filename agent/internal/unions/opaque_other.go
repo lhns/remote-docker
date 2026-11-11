@@ -2,5 +2,7 @@
 
 package unions
 
+import "os"
+
 // opaqueDir has no meaning off Linux, where there are no overlays.
-func opaqueDir(string) bool { return false }
+func opaqueDir(*os.Root, string) bool { return false }

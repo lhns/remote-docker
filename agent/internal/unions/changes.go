@@ -1,7 +1,6 @@
 package unions
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
@@ -48,18 +47,20 @@ func (m *Manager) Changes(account, client, export string, carry, times bool) ([]
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = upper.Close() }()
 
 	return changesIn(l, upper, export, carry, times)
 }
 
-// changesIn walks one share's cache layer.
-func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change, error) {
+// changesIn walks one share's cache layer, every entry reached through upper so
+// that a link the account planted in its own filesystem leads nowhere.
+func changesIn(l *live, upper *os.Root, export string, carry, times bool) ([]cache.Change, error) {
 	// Asked before the walk, because WalkDir reports a root it cannot read
 	// through the same callback as any other entry -- so an upper that is not
 	// there at all comes back as no changes and no error, which is
 	// indistinguishable from a container that wrote nothing. The failure that
 	// hides is a share whose write-back silently never happens.
-	if _, err := os.Stat(upper); err != nil {
+	if _, err := upper.Stat("."); err != nil {
 		return nil, fmt.Errorf("unions: the cache layer of %s cannot be read: %w", export, err)
 	}
 
@@ -76,15 +77,11 @@ func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change
 	// A replaced directory is told by its attribute and by its marker files,
 	// and is one change however many of them say so.
 	opaque := map[string]bool{}
-	err := filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == upper {
+	err := fs.WalkDir(upper.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil || rel == "." {
 			return nil //nolint:nilerr // an unreadable entry is one this pass does not report
 		}
-		rel, err := filepath.Rel(upper, p)
-		if err != nil {
-			return nil
-		}
-		name := "/" + filepath.ToSlash(rel)
+		name := "/" + rel
 
 		info, err := d.Info()
 		if err != nil {
@@ -129,11 +126,11 @@ func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change
 			// A directory in the upper is where a copy-up happened, not a
 			// change in itself, unless it hides what the lower held under it.
 			// The files inside it are reported on their own.
-			if carry && !opaque[name] && opaqueDir(p) {
+			if carry && !opaque[name] && opaqueDir(upper, rel) {
 				opaque[name] = true
 				change := cache.Change{Path: name, Opaque: true}
 				if times {
-					change.Changed = markerCtime(p)
+					change.Changed = markerCtime(upper, rel)
 				}
 				out = append(out, change)
 				return nil
@@ -142,7 +139,7 @@ func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change
 			// nothing else would ever report. Whether this machine has it is
 			// the client's to say from its own disk: asking the lower here
 			// would be an NFS round trip per directory a chown -R copied up.
-			if times && emptyDir(p) {
+			if times && emptyDir(upper, rel) {
 				out = append(out, stamped(cache.Change{Path: name, Dir: true}, info))
 			}
 			return nil
@@ -152,7 +149,7 @@ func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change
 			if !carry {
 				return nil
 			}
-			target, err := os.Readlink(p)
+			target, err := upper.Readlink(rel)
 			if err != nil {
 				return nil
 			}
@@ -190,10 +187,10 @@ func changesIn(l *live, upper, export string, carry, times bool) ([]cache.Change
 // Never the directory's own, which moves with every file the container makes
 // in it afterwards and would make an edit here look older than the replace.
 // 0, not known, when there is no marker to read.
-func markerCtime(dir string) int64 {
+func markerCtime(r *os.Root, dir string) int64 {
 	var earliest int64
 	for _, name := range []string{opaqueMarker, opaqueMarkerDev} {
-		info, err := os.Lstat(filepath.Join(dir, name))
+		info, err := r.Lstat(path.Join(dir, name))
 		if err != nil {
 			continue
 		}
@@ -207,8 +204,8 @@ func markerCtime(dir string) int64 {
 // emptyDir reports whether a directory has no entries at all, overlay marks
 // included: one holding only a whiteout is a copy-up, not a directory the
 // container made empty.
-func emptyDir(p string) bool {
-	f, err := os.Open(p)
+func emptyDir(r *os.Root, dir string) bool {
+	f, err := r.Open(dir)
 	if err != nil {
 		return false
 	}
@@ -246,28 +243,50 @@ func markerChange(name string, info fs.FileInfo) (cache.Change, bool) {
 // path it cannot name or a file it cannot read is left out, named in the
 // returned list and logged, where without it the whole request fails as it
 // always did: one bad file must not starve every file asked for beside it.
-func (m *Manager) Pull(account, client, export string, paths []string, carry bool) ([]byte, []string, error) {
+func (m *Manager) Pull(account, client, export string, paths []string, carry bool) (*Spool, []string, error) {
 	_, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, nil, err
 	}
-	tarball, skipped, err := pull(upper, paths, carry)
+	defer func() { _ = upper.Close() }()
+
+	spool, skipped, err := pull(upper, paths, carry)
 	if len(skipped) > 0 {
 		logx.Or(m.Log).Warn("files a container wrote cannot be read to carry them back; they are left out",
 			"export", export, "files", len(skipped), "first", skipped[0].Name, "err", skipped[0].Err)
 	}
-	return tarball, names(skipped), err
+	return spool, names(skipped), err
+}
+
+// Spool is a pull's tar, written to a file in the agent's temporary directory
+// so that a large file is never held in memory. It is positioned at the start
+// and Close removes it.
+type Spool struct {
+	*os.File
+	// Size is the length of the tar, which the reply announces.
+	Size int64
+}
+
+// Close closes the file and removes it.
+func (s *Spool) Close() error {
+	err := s.File.Close()
+	_ = os.Remove(s.Name())
+	return err
+}
+
+// openRead opens a file for reading without waiting on it: a FIFO a container
+// made in its share would otherwise block the open until somebody writes to it,
+// and the cache channel answers one request at a time. What is not a regular
+// file is then left out by the tar writer, which checks.
+func openRead(r *os.Root) func(string) (*os.File, error) {
+	return func(name string) (*os.File, error) {
+		return r.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	}
 }
 
 // pull is the named paths under upper as a tar. A file that has gone since it
 // was reported is skipped, which is ordinary: the container is still running.
-func pull(upper string, paths []string, carry bool) ([]byte, []cache.Unreadable, error) {
-	r, err := os.OpenRoot(upper)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unions: opening the cache layer: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
+func pull(upper *os.Root, paths []string, carry bool) (*Spool, []cache.Unreadable, error) {
 	var skipped []cache.Unreadable
 	files := make([]cache.TarFile, 0, len(paths))
 	for _, p := range paths {
@@ -282,21 +301,39 @@ func pull(upper string, paths []string, carry bool) ([]byte, []cache.Unreadable,
 		files = append(files, cache.TarFile{Name: name, Path: name})
 	}
 
-	var buf bytes.Buffer
-	if !carry {
-		if _, err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
-			return nil, nil, err
-		}
-		return buf.Bytes(), nil, nil
-	}
-	unreadable, err := cache.WriteTarNaming(r.Open, files, &buf)
+	f, err := os.CreateTemp("", "rd-pull-*.tar")
 	if err != nil {
+		return nil, nil, fmt.Errorf("unions: spooling what the container wrote: %w", err)
+	}
+	spool := &Spool{File: f}
+	fail := func(err error) (*Spool, []cache.Unreadable, error) {
+		_ = spool.Close()
 		return nil, nil, err
 	}
-	for _, u := range unreadable {
-		skipped = append(skipped, cache.Unreadable{Name: "/" + u.Name, Err: u.Err})
+
+	if !carry {
+		if _, err := cache.WriteTarFrom(openRead(upper), files, spool); err != nil {
+			return fail(err)
+		}
+	} else {
+		unreadable, err := cache.WriteTarNaming(openRead(upper), files, spool.File)
+		if err != nil {
+			return fail(err)
+		}
+		for _, u := range unreadable {
+			skipped = append(skipped, cache.Unreadable{Name: "/" + u.Name, Err: u.Err})
+		}
 	}
-	return buf.Bytes(), skipped, nil
+
+	size, err := spool.Seek(0, io.SeekCurrent)
+	if err == nil {
+		_, err = spool.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		return fail(fmt.Errorf("unions: rewinding the spooled archive: %w", err))
+	}
+	spool.Size = size
+	return spool, skipped, nil
 }
 
 // names are the share paths of what a pull left out.
@@ -317,16 +354,11 @@ func (m *Manager) Present(ctx context.Context, account, client, export string, p
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = root.Close() }()
 	return present(root, paths)
 }
 
-func present(root string, paths []string) ([]string, error) {
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, fmt.Errorf("unions: opening the share: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
+func present(r *os.Root, paths []string) ([]string, error) {
 	var out []string
 	for _, p := range paths {
 		name, err := within(p)
@@ -343,15 +375,16 @@ func present(root string, paths []string) ([]string, error) {
 	return out, nil
 }
 
-// upperRoot is the cache layer of a share, as the AGENT can read it.
-func (m *Manager) upperRoot(account, client, export string) (*live, string, error) {
+// upperRoot is the cache layer of a share, opened inside the daemon's own
+// filesystem (openIn). The caller closes it.
+func (m *Manager) upperRoot(account, client, export string) (*live, *os.Root, error) {
 	l, ok := m.share(account, client, export)
 	if !ok {
-		return nil, "", fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
+		return nil, nil, fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
 	}
-	root, err := l.relocate(l.spec.Upper())
+	root, err := openIn(l.spec, l.spec.Upper())
 	if err != nil {
-		return nil, "", fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
+		return nil, nil, fmt.Errorf("unions: opening the cache layer of %s: %w", export, err)
 	}
 	return l, root, nil
 }

@@ -22,7 +22,8 @@ type chowned struct {
 func TestPrepareGivesTheUnionRootItsOwner(t *testing.T) {
 	m := manager(t)
 	var seen []chowned
-	m.lchown = func(path string, uid, gid int) error {
+	m.chown = func(spec union.Spec, uid, gid int) error {
+		path := spec.Upper()
 		seen = append(seen, chowned{path, uid, gid})
 		return nil
 	}
@@ -75,7 +76,7 @@ func TestPrepareGivesTheUnionRootItsOwner(t *testing.T) {
 func TestAChownThatFailsDiscardsTheUnion(t *testing.T) {
 	m := manager(t)
 	fail := true
-	m.lchown = func(string, int, int) error {
+	m.chown = func(union.Spec, int, int) error {
 		if fail {
 			return errors.New("operation not permitted")
 		}
@@ -112,7 +113,10 @@ func TestPrepareWithoutAnOwnerIsRoot(t *testing.T) {
 	m := manager(t)
 	var spec union.Spec
 	var seen []chowned
-	m.lchown = func(path string, uid, gid int) error { seen = append(seen, chowned{path, uid, gid}); return nil }
+	m.chown = func(spec union.Spec, uid, gid int) error {
+		seen = append(seen, chowned{spec.Upper(), uid, gid})
+		return nil
+	}
 	var started atomic.Bool
 	m.onStart = func(s union.Spec) { spec = s; started.Store(true) }
 	m.probe = func(context.Context, union.Spec) error {

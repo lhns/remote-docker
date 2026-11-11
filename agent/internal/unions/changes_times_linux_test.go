@@ -51,7 +51,7 @@ func TestChangesCarryTheCtimeOfEachKindWhenAsked(t *testing.T) {
 		return ctimeOf(info)
 	}
 
-	changes, err := changesIn(&live{}, upper, "/m/aaaa", true, true)
+	changes, err := changesIn(&live{}, rootAt(t, upper), "/m/aaaa", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestChangesCarryTheCtimeOfEachKindWhenAsked(t *testing.T) {
 	}
 
 	// A client that did not ask is told nothing new.
-	plain, err := changesIn(&live{}, upper, "/m/aaaa", true, false)
+	plain, err := changesIn(&live{}, rootAt(t, upper), "/m/aaaa", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ func TestAFillLeavesWhatTheContainerMade(t *testing.T) {
 	}
 	defer func() { _ = up.Close() }()
 
-	_, kept, err := extractWith(root, batchOf(t, "theirs.txt", "ours.txt", "new.txt"), true, containersOwn(up, &l), func(string, os.FileInfo) {})
+	_, kept, err := extractWith(rootAt(t, root), batchOf(t, "theirs.txt", "ours.txt", "new.txt"), true, containersOwn(up, &l), func(string, os.FileInfo) {})
 	if err != nil {
 		t.Fatal(err)
 	}
