@@ -102,13 +102,16 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 				"account", name, "op", req.Op, "export", req.Export, "err", reply.Err)
 		}
 		if err := enc.Encode(reply); err != nil {
+			closeSpool(payload)
 			_ = session.Exit(1)
 			return
 		}
 		// The payload follows its reply line, exactly as a request's does: the
 		// client has been told how many bytes to read before they arrive.
-		if len(payload) > 0 {
-			if _, err := session.Write(payload); err != nil {
+		if payload != nil {
+			_, err := io.CopyN(session, payload, payload.Size)
+			closeSpool(payload)
+			if err != nil {
 				_ = session.Exit(1)
 				return
 			}
@@ -121,7 +124,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 // The payload of an apply is read whatever the outcome: it follows the frame on
 // the same stream, so a request refused without draining it would leave a tar
 // where the next line is expected and desynchronise everything after it.
-func (s *Server) applyCache(session gssh.Session, account sessionAccount, req cache.Request, body io.Reader) (cache.Reply, []byte) {
+func (s *Server) applyCache(session gssh.Session, account sessionAccount, req cache.Request, body io.Reader) (cache.Reply, *unions.Spool) {
 	if err := req.Validate(); err != nil {
 		if req.Op == cache.OpApply {
 			_, _ = io.CopyN(io.Discard, body, req.Bytes)
@@ -191,7 +194,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		if err != nil {
 			return refused(err), nil
 		}
-		return cache.Reply{Bytes: int64(len(pulled)), Skipped: skipped}, pulled
+		return cache.Reply{Bytes: pulled.Size, Skipped: skipped}, pulled
 
 	case cache.OpPresent:
 		here, err := s.cfg.Unions.Present(ctx, name, account.Client(), req.Export, req.Paths)
@@ -204,6 +207,13 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 	// Validate has already refused every op this agent does not know, so
 	// reaching here would mean the two disagree.
 	return cache.Reply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}, nil
+}
+
+// closeSpool closes and removes a pull's spooled tar, if there is one.
+func closeSpool(s *unions.Spool) {
+	if s != nil {
+		_ = s.Close()
+	}
 }
 
 // refused is a failed op as the client reads it.

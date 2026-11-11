@@ -40,7 +40,7 @@ func TestApplyDoesNotWriteThroughASymlinkOutOfTheShare(t *testing.T) {
 	_, _ = tw.Write(body)
 	_ = tw.Close()
 
-	_, err := extract(root, &batch, false, func(string, os.FileInfo) {})
+	_, err := extract(rootAt(t, root), &batch, false, func(string, os.FileInfo) {})
 	if _, statErr := os.Stat(filepath.Join(outside, "pwned")); statErr == nil {
 		t.Fatal("a fill followed a symlink and wrote outside the share")
 	}
@@ -56,7 +56,7 @@ func TestDropDoesNotRemoveThroughASymlinkOutOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = remove(root, []string{"/evil/victim"}, func(string) {})
+	_ = remove(rootAt(t, root), []string{"/evil/victim"}, func(string) {})
 	if _, err := os.Stat(victim); err != nil {
 		t.Fatalf("a drop followed a symlink and removed a file outside the share: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestPullDoesNotReadThroughASymlinkOutOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, _, err := pull(root, []string{"/evil/secret"}, false)
+	out, _, err := pulled(t, rootAt(t, root), []string{"/evil/secret"}, false)
 	if err != nil {
 		return
 	}
@@ -99,7 +99,7 @@ func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
 	_ = tw.Close()
 
 	var landed []string
-	if _, err := extract(root, &batch, false, func(name string, info os.FileInfo) {
+	if _, err := extract(rootAt(t, root), &batch, false, func(name string, info os.FileInfo) {
 		landed = append(landed, name)
 		if !info.ModTime().Equal(at) {
 			t.Errorf("%s landed at %v, want %v", name, info.ModTime(), at)
@@ -111,7 +111,7 @@ func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
 		t.Errorf("landed = %v, want [/pkg/lib.go]", landed)
 	}
 
-	out, _, err := pull(root, []string{"/pkg/lib.go"}, false)
+	out, _, err := pulled(t, rootAt(t, root), []string{"/pkg/lib.go"}, false)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
 		t.Errorf("pull returned %+v, %v", h, err)
 	}
 
-	if err := remove(root, []string{"/pkg/lib.go"}, func(string) {}); err != nil {
+	if err := remove(rootAt(t, root), []string{"/pkg/lib.go"}, func(string) {}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "pkg", "lib.go")); !errors.Is(err, os.ErrNotExist) {

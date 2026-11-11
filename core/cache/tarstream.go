@@ -131,65 +131,112 @@ type Unreadable struct {
 
 // WriteTarNaming is WriteTarFrom for a pull under Carry: a file that is there
 // and cannot be read is left out and NAMED, never failing the archive, so one
-// bad file costs itself and not every file asked for beside it. A file that has
-// gone, or is no longer a regular file, is left out silently as before: the
-// next listing reports what it is now.
+// bad file does not starve every file asked for beside it. A file that is gone
+// is the ordinary case and is not named.
 //
-// Each file is read whole before its header is written, since a header once out
-// has to be followed by that many bytes; a read failing half way would leave a
-// choice between NULs, which are a wrong file, and failing the archive.
-func WriteTarNaming(open func(string) (*os.File, error), files []TarFile, w io.Writer) ([]Unreadable, error) {
-	tw := tar.NewWriter(w)
+// The archive goes to a file, not a buffer, so a large file is never held in
+// memory: each entry is copied by the size its header declares, and one that
+// fails to read part way is cut back out by truncating to where its entry
+// began. That is why it needs a file and not a writer.
+func WriteTarNaming(open func(string) (*os.File, error), files []TarFile, spool *os.File) ([]Unreadable, error) {
 	var unreadable []Unreadable
 
 	for _, file := range files {
-		data, info, err := readWhole(open, file.Path)
+		start, err := spool.Seek(0, io.SeekCurrent)
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				unreadable = append(unreadable, Unreadable{Name: file.Name, Err: err})
-			}
+			return nil, fmt.Errorf("workspace: positioning the archive: %w", err)
+		}
+		err = writeEntry(open, file, spool)
+		if err == nil {
 			continue
 		}
-		if info == nil {
-			continue
+		var skip *skipError
+		if !errors.As(err, &skip) {
+			return nil, err
 		}
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			unreadable = append(unreadable, Unreadable{Name: file.Name, Err: err})
-			continue
+		if err := spool.Truncate(start); err != nil {
+			return nil, fmt.Errorf("workspace: cutting %s from the archive: %w", file.Name, err)
 		}
-		header.Name = file.Name
-		header.Size = int64(len(data))
-		header.Uid, header.Gid = 0, 0
-		header.Uname, header.Gname = "", ""
-		if err := tw.WriteHeader(header); err != nil {
-			return nil, fmt.Errorf("workspace: writing the header for %s: %w", file.Name, err)
+		if _, err := spool.Seek(start, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("workspace: positioning the archive: %w", err)
 		}
-		if _, err := tw.Write(data); err != nil {
-			return nil, fmt.Errorf("workspace: writing %s: %w", file.Name, err)
+		if skip.err != nil && !errors.Is(skip.err, os.ErrNotExist) {
+			unreadable = append(unreadable, Unreadable{Name: file.Name, Err: skip.err})
 		}
 	}
-	return unreadable, tw.Close()
+
+	// The end of an archive is two empty blocks, which a writer with no
+	// entries closes into.
+	return unreadable, tar.NewWriter(spool).Close()
 }
 
-// readWhole is a regular file's bytes, at most its size when opened, and its
-// info; a nil info with no error is a path that is no longer a regular file.
-func readWhole(open func(string) (*os.File, error), path string) ([]byte, os.FileInfo, error) {
-	f, err := open(path)
+// skipError is a file left out of the archive, as opposed to an archive that
+// cannot be written. err is nil for one that is simply not a regular file.
+type skipError struct{ err error }
+
+func (e *skipError) Error() string { return fmt.Sprint("skipped: ", e.err) }
+
+// writeEntry appends one regular file as a whole tar entry: header, body and
+// padding. Opened before its header is written, for the reason in WriteTarFrom.
+func writeEntry(open func(string) (*os.File, error), file TarFile, w io.Writer) error {
+	f, err := open(file.Path)
 	if err != nil {
-		return nil, nil, err
+		return &skipError{err}
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, err
+		return &skipError{err}
 	}
 	if !info.Mode().IsRegular() {
-		return nil, nil, nil
+		return &skipError{}
 	}
-	data, err := io.ReadAll(io.LimitReader(f, info.Size()))
+	header, err := tar.FileInfoHeader(info, "")
 	if err != nil {
-		return nil, nil, err
+		return &skipError{err}
 	}
-	return data, info, nil
+	header.Name = file.Name
+	header.Uid, header.Gid = 0, 0
+	header.Uname, header.Gname = "", ""
+
+	tw := tar.NewWriter(w)
+	if err := tw.WriteHeader(header); err != nil {
+		return fmt.Errorf("workspace: writing the header for %s: %w", file.Name, err)
+	}
+	// A failure reading the file is the file's, and can be cut out and carried
+	// on from; a failure writing the archive is everyone's.
+	body := &sourceReader{r: io.LimitReader(f, header.Size)}
+	written, err := io.Copy(tw, body)
+	if err != nil {
+		if body.err != nil {
+			return &skipError{body.err}
+		}
+		return fmt.Errorf("workspace: writing %s: %w", file.Name, err)
+	}
+	// A file that shrank while it was read: padded, as WriteTarFrom does.
+	if pad := header.Size - written; pad > 0 {
+		if _, err := tw.Write(make([]byte, pad)); err != nil {
+			return fmt.Errorf("workspace: padding %s: %w", file.Name, err)
+		}
+	}
+	// Pads the entry to its block; the trailer is the caller's.
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("workspace: writing %s: %w", file.Name, err)
+	}
+	return nil
+}
+
+// sourceReader remembers the error its reader returned, so a failed copy can be
+// told from a failed write.
+type sourceReader struct {
+	r   io.Reader
+	err error
+}
+
+func (s *sourceReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.err = err
+	}
+	return n, err
 }

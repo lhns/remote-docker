@@ -53,6 +53,7 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 		_, _ = io.Copy(io.Discard, body)
 		return nil, nil, err
 	}
+	defer func() { _ = root.Close() }()
 
 	decoded, done, err := decoded(codec, body)
 	if err != nil {
@@ -80,11 +81,7 @@ func (m *Manager) Apply(ctx context.Context, account, client, export, codec stri
 
 // openUpper opens the union's cache layer as the agent can read it.
 func (l *live) openUpper() (*os.Root, error) {
-	upper, err := l.relocate(l.spec.Upper())
-	if err != nil {
-		return nil, err
-	}
-	return os.OpenRoot(upper)
+	return openIn(l.spec, l.spec.Upper())
 }
 
 // inLayer is a file just landed as the cache layer has it, which is what
@@ -121,7 +118,7 @@ func containersOwn(up *os.Root, l *live) func(string) bool {
 	}
 }
 
-// extract writes a tar into the share rooted at root, telling landed about
+// extract writes a tar into the share rooted at r, telling landed about
 // each regular file as it LANDED rather than as it was asked for: a filesystem
 // keeping coarser timestamps than the tar would otherwise match nothing, and
 // every filled file would read as a container write for the rest of the
@@ -133,20 +130,14 @@ func containersOwn(up *os.Root, l *live) func(string) bool {
 // left: the root is the merged mount, so a removal would be a whiteout, which
 // hides the live file instead of falling through to it. The tar reader steps
 // past what is unread of the entry, so the batch stays in frame.
-func extract(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
-	skipped, _, err := extractWith(root, body, skip, nil, landed)
+func extract(r *os.Root, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
+	skipped, _, err := extractWith(r, body, skip, nil, landed)
 	return skipped, err
 }
 
 // extractWith is extract leaving out, and naming in kept, every regular file
 // theirs claims (nil claims none).
-func extractWith(root string, body io.Reader, skip bool, theirs func(string) bool, landed func(name string, info os.FileInfo)) (skipped, kept []string, err error) {
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unions: opening the share: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
+func extractWith(r *os.Root, body io.Reader, skip bool, theirs func(string) bool, landed func(name string, info os.FileInfo)) (skipped, kept []string, err error) {
 	tr := tar.NewReader(body)
 	for {
 		header, err := tr.Next()
@@ -299,25 +290,24 @@ func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
 // here: the lower has lost the file too, so there is nothing the whiteout could
 // wrongly hide.
 func (m *Manager) Drop(ctx context.Context, account, client, export string, paths []string) error {
-	l, root, err := m.mergedRoot(ctx, account, client, export)
+	l, err := m.serving(ctx, account, client, export)
 	if err != nil {
 		return err
 	}
+	if len(paths) == 0 {
+		return nil
+	}
+	root, err := l.openMerged(export)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
 
 	return remove(root, paths, l.forgetApplied)
 }
 
-// remove deletes paths from the share rooted at root, telling gone about each.
-func remove(root string, paths []string, gone func(string)) error {
-	if len(paths) == 0 {
-		return nil
-	}
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return fmt.Errorf("unions: opening the share: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
+// remove deletes paths from the share rooted at r, telling gone about each.
+func remove(r *os.Root, paths []string, gone func(string)) error {
 	for _, p := range paths {
 		target, err := within(p)
 		if err != nil {
@@ -331,22 +321,38 @@ func remove(root string, paths []string, gone func(string)) error {
 	return nil
 }
 
-// mergedRoot is where a share's union can be written, as the AGENT can reach
-// it, and it refuses a share that is not serving.
-func (m *Manager) mergedRoot(ctx context.Context, account, client, export string) (*live, string, error) {
+// serving is a share's live union, and it refuses a share that is not serving.
+func (m *Manager) serving(ctx context.Context, account, client, export string) (*live, error) {
 	l, ok := m.share(account, client, export)
 	if !ok {
-		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
+		return nil, fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
 	}
 	if err := m.aliveErr(ctx, l.spec); err != nil {
-		return nil, "", err
+		return nil, err
 	}
+	return l, nil
+}
 
-	root, err := l.relocate(l.spec.Merged())
+// mergedRoot is a serving share's union, opened inside the daemon's own
+// filesystem (openIn). The caller closes it.
+func (m *Manager) mergedRoot(ctx context.Context, account, client, export string) (*live, *os.Root, error) {
+	l, err := m.serving(ctx, account, client, export)
 	if err != nil {
-		return nil, "", fmt.Errorf("unions: locating the cache for %s: %w", export, err)
+		return nil, nil, err
+	}
+	root, err := l.openMerged(export)
+	if err != nil {
+		return nil, nil, err
 	}
 	return l, root, nil
+}
+
+func (l *live) openMerged(export string) (*os.Root, error) {
+	root, err := openIn(l.spec, l.spec.Merged())
+	if err != nil {
+		return nil, fmt.Errorf("unions: opening the cache for %s: %w", export, err)
+	}
+	return root, nil
 }
 
 // within is a share path as a name inside an os.Root, which is what keeps a

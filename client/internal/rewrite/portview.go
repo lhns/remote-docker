@@ -205,6 +205,11 @@ func askedBindings(raw json.RawMessage, c ports.Container, rule ports.Rule) (jso
 		var out []binding
 		for _, port := range asked {
 			b := maps.Clone(list[0])
+			if b == nil {
+				// "PortBindings":{"80/tcp":[null]} from the daemon: a nil map
+				// would panic on the assignment below.
+				b = binding{}
+			}
 			b["HostPort"] = json.RawMessage(strconv.Quote(strconv.Itoa(port)))
 			out = append(out, b)
 		}

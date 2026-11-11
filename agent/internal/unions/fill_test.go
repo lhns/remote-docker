@@ -24,7 +24,7 @@ func land(t *testing.T, root, name, body string) {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := extract(root, &b, false, func(string, os.FileInfo) {}); err != nil {
+	if _, err := extract(rootAt(t, root), &b, false, func(string, os.FileInfo) {}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package rewrite
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/lhns/remote-docker/client/internal/ports"
@@ -227,5 +228,24 @@ func TestInspectPortsLeavesAnythingElseAlone(t *testing.T) {
 				t.Errorf("rewrote %s into %s", body, got)
 			}
 		})
+	}
+}
+
+// A null entry in a binding list is a malformed answer from the daemon and must
+// not stop the session: assigning into its nil map panicked.
+func TestInspectPortsSurvivesANullBinding(t *testing.T) {
+	body := `{"Config":{"Labels":` + labels("alice", "me", "80/tcp=8080") + `},
+	"HostConfig":{"PortBindings":{"80/tcp":[null]}},
+	"NetworkSettings":{"Ports":{"80/tcp":[null,{"HostIp":"0.0.0.0","HostPort":"32790"}]}}}`
+
+	got, ok := InspectPorts([]byte(body), rule)
+	if !ok {
+		t.Fatal("InspectPorts left the body alone")
+	}
+	if asked := compact(t, decode(t, got, "HostConfig", "PortBindings")); asked != `{"80/tcp":[{"HostPort":"8080"}]}` {
+		t.Errorf("HostConfig.PortBindings = %s", asked)
+	}
+	if shown := compact(t, decode(t, got, "NetworkSettings", "Ports")); !strings.Contains(shown, `"HostPort":"8080"`) {
+		t.Errorf("NetworkSettings.Ports = %s", shown)
 	}
 }

@@ -8,6 +8,22 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **The workspace agent resolves a cache's paths inside the account's own
+  daemon filesystem.** Every directory it opens, lists or gives an owner for a
+  `write=back` or `write=ephemeral` share now goes through a root confined to
+  that daemon, and a link that leaves it is refused. With the shared daemon the
+  path down to the cache volume is followed as before.
+- **A large file carried back no longer has to fit in the agent's memory.** The
+  agent spools what a container wrote to a temporary file and copies each file
+  by the size it declared, and a FIFO in a share is skipped instead of
+  blocking the cache channel.
+- **A malformed port binding from the workspace no longer stops the session.**
+  A `null` entry in a container's `PortBindings` panicked the client.
+
 ## 0.16.6 — 2026-11-10
 
 ### Fixes

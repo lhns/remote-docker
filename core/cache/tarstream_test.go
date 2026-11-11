@@ -139,15 +139,22 @@ func TestWriteTarNamingNamesAnUnreadableFileAndKeepsTheRest(t *testing.T) {
 		return os.Open(p)
 	}
 
-	var buf bytes.Buffer
-	unreadable, err := WriteTarNaming(open, TarFilesFrom(root, []string{"/bad", "/gone", "/good"}), &buf)
+	spool, err := os.CreateTemp(t.TempDir(), "spool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = spool.Close() }()
+	unreadable, err := WriteTarNaming(open, TarFilesFrom(root, []string{"/bad", "/gone", "/good"}), spool)
 	if err != nil {
 		t.Fatalf("WriteTarNaming: %v", err)
 	}
 	if len(unreadable) != 1 || unreadable[0].Name != "bad" || !errors.Is(unreadable[0].Err, broken) {
 		t.Errorf("unreadable = %+v, want only bad, with its error", unreadable)
 	}
-	tr := tar.NewReader(&buf)
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(spool)
 	header, err := tr.Next()
 	if err != nil || header.Name != "good" {
 		t.Fatalf("first entry = %v, %v; want good", header, err)

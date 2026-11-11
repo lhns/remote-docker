@@ -23,7 +23,7 @@ func TestPresentAnswersFromTheMergedViewWithoutFollowingLinks(t *testing.T) {
 		t.Skipf("cannot create a symlink here: %v", err)
 	}
 
-	got, err := present(root, []string{"/kept", "/gone", "/dangling", "/../escape"})
+	got, err := present(rootAt(t, root), []string{"/kept", "/gone", "/dangling", "/../escape"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPullSkipsAPathItCannotNameOnlyWhenAsked(t *testing.T) {
 	}
 	paths := []string{"/../bad", "/good"}
 
-	tarball, skipped, err := pull(upper, paths, true)
+	tarball, skipped, err := pulled(t, rootAt(t, upper), paths, true)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestPullSkipsAPathItCannotNameOnlyWhenAsked(t *testing.T) {
 		t.Errorf("the good file was not carried: %v %v", h, err)
 	}
 
-	if _, _, err := pull(upper, paths, false); err == nil {
+	if _, _, err := pulled(t, rootAt(t, upper), paths, false); err == nil {
 		t.Error("without Carry a bad path did not fail the request, as it always did")
 	}
 }
@@ -74,7 +74,7 @@ func TestOnlyAFileTheEntryCreatedIsRemovedAfterAFailedWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 		cut.WriteString("xx")
-		_, _ = extract(root, &cut, true, func(string, os.FileInfo) {})
+		_, _ = extract(rootAt(t, root), &cut, true, func(string, os.FileInfo) {})
 	}
 	if _, err := os.Stat(filepath.Join(root, "theirs")); err != nil {
 		t.Errorf("a file the entry did not create was removed: %v", err)
