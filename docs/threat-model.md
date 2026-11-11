@@ -1281,6 +1281,7 @@ sequenceDiagram
     Cl->>Ch: drop{paths}
     Ag->>U: unlink through the merged mount
     Ag-->>Cl: changes / pull, for write-back
+    Cl->>Ch: present{paths}, before a deletion here
     Note over Ag,U: the account and the machine come from the KEY,<br/>never from the request
 ```
 
@@ -1292,6 +1293,37 @@ re-checks containment after the join, because `path.Join` cleans. Every tar
 entry goes through the same `within` on its own name, so the archive is not a
 way around the check that the request went through. *Covered by*
 `core/cache/cache_test.go`.
+
+**E — the daemon's filesystem is the account's (3, 4, 7, 10, 11, 12).** In
+per-account mode the agent reaches a union's cache layer and merged view
+through `/proc/<pid>/root` of the account's daemon, where the account is root
+and chooses every directory, the cache volume's included. So every path under
+that root is resolved by the kernel relative to one descriptor opened on it,
+with a link that leaves it refused, whether absolute, in the middle or at the
+end (`openIn` in `agent/internal/unions/unions.go`); the change listing walks
+that root, and the owner a prepare names is set by descriptor. With the shared
+daemon the operator's path down to the cache volume is followed as it is, so a
+data root behind a link keeps working, and only what is under the volume is
+confined. *Covered by* `contain_test.go` and `symlink_test.go`, on Linux in CI.
+
+**What still resolves by path.** The notify poker (flow 6) follows an
+intermediate link inside a share and refuses only one at the end; it opens
+nothing for writing and sets only identity times. `union.Alive`,
+`union.MountedShares` and `unions.Capability` stat paths under the daemon's
+root, so an account can make its own union look mounted or capable, which
+reads and writes nothing.
+
+**S — the owner a prepare names (1, 3).** Any uid and gid
+(`workspace.ParseOwner`): it decides who owns the asking machine's own union
+root and nothing else, and inside a per-account daemon that uid space is the
+account's.
+
+**D — a pull is spooled, not held (11).** The tar of what a container wrote is
+written to a temporary file and streamed with its length, each file copied by
+the size its header declared, so a large file costs the agent disk for the
+length of one reply rather than memory shared by every account. A file is
+opened non-blocking and skipped unless regular, so a FIFO cannot hold the
+channel. *Covered by* `pullspool_test.go` and `pullfifo_linux_test.go`.
 
 **T — a drop removes files, which nothing else in this system may do (9).** The
 Docker API can write into a volume and can never remove from one, which is the
@@ -1931,6 +1963,19 @@ Stated here rather than buried, because each is a deliberate trade.
   end only in the machine workflow; macOS has never run a test of any kind.
 
 ## What changed because of this document
+
+- **A daemon's filesystem is resolved inside it** (0.16.7). The agent reached a
+  union's cache layer by joining the daemon's reported path onto
+  `/proc/<pid>/root` and checking the result as a string, then opened it with
+  `os.OpenRoot`, which follows a link in the name it is given. The account
+  controls every directory on that path, so a link there could lead the agent,
+  as root, out of the daemon's filesystem. Flow 9 has the detail.
+- **A pull no longer has to fit in the agent's memory** (0.16.7). It built the
+  whole tar in memory, which one account's large file made every account's
+  problem. Flow 9.
+- **A `null` port binding no longer stops the client** (0.16.7). The workspace
+  answering an inspect with `[null]` in `PortBindings` panicked the session.
+  Flow 5.
 
 - **Write-back goes through `os.Root`.** It used to check a joined path as a
   string and then follow any link in the share, so a container in a
