@@ -452,6 +452,7 @@ single mount can carry are in [Mount options](#mount-options).
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree`. The default for mounts naming no `prefetch=` |
 | `REMOTE_DOCKER_HOST_PORTS` | `hostPorts` | `remote set --host-ports` | none; local TCP ports, such as `3000,8931`, that containers reach as `host.docker.internal`. See [Reaching your machine from a container](#reaching-your-machine-from-a-container) |
+| `REMOTE_DOCKER_READONLY_EXPORTS` | `readOnlyExports` | `remote set --read-only-exports on\|off` | `off`. `on` serves a read-only bind (`ro`) as a read-only export that this machine's server enforces; see [Read-only exports](#read-only-exports) |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid:gid` every file in a share reports (gid defaults to the uid). The default for mounts naming no `owner=`. See [A container that is not root](#a-container-that-is-not-root) |
@@ -581,7 +582,7 @@ little differently (examples below the table).
 | `default`, `consistent` | | | Docker's own words for `read=direct,write=through` | any other bare word is refused |
 | `cached` | | | Docker's word for `read=cached,write=through` | |
 | `delegated` | | | Docker's word for `read=cached,write=back` | |
-| `ro` and other Docker options | | | untouched; `ro` stays read-only on the share | |
+| `ro` and other Docker options | | | untouched; `ro` stays read-only on the container's mount. With the `read-only-exports` setting on it also makes the share read-only (see below) | off by default ([ADR 0058](docs/adr/0058-a-read-only-bind-is-a-read-only-export.md)) |
 
 An axis or word a mount does not name comes from the per-directory rule
 (`consistencyPaths`), then the setting, then the default. Each combination of
@@ -1430,12 +1431,42 @@ stays supported: a single-account workspace has nothing to separate.
 
 ## Caveats
 
+### Read-only exports
+
+`ro` on a bind keeps the container from writing, and nothing more: the export
+behind the volume is read-write, so anything else on the workspace that reaches
+it can write into your directory, such as the workspace's operator, a shell on a
+shared daemon, a host-networked container, or another container mounting the
+`rd-` volume by name without `ro`. With `read-only-exports` on
+(`REMOTE_DOCKER_READONLY_EXPORTS=on`, or `remote set <name> --read-only-exports
+on`), a read-only bind (`-v ...:ro`, `--mount ...,readonly`, a single file
+included) is also a read-only share: this machine's server refuses every write
+to it. Watching and `read=cached` keep working.
+
+- **Off by default**, because the benefit is narrow. It protects a directory
+  against the workspace side, and only while nothing mounts that directory
+  read-write (or a parent of it): a read-write export reaches the same files.
+- **A read-only and a read-write mount of one directory are two shares**, each
+  with its own export, volume and, under `write=back`, union. Under
+  `write=back` the read-only container sees the other's writes only after
+  write-back lands them on this machine and its own share is refreshed
+  (seconds), and the directory is cached twice.
+- **`write=back` on a read-only mount is `write=ephemeral`**: nothing is carried
+  home.
+- **Read when the session starts.** It applies to mounts made afterwards; a
+  container keeps the volume it was created with until it is recreated
+  (`docker compose down && docker compose up`).
+- A write by name is refused with `Permission denied`, not `Read-only file
+  system`.
+
+See [ADR 0058](docs/adr/0058-a-read-only-bind-is-a-read-only-export.md).
+
 ### A container that is not root
 
 Every file in a share is reported as owned by root (`0:0`) with mode 0666,
 every directory 0777, so an image that runs as its own user can read and write
 the share. A `chown` inside the container is accepted and does nothing, and a
-read-only bind (`ro`) is still read-only
+read-only bind (`ro`) is still read-only on the container's mount
 ([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
 
 git refuses a repository owned by another uid, so an image that runs as a

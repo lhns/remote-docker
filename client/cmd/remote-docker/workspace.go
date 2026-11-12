@@ -228,6 +228,7 @@ type workspaceFlags struct {
 	hostPorts                                        string
 	port                                             int
 	insecure                                         bool
+	readOnlyExports                                  bool
 
 	// Ours alone, so anyGiven ignores the inherited --workspace.
 	set *pflag.FlagSet
@@ -248,8 +249,23 @@ func (f *workspaceFlags) register(cmd *cobra.Command, hostUsage string) {
 		"how shares are mounted: read=<direct|cached>,write=<through|back|ephemeral>")
 	f.set.StringVar(&f.hostPorts, "host-ports", "",
 		"local TCP ports containers reach as host.docker.internal, such as 3000,8931; empty for none")
+	f.set.Var((*onOffFlag)(&f.readOnlyExports), "read-only-exports",
+		"on or off (the default): serve a read-only bind as a read-only export, refusing writes on this "+
+			"machine (ADR 0058). Read when the session starts and applied to mounts made afterwards; "+
+			"existing containers keep their volumes until recreated")
 	cmd.Flags().AddFlagSet(f.set)
 }
+
+// onOffFlag is a switch flag that says on or off, so off can be given.
+type onOffFlag bool
+
+func (o *onOffFlag) Set(s string) error {
+	v, err := config.ParseOnOff(s)
+	*o = onOffFlag(v)
+	return err
+}
+func (o *onOffFlag) String() string { return map[bool]string{true: "on", false: "off"}[bool(*o)] }
+func (o *onOffFlag) Type() string   { return "on|off" }
 
 func (f *workspaceFlags) given(name string) bool { return f.set.Lookup(name).Changed }
 
@@ -286,6 +302,9 @@ func (f *workspaceFlags) apply(ws *config.Workspace) {
 	}
 	if given("host-ports") {
 		ws.HostPorts = f.hostPorts
+	}
+	if given("read-only-exports") {
+		ws.ReadOnlyExports = f.readOnlyExports
 	}
 	if given("ca-file") {
 		ws.CAFile = f.caFile
@@ -748,6 +767,9 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			row(out, "consistency", cfg.Consistency)
 			if cfg.HostPorts != "" {
 				row(out, "host ports", cfg.HostPorts)
+			}
+			if cfg.ReadOnlyExports {
+				row(out, "read-only exports", "on")
 			}
 			for _, ex := range cfg.WatchExclude {
 				row(out, "watch exclude", ex)

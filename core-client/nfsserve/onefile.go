@@ -162,6 +162,8 @@ func singleFileOf(fs billy.Filesystem) (*singleFileFS, bool) {
 			return v, true
 		case *attrFS:
 			fs = v.Filesystem
+		case *readOnlyFS:
+			fs = v.Filesystem
 		default:
 			return nil, false
 		}

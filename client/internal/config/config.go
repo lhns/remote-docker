@@ -72,6 +72,12 @@ type Config struct {
 	// reports a bad value where the session starts.
 	HostPorts string
 
+	// ReadOnlyExports makes a read-only bind a read-only share, enforced by
+	// this machine's NFS server (ADR 0058). Off by default. Read when the
+	// session starts: it applies to mounts made afterwards, and a container
+	// keeps the volume it was created with until it is recreated.
+	ReadOnlyExports bool
+
 	// WatchExclude replaces the default list of directory names never watched.
 	WatchExclude []string
 
@@ -157,18 +163,19 @@ type Workspace struct {
 	// Keyed by a local path; applies to everything under it.
 	ConsistencyPaths map[string]string `json:"consistencyPaths,omitempty"`
 
-	WatchBudget   int      `json:"watchBudget,omitempty"`
-	CacheFiles    int      `json:"cacheFiles,omitempty"`
-	CacheBytes    int64    `json:"cacheBytes,omitempty"`
-	Prefetch      string   `json:"prefetch,omitempty"`
-	HostPorts     string   `json:"hostPorts,omitempty"`
-	WatchExclude  []string `json:"watchExclude,omitempty"`
-	IdleTimeout   string   `json:"idleTimeout,omitempty"`
-	DaemonIdle    string   `json:"daemonIdle,omitempty"`
-	DaemonStandby string   `json:"daemonStandby,omitempty"`
-	ShareOwner    string   `json:"shareOwner,omitempty"`
-	ShareFMask    string   `json:"shareFmask,omitempty"`
-	ShareDMask    string   `json:"shareDmask,omitempty"`
+	WatchBudget     int      `json:"watchBudget,omitempty"`
+	CacheFiles      int      `json:"cacheFiles,omitempty"`
+	CacheBytes      int64    `json:"cacheBytes,omitempty"`
+	Prefetch        string   `json:"prefetch,omitempty"`
+	HostPorts       string   `json:"hostPorts,omitempty"`
+	ReadOnlyExports bool     `json:"readOnlyExports,omitempty"`
+	WatchExclude    []string `json:"watchExclude,omitempty"`
+	IdleTimeout     string   `json:"idleTimeout,omitempty"`
+	DaemonIdle      string   `json:"daemonIdle,omitempty"`
+	DaemonStandby   string   `json:"daemonStandby,omitempty"`
+	ShareOwner      string   `json:"shareOwner,omitempty"`
+	ShareFMask      string   `json:"shareFmask,omitempty"`
+	ShareDMask      string   `json:"shareDmask,omitempty"`
 
 	// Machine is set when this program provisioned the workspace's Linux
 	// system. It is the only record one was built, which is why `rm` refuses
@@ -276,20 +283,21 @@ const (
 	EnvCAFile   = "REMOTE_DOCKER_CA_FILE"
 	EnvInsecure = "REMOTE_DOCKER_INSECURE"
 
-	EnvConsistency   = "REMOTE_DOCKER_CONSISTENCY"
-	EnvWatch         = "REMOTE_DOCKER_WATCH"
-	EnvWatchBudget   = "REMOTE_DOCKER_WATCH_BUDGET"
-	EnvCacheFiles    = "REMOTE_DOCKER_CACHE_FILES"
-	EnvCacheBytes    = "REMOTE_DOCKER_CACHE_BYTES"
-	EnvPrefetch      = "REMOTE_DOCKER_PREFETCH"
-	EnvHostPorts     = "REMOTE_DOCKER_HOST_PORTS"
-	EnvWatchExclude  = "REMOTE_DOCKER_WATCH_EXCLUDE"
-	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
-	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
-	EnvDaemonStandby = "REMOTE_DOCKER_DAEMON_STANDBY"
-	EnvShareOwner    = "REMOTE_DOCKER_SHARE_OWNER"
-	EnvShareFMask    = "REMOTE_DOCKER_SHARE_FMASK"
-	EnvShareDMask    = "REMOTE_DOCKER_SHARE_DMASK"
+	EnvConsistency     = "REMOTE_DOCKER_CONSISTENCY"
+	EnvWatch           = "REMOTE_DOCKER_WATCH"
+	EnvWatchBudget     = "REMOTE_DOCKER_WATCH_BUDGET"
+	EnvCacheFiles      = "REMOTE_DOCKER_CACHE_FILES"
+	EnvCacheBytes      = "REMOTE_DOCKER_CACHE_BYTES"
+	EnvPrefetch        = "REMOTE_DOCKER_PREFETCH"
+	EnvHostPorts       = "REMOTE_DOCKER_HOST_PORTS"
+	EnvReadOnlyExports = "REMOTE_DOCKER_READONLY_EXPORTS"
+	EnvWatchExclude    = "REMOTE_DOCKER_WATCH_EXCLUDE"
+	EnvIdleTimeout     = "REMOTE_DOCKER_IDLE_TIMEOUT"
+	EnvDaemonIdle      = "REMOTE_DOCKER_DAEMON_IDLE"
+	EnvDaemonStandby   = "REMOTE_DOCKER_DAEMON_STANDBY"
+	EnvShareOwner      = "REMOTE_DOCKER_SHARE_OWNER"
+	EnvShareFMask      = "REMOTE_DOCKER_SHARE_FMASK"
+	EnvShareDMask      = "REMOTE_DOCKER_SHARE_DMASK"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -452,6 +460,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.HostPorts != "" {
 		cfg.HostPorts = ws.HostPorts
 	}
+	if ws.ReadOnlyExports {
+		cfg.ReadOnlyExports = true
+	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -551,6 +562,13 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvHostPorts); v != "" {
 		cfg.HostPorts = v
+	}
+	if v := os.Getenv(EnvReadOnlyExports); v != "" {
+		// The environment beats the file in both directions. A value that is
+		// neither on nor off is left to the file.
+		if on, err := ParseOnOff(v); err == nil {
+			cfg.ReadOnlyExports = on
+		}
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)

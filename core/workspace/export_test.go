@@ -142,6 +142,27 @@ func TestShareIDWithoutMasksDidNotMove(t *testing.T) {
 	}
 }
 
+// A read-only share is a variant of its own (ADR 0058), and a read-write one
+// derives what it always did: the pinned ids above are the proof, and the
+// variant of words that say nothing about it is the other half.
+func TestShareIDFollowsReadOnly(t *testing.T) {
+	const p = "/home/alice/project"
+	owner := Owner{UID: 1000, GID: 1000, Set: true}
+	rw := ShareVariant{Mode: DefaultMode, Owner: owner}
+	ro := rw
+	ro.ReadOnly = true
+
+	if got := ShareIDFor(p, rw); got != "4924c75bb0662050" {
+		t.Errorf("a read-write share moved to %q", got)
+	}
+	if ShareIDFor(p, ro) == ShareIDFor(p, rw) {
+		t.Errorf("a read-only share has the read-write share's id")
+	}
+	if got := (ShareWords{Owner: owner, ReadOnly: true}).Variant(DefaultMode); got != ro {
+		t.Errorf("Variant = %+v, want %+v", got, ro)
+	}
+}
+
 func TestShareIDFollowsTheMasks(t *testing.T) {
 	const p = "/home/alice/project"
 	base := ShareVariant{Mode: DefaultMode, Owner: Owner{Set: true}}

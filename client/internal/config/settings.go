@@ -40,6 +40,7 @@ func (c Config) SessionSettings() map[string]string {
 		"cache-bytes":       fmt.Sprint(c.CacheBytes),
 		"prefetch":          canonicalPrefetch(c.Prefetch),
 		"host-ports":        canonicalHostPorts(c.HostPorts),
+		"readonly-exports":  onOff(c.ReadOnlyExports),
 		"share-owner":       c.shareOwnerSetting(),
 		"share-fmask":       maskSetting(c.ShareFMask, c.ShareFileMask, workspace.ParseFileMask),
 		"share-dmask":       maskSetting(c.ShareDMask, c.ShareDirMask, workspace.ParseDirMask),
@@ -142,20 +143,21 @@ type SettingChange struct {
 // settingEnv is the environment variable that sets each session setting. A
 // setting with none is read from the config file only, and is never compared.
 var settingEnv = map[string]string{
-	"consistency":    EnvConsistency,
-	"watch":          EnvWatch,
-	"watch-budget":   EnvWatchBudget,
-	"watch-exclude":  EnvWatchExclude,
-	"cache-files":    EnvCacheFiles,
-	"cache-bytes":    EnvCacheBytes,
-	"prefetch":       EnvPrefetch,
-	"host-ports":     EnvHostPorts,
-	"share-owner":    EnvShareOwner,
-	"share-fmask":    EnvShareFMask,
-	"share-dmask":    EnvShareDMask,
-	"idle-timeout":   EnvIdleTimeout,
-	"daemon-idle":    EnvDaemonIdle,
-	"daemon-standby": EnvDaemonStandby,
+	"consistency":      EnvConsistency,
+	"watch":            EnvWatch,
+	"watch-budget":     EnvWatchBudget,
+	"watch-exclude":    EnvWatchExclude,
+	"cache-files":      EnvCacheFiles,
+	"cache-bytes":      EnvCacheBytes,
+	"prefetch":         EnvPrefetch,
+	"host-ports":       EnvHostPorts,
+	"readonly-exports": EnvReadOnlyExports,
+	"share-owner":      EnvShareOwner,
+	"share-fmask":      EnvShareFMask,
+	"share-dmask":      EnvShareDMask,
+	"idle-timeout":     EnvIdleTimeout,
+	"daemon-idle":      EnvDaemonIdle,
+	"daemon-standby":   EnvDaemonStandby,
 }
 
 // SetInEnvironment reports whether this process's environment names the

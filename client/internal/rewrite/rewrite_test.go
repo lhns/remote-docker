@@ -480,7 +480,7 @@ func TestASingleFileBindMovesToMounts(t *testing.T) {
 		t.Errorf("Target = %v, want the path the user asked for", mount["Target"])
 	}
 	if mount["ReadOnly"] != true {
-		t.Error("ro was dropped, and the export behind it is read-write")
+		t.Error("ro was dropped from the container's mount")
 	}
 	options, _ := mount["VolumeOptions"].(map[string]any)
 	if options["Subpath"] != "nginx.conf" {

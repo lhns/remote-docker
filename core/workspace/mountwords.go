@@ -251,12 +251,16 @@ func (p Prefetch) String() string {
 }
 
 // ShareWords are the words that belong to a share rather than to one mount of
-// it. Owner and the masks are part of the share's identity; Watch and Prefetch
-// are raised.
+// it. Owner, the masks and ReadOnly are part of the share's identity; Watch and
+// Prefetch are raised.
+//
+// ReadOnly is not a word a mount spells: it comes from Docker's own `ro`, which
+// also stays on the container's mount (ADR 0058).
 type ShareWords struct {
 	Owner    Owner
 	FMask    Mask
 	DMask    Mask
+	ReadOnly bool
 	Watch    Watch
 	Prefetch Prefetch
 }

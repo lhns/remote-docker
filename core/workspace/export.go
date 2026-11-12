@@ -87,18 +87,20 @@ func isDriveLetter(c byte) bool {
 
 // ShareVariant is what makes two mounts of one directory different shares
 // (ADR 0042): how the mount is served, who owns what it reports and which
-// permission bits it hides. All are resolved, so the same mount always names
-// the same variant; only the masks' bits count, not whether they were named.
+// permission bits it hides, and whether this machine's server refuses writes
+// to it (ADR 0058). All are resolved, so the same mount always names the same
+// variant; only the masks' bits count, not whether they were named.
 type ShareVariant struct {
-	Mode  Mode
-	Owner Owner
-	FMask Mask
-	DMask Mask
+	Mode     Mode
+	Owner    Owner
+	FMask    Mask
+	DMask    Mask
+	ReadOnly bool
 }
 
 // Variant is the variant a share served as mode with these words is.
 func (w ShareWords) Variant(mode Mode) ShareVariant {
-	return ShareVariant{Mode: mode, Owner: w.Owner, FMask: w.FMask, DMask: w.DMask}
+	return ShareVariant{Mode: mode, Owner: w.Owner, FMask: w.FMask, DMask: w.DMask, ReadOnly: w.ReadOnly}
 }
 
 // ShareIDFor is the stable identifier for a local directory mounted as variant,
@@ -108,8 +110,9 @@ func (w ShareWords) Variant(mode Mode) ShareVariant {
 // orphaning them. Every variant has its own id, so mounting one directory two
 // ways gives two exports, two volumes and two unions that never meet.
 //
-// A mask is appended only when it clears something, so every share from
-// before the masks keeps its id, and with it its volume and its union.
+// A mask is appended only when it clears something and "ro" only when the share
+// is read-only, so every share from before them keeps its id, and with it its
+// volume and its union.
 //
 // Watch and prefetch are not here: they are effort spent on a share and rise
 // with the mounts that ask for them (ADR 0042).
@@ -121,6 +124,9 @@ func ShareIDFor(localPath string, v ShareVariant) string {
 	}
 	if v.DMask.Bits != 0 {
 		key += "\x00d" + v.DMask.String()
+	}
+	if v.ReadOnly {
+		key += "\x00ro"
 	}
 	return digestID(key)
 }

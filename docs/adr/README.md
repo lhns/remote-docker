@@ -117,6 +117,7 @@ What the binary is, what it answers to, and where it can run.
 | [0055](0055-hyperv-machines-through-a-system-broker-service.md) | Hyper-V machines through a SYSTEM broker service |
 | [0056](0056-the-agent-prunes-unused-images-and-build-cache.md) | The agent prunes unused images and build cache, by age and under disk pressure |
 | [0057](0057-containers-reach-listed-ports-on-the-client.md) | Containers reach listed ports on the client |
+| [0058](0058-a-read-only-bind-is-a-read-only-export.md) | A read-only bind is a read-only export |
 
 ## Retired numbers
 

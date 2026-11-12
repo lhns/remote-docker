@@ -655,8 +655,10 @@ func (s *Session) attachShare(export, localPath string, mode workspace.Mode, wor
 		policy = dircache.PolicyOff
 	}
 	s.cache.Attach(export, localPath, dircache.ShareOptions{
-		Policy:    policy,
-		Ephemeral: mode.Write == workspace.WriteEphemeral,
+		Policy: policy,
+		// A read-only share carries nothing home, whatever its mode says
+		// (ADR 0058).
+		Ephemeral: mode.Write == workspace.WriteEphemeral || words.ReadOnly,
 		Exec:      execBits(runtime.GOOS, words.FMask, s.opts.Config.ShareFileMask),
 	})
 }
