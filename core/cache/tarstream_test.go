@@ -168,6 +168,49 @@ func TestWriteTarNamingNamesAnUnreadableFileAndKeepsTheRest(t *testing.T) {
 	}
 }
 
+// A file that shrinks between its stat and its read is left out of a pull, not
+// padded with NULs: the archive lands on the user's machine.
+func TestWriteTarNamingLeavesOutAFileThatShrank(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"shrinks", "good"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name+" content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func(orig func(*os.File) (os.FileInfo, error)) { statOpened = orig }(statOpened)
+	statOpened = func(f *os.File) (os.FileInfo, error) {
+		info, err := f.Stat()
+		if err == nil && filepath.Base(f.Name()) == "shrinks" {
+			err = os.Truncate(f.Name(), 2)
+		}
+		return info, err
+	}
+
+	spool, err := os.CreateTemp(t.TempDir(), "spool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = spool.Close() }()
+	unreadable, err := WriteTarNaming(os.Open, TarFilesFrom(root, []string{"/shrinks", "/good"}), spool)
+	if err != nil || len(unreadable) != 0 {
+		t.Fatalf("WriteTarNaming = %+v, %v; want nothing named", unreadable, err)
+	}
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(spool)
+	header, err := tr.Next()
+	if err != nil || header.Name != "good" {
+		t.Fatalf("first entry = %v, %v; want good, with shrinks left out", header, err)
+	}
+	if _, err := io.ReadAll(tr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Next(); err != io.EOF {
+		t.Errorf("the archive holds more than good: %v", err)
+	}
+}
+
 // A tar carries a time to the second, so what lands is the time here rounded;
 // the answer is the time as it was read, which is the version the entry holds.
 // Write-back tells the copy it sent by both (ADR 0044).
