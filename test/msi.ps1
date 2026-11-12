@@ -398,8 +398,11 @@ $released = @(Get-ChildItem $relDir -Filter '*.msi')
 if ($released.Count -ne 1) { Fail "expected one released x64 MSI in $relDir, found $($released.Count): $gh" }
 Ok "downloaded $($released[0].Name)"
 
-Invoke-Msi @('/i', $released[0].FullName) 'released-install' 0
+# Without docker.exe by name: releases since 0.16.4 install it by default, and
+# what is checked below is that an upgrade keeps an install that left it out.
+Invoke-Msi @('/i', $released[0].FullName, 'ADDLOCAL=Main,Path') 'released-install' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the released MSI left PATH without $InstallDir : $(MachinePath)" }
+if (Test-Path $Alias) { Fail "the released MSI installed $Alias although ADDLOCAL left it out" }
 Invoke-Msi @('/i', $Msi) 'released-upgrade' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the upgrade dropped the PATH entry: $(MachinePath)" }
 # docker.exe is on by default now, but an upgrade keeps what was installed.
