@@ -413,12 +413,12 @@ session adds the feature, takes `WORKSPACENAME`, `WORKSPACEIMAGE` and
 - **A tag can publish an installer no suite has installed.** `msi.yml` is
   triggered by changes under `installer/windows/`, not by tags, so the release
   path does not wait on a Windows runner. What closes it in practice: any
-  change to the installer touches those paths. The release path is unexercised
-  in the other direction too: the `installers` job, the `dist/artifacts.json`
-  lookup that finds goreleaser's Windows binaries and the `gh release upload`
-  are all behind `github.ref_type == 'tag'`, and none of them has ever run.
+  change to the installer touches those paths. The `installers` job, behind
+  `github.ref_type == 'tag'`, has attached both MSIs to every release since
+  `v0.7.0` *(checked 2026-11-11 with `gh release view v0.16.6 --json assets`)*.
 - **A Windows runner installs an MSI built from this repository**, runs the
-  binary out of a fresh shell's PATH and uninstalls it (`test/msi.ps1`). Still
-  never installed: the release archives, an MSI built by an actual tag release,
-  and the arm64 MSI, which is built on every run and installed by nothing,
-  GitHub having no Windows arm64 runner.
+  binary out of a fresh shell's PATH and uninstalls it (`test/msi.ps1`), and
+  section 9d installs the latest released amd64 MSI and upgrades from it.
+  Still never installed: the release archives, and the arm64 MSI, which is
+  built on every run and installed by nothing, GitHub having no Windows arm64
+  runner.

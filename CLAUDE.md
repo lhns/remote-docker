@@ -1690,7 +1690,11 @@ its pure planning function was.
   warning is in the log only. In an unelevated administrator's shell AdminUser is
   false, so the dialog defaults to "Only for me" there (choose "For all
   users"); a silent install there is per machine and fails with 1925. Another
-  user's per-user copy is not detected by an all-users install.
+  user's per-user copy is not detected by an all-users install. The Hyper-V
+  refusal keys on `MSIINSTALLPERUSER=1`, which 9h asserts for a fresh install;
+  an elevated Modify adding the feature to a product installed per user, where
+  that property is not set, has never run, and nothing asserts the folder the
+  registered service runs from.
 - **The MSI's Hyper-V workspace beyond one hand run.** CI proves the
   installer, service, group, rollback and upgrade around a stand-in. Real
   Hyper-V under the service, the installing user's identity (`[UserSID]` and
@@ -1775,15 +1779,14 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
-  The Windows MSI is the exception and only in part: `msi.yml` installs one on
-  a runner, runs the binary out of a fresh shell's PATH and uninstalls it, but
-  the MSI it installs is built by that workflow from a stand-in version. **No
-  MSI from a real tag release has been installed by anybody**, and `msi.yml` is
-  triggered by changes under `installer/windows/`, so a tag publishes without
-  waiting for it. The release path itself is unrun: `release.yml`'s `installers`
-  job is behind `github.ref_type == 'tag'`, so the `dist/artifacts.json` lookup
-  that finds goreleaser's Windows binaries and the `gh release upload` that
-  attaches the MSIs have executed nowhere, CI included.
+  The Windows MSI is the exception and only in part: `msi.yml` builds one from
+  a stand-in version and installs it on a runner, and its section 9d downloads
+  the latest RELEASED amd64 MSI, installs it and upgrades from it, so a
+  tag-built MSI has run there, with default features only. The release path
+  runs on every tag: `release.yml`'s `installers` job has attached both MSIs to
+  every release since `v0.7.0`. *(Checked 2026-11-11 with `gh release view
+  v0.16.6 --json assets`.)* `msi.yml` is triggered by changes under
+  `installer/windows/`, so a tag publishes without waiting for it.
 - **The arm64 MSI is built and never installed.** `msi.yml` builds both
   architectures, so `wix build -arch arm64` failing is not a release-day
   surprise, and installs only the amd64 one: GitHub offers no Windows arm64

@@ -87,6 +87,18 @@ Two things it required, and both are the fix rather than tidiness:
   client two handles for one file, which a client is entitled to treat as two
   objects.
 
+### Three resource leaks (amended 2026-11-11)
+
+Found after the record was written and carried in the same branch. Listed so
+the record names everything the fork carries, which is what its rebase is
+checked against.
+
+| fix, in the fork | what a user sees without it |
+|---|---|
+| End the connection when its write loop stops | a reply that cannot be written left every worker parked and the connection leaked with its goroutines; a read error leaked its descriptor |
+| Close a written file on every path out of `onWrite` | a failed seek or write leaked a descriptor, pinned for good under a caching filesystem and keeping the file open on Windows |
+| Close a truncated file on every path out of SETATTR | a refused or failed truncation leaked a descriptor |
+
 ## The decision
 
 | | |
