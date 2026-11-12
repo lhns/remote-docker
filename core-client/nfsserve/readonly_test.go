@@ -153,22 +153,6 @@ func TestReadOnlyShareRefusesEveryMutation(t *testing.T) {
 		s.UID.SetIt, s.UID.UID = true, 4242
 		return s
 	}
-	otherMtime := func() nfsclient.Sattr3 {
-		attr, err := f.target.Getattr("file")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var s nfsclient.Sattr3
-		s.Mtime.SetIt = nfsclient.SetToClientTime
-		s.Mtime.Time = attr.Mtime
-		s.Mtime.Time.Seconds += 3600
-		return s
-	}
-	serverAtime := func() nfsclient.Sattr3 {
-		var s nfsclient.Sattr3
-		s.Atime.SetIt = nfsclient.SetToServerTime
-		return s
-	}
 
 	for _, c := range []struct {
 		name string
@@ -205,8 +189,6 @@ func TestReadOnlyShareRefusesEveryMutation(t *testing.T) {
 		{"SETATTR size", func() error { return f.target.Setattr("file", size()) }},
 		{"SETATTR mode", func() error { return f.target.Setattr("file", mode()) }},
 		{"SETATTR owner", func() error { return f.target.Setattr("file", owner()) }},
-		{"SETATTR mtime to another time", func() error { return f.target.Setattr("file", otherMtime()) }},
-		{"SETATTR atime to the server's time", func() error { return f.target.Setattr("file", serverAtime()) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.do()
@@ -294,6 +276,22 @@ func TestReadOnlyShareStillReadsAndPokes(t *testing.T) {
 	identity.Atime.Time = attr.Mtime
 	if err := f.target.Setattr("file", identity); err != nil {
 		t.Errorf("an identity SETATTR carrying both times was refused: %v", err)
+	}
+
+	// The poker under read=cached sets the mtime its kernel last saw, which can
+	// be older than the file's. It must succeed too, and change nothing: a
+	// time-set is accepted and never applied.
+	var stale nfsclient.Sattr3
+	stale.Mtime.SetIt = nfsclient.SetToClientTime
+	stale.Mtime.Time = attr.Mtime
+	stale.Mtime.Time.Seconds -= 3600
+	if err := f.target.Setattr("file", stale); err != nil {
+		t.Errorf("a SETATTR carrying a stale mtime was refused: %v", err)
+	}
+	var server nfsclient.Sattr3
+	server.Atime.SetIt = nfsclient.SetToServerTime
+	if err := f.target.Setattr("file", server); err != nil {
+		t.Errorf("a SETATTR of the atime to the server's time was refused: %v", err)
 	}
 
 	if after := snapshot(t, f.dir); after != before {

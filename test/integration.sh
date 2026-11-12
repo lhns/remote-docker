@@ -2676,7 +2676,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "reading through a read-only cached mount: [$LAST_OUTPUT]"
         fi
         # actimeo=60 again: only the watcher's SETATTR, which a read-only
-        # export must still accept, refreshes it sooner.
+        # export must accept even when the mtime in it is the kernel's stale
+        # one, refreshes it sooner.
         echo "second" >"$ROCACHED/marker"
         if wait_output '^second$' 20 docker exec itest-ro-cached cat /w/marker; then
             ok "an edit here is visible through a read-only cached mount (${WAITED}s, under actimeo=60)"

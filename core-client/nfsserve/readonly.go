@@ -89,10 +89,9 @@ func readOnlyOf(f billy.Filesystem) bool {
 // the filesystem: go-nfs calls a billy.Change with paths, so attrChange would
 // write the real directory beside everything above.
 //
-// The one thing it lets through is an identity time-set (see Chtimes).
-type readOnlyChange struct {
-	fs billy.Filesystem
-}
+// The one thing it lets through is a time-set, which is never applied (see
+// Chtimes).
+type readOnlyChange struct{}
 
 var _ nfs.UnixChange = (*readOnlyChange)(nil)
 
@@ -109,26 +108,12 @@ func (c *readOnlyChange) Mknod(name string, _, _, _ uint32) error {
 func (c *readOnlyChange) Mkfifo(name string, _ uint32) error { return errReadOnly("mkfifo", name) }
 func (c *readOnlyChange) Socket(name string) error           { return errReadOnly("socket", name) }
 
-// Chtimes accepts a time-set that changes nothing and refuses every other.
+// Chtimes accepts every time-set and applies none, as the read-write share's
+// does (attrChange.Chtimes), so it writes nothing to this machine.
 //
-// The share reports a file's atime, mtime and ctime as one value, its
-// modification time, so a set is an identity exactly when both times it carries
-// equal that. go-nfs fills in the one a client left out from the current value,
-// so the agent's poker (an mtime set to the file's own, atime omitted) arrives
-// as an identity, succeeds, and the kernel raises its inotify event. A set to
-// any other time is refused, `touch` included. Like the read-write share's
-// Chtimes, an accepted one is not applied.
-func (c *readOnlyChange) Chtimes(name string, atime, mtime time.Time) error {
-	info, err := c.fs.Lstat(name)
-	if err != nil {
-		return err
-	}
-	current := info.ModTime()
-	same := func(t time.Time) bool {
-		return t.Unix() == current.Unix() && t.Nanosecond() == current.Nanosecond()
-	}
-	if !same(atime) || !same(mtime) {
-		return errReadOnly("set times", name)
-	}
-	return nil
-}
+// Refusing the ones that are not an identity breaks the agent's poker under
+// read=cached: it sets the mtime its own kernel last saw, and with a long
+// attribute cache that is older than the file's, so the "identity" arrives as a
+// different time. The kernel refreshes its attributes only from a successful
+// reply, so refusing it leaves the mount stale for the whole cache lifetime.
+func (c *readOnlyChange) Chtimes(string, time.Time, time.Time) error { return nil }

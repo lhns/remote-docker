@@ -8,7 +8,8 @@
   option, or `ReadOnly` on a `--mount` entry) still stays on the container's
   mount and also makes the share read-only: it is a variant of its own, its NFS
   filesystem on this machine refuses every mutation, and `write=back` becomes
-  `write=ephemeral` for it. Only the agent's no-op time-set still succeeds.
+  `write=ephemeral` for it. A time-set still succeeds, and is applied by
+  nothing, because the agent's poker depends on it.
 
 ## What forced it
 
@@ -55,7 +56,7 @@ silently. So the capability stays and the refusal is one layer down.
   target clearing a RENAME does), `MkdirAll`, `Symlink`, `TempFile`.
   `Chroot` re-wraps, so a mount of `/m/<id>/sub` is as read-only as the root.
 - **Change layer** (`readOnlyChange`): `Chmod`, `Chown`, `Lchown`, `Link`,
-  `Mknod`, `Mkfifo`, `Socket`, and `Chtimes` unless it is an identity.
+  `Mknod`, `Mkfifo` and `Socket`.
 - **Status**: NFS3ERR_ACCES. go-nfs answers NFS3ERR_ROFS only from the
   capability check this design avoids. A container sees `Permission denied`,
   not `Read-only file system`.
@@ -63,21 +64,21 @@ silently. So the capability stays and the refusal is one layer down.
   WRITE able to succeed it has nothing to flush. It is pinned as changing
   nothing.
 
-### The identity time-set
+### Time-sets are accepted and never applied
 
-go-nfs calls `Chtimes` for every SETATTR that carries a time (it compares two
-pointers, so the "unchanged" test never holds). `readOnlyChange.Chtimes`
-therefore decides itself: it accepts the call, without applying it, exactly when
-both times equal the file's current modification time to the nanosecond, and
-refuses it otherwise.
-
-- go-nfs substitutes the file's current value for a time the client left out,
-  and the share reports atime, mtime and ctime as one value, so the poker's
-  mtime-only set arrives as an identity.
-- Any other time, including `touch` and a time set to the server's, is refused.
-- Size, mode and owner are refused whatever they say, including a value equal
-  to the current one.
-- Like the read-write share's `Chtimes`, an accepted set is not applied.
+- go-nfs calls `Chtimes` for every SETATTR that carries a time, and
+  `attrChange.Chtimes` accepts and discards it on every share, so no time-set
+  writes anything on this machine. The read-only share does the same.
+- An identity-only rule (accept when both times equal the file's current
+  modification time, refuse otherwise) was built first and failed in CI: under
+  `read=cached` (`actimeo=60`) the poker's `lstat` is served from the kernel's
+  attribute cache, so the mtime it sets is the one the kernel last saw, older
+  than the server's. The SETATTR was refused, and a kernel refreshes its
+  attributes only from a successful reply, so the mount stayed stale. The
+  edit-here-is-visible assertion in `test/integration.sh` 15c2 caught it.
+- So `touch` on a read-only share succeeds and changes nothing, as on a
+  read-write one. Size, mode and owner are refused whatever they say,
+  including a value equal to the current one.
 
 ### Containment
 

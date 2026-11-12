@@ -118,7 +118,7 @@ func (h *mountHandler) Mount(_ context.Context, _ net.Conn, req nfs.MountRequest
 // name but the file itself. A read-only share (ADR 0058) refuses all of it.
 func (h *mountHandler) Change(fs billy.Filesystem) billy.Change {
 	if readOnlyOf(fs) {
-		return &readOnlyChange{fs: fs}
+		return &readOnlyChange{}
 	}
 	c := &attrChange{root: fs.Root()}
 	if one, ok := singleFileOf(fs); ok {

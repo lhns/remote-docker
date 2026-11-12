@@ -341,8 +341,10 @@ premise of the project, and it applies to building it too. So:
   mutation (`nfsserve.readOnlyFS`), so a container mounting the `rd-` volume by
   name without `ro` is refused too. It is a wrapper and never a
   `billy.WriteCapability` flag, which would make go-nfs refuse SETATTR and strip
-  write from ACCESS: the agent's poker needs an identity time-set to succeed
-  (`readOnlyChange.Chtimes`), or `ro` with `watch=` silently stops working. A
+  write from ACCESS: the agent's poker needs its time-set to succeed
+  (`readOnlyChange.Chtimes` accepts every one and applies none: an identity-only
+  rule fails under `read=cached`, where the poker's mtime is stale), or `ro`
+  with `watch=` silently stops working. A
   read-write export of the same directory still writes the same files. Both
   paths carry the flag
   because neither interprets what it does not have to: `Binds` keeps the
