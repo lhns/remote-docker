@@ -785,15 +785,23 @@ nothing changes at the boundary. *Covered by* `nfsserve/chmod_test.go` for the
 mode, and for chown only by `test/fs-conformance.sh`, whose `attrs/chown-*`
 steps are listed deviations: no unit test asserts that chown is dropped.
 
-**T — `:ro` is the workspace's promise, not the export's (10, 11).** A
-read-only bind keeps its `ro` through the rewrite, and the workspace's daemon
-enforces it on the container. The export behind it is read-write
-(`rewrite.go`, `fileMount`), and `ro` is not part of a share's variant, so
-whoever reaches the export (the workspace's operator, a host-networked
-container, every shell on a shared daemon) can write to a directory the user
-bound read-only. That holds against containers, which is what CLAUDE.md
-promises, and not against the workspace itself. *Covered by* `integration.sh`
-section 9b, for the container.
+**T — `:ro` is the workspace's promise unless read-only exports are on (10,
+11).** A read-only bind keeps its `ro` through the rewrite, and the workspace's
+daemon enforces it on the container. By default the export behind it is
+read-write (`rewrite.go`, `fileMount`) and `ro` is not part of a share's
+variant, so whoever reaches the export (the workspace's operator, a
+host-networked container, every shell on a shared daemon, or a container
+mounting the `rd-` volume by name) can write to a directory the user bound
+read-only. With `read-only-exports` on for the workspace (ADR 0058), `ro` makes
+the share a variant of its own whose filesystem on this machine refuses every
+mutation (`core-client/nfsserve/readonly.go`) except a time-set, which no share
+applies; `write=back` becomes `write=ephemeral` for it, so nothing is carried
+home either. It protects a directory only while nothing mounts it read-write,
+since that export reaches the same files, and a container keeps the volume it
+was created with until it is recreated. *Covered by* `integration.sh` section
+9b (the container, and the volume writable by name with the setting off) and
+15c2 (the same write refused with it on, watching and `read=cached` still
+working), and `readonly_test.go` over a real NFS conversation.
 
 **I — share variants change what is reported, not what is enforced (10, 11).**
 `owner=`, `fmask=` and `dmask=` give one directory an export per combination
@@ -1306,12 +1314,17 @@ daemon the operator's path down to the cache volume is followed as it is, so a
 data root behind a link keeps working, and only what is under the volume is
 confined. *Covered by* `contain_test.go` and `symlink_test.go`, on Linux in CI.
 
-**What still resolves by path.** The notify poker (flow 6) follows an
-intermediate link inside a share and refuses only one at the end; it opens
-nothing for writing and sets only identity times. `union.Alive`,
-`union.MountedShares` and `unions.Capability` stat paths under the daemon's
-root, so an account can make its own union look mounted or capable, which
-reads and writes nothing.
+**The probes walk without following links.** The notify poker (flow 6) and
+the checks of whether a union is mounted (`union.Alive`,
+`union.MountedShares`) walk their path one component at a time from the
+daemon's root, or with the shared daemon from the volume's mountpoint and
+`/run/rd-union`, refusing a link in any component (`core-agent/nofollow`), and
+the poke acts on the descriptor the walk reached. `unions.Capability` looks for
+`/dev/fuse` and `fuse-overlayfs` through a root confined to the daemon's
+filesystem, so a link inside the image such as `/bin` is followed and one that
+leaves it finds nothing. *Covered by* `nofollow/open_linux_test.go`,
+`replay/poke_linux_test.go`, `union/contain_linux_test.go` and
+`unions/capability_test.go`, on Linux in CI.
 
 **S — the owner a prepare names (1, 3).** Any uid and gid
 (`workspace.ParseOwner`): it decides who owns the asking machine's own union
@@ -1941,6 +1954,11 @@ Stated here rather than buried, because each is a deliberate trade.
   the mechanism. There is no way around it while the remote daemon does the
   pulling, so treat a workspace as trusted with every registry you log into
   from it, and prefer tokens scoped to what that workspace needs.
+- **By default `:ro` holds against containers only** (flow 3, ADR 0058). The
+  workspace side can write a read-only bind's directory through its export
+  unless `read-only-exports` is on, which is off because it protects only a
+  directory never mounted read-write and splits a read-only mount from a
+  read-write one of the same directory.
 - **A build gives BuildKit what the build session can serve** (flow 14). The
   auth provider hands over the stored login for any registry the daemon names,
   the daemon chooses the filter over every directory the build registers, so
@@ -2002,6 +2020,11 @@ Stated here rather than buried, because each is a deliberate trade.
 - **A `null` port binding no longer stops the client** (0.16.7). The workspace
   answering an inspect with `[null]` in `PortBindings` panicked the session.
   Flow 5.
+- **The watch poke and the union probes walk without following links**
+  (0.16.7). They joined the daemon's reported path onto `/proc/<pid>/root` and
+  refused a link only at the end. Flow 9.
+- **A read-only bind can be a read-only export** (0.16.7, opt-in, ADR 0058).
+  `ro` held against containers only. Flow 3.
 - **The service's DACL is asserted exactly** (`test/msi.ps1` section 14). The
   check looked for the grants it expected, so a DACL that also let
   Authenticated Users stop the service passed it. Flow 11.
