@@ -100,6 +100,11 @@ type Rewriter struct {
 	Mode      workspace.Mode
 	ModePaths map[string]workspace.Mode
 
+	// ReadOnlyExports makes a read-only bind a read-only share (ADR 0058).
+	// Off, `ro` stays on the container's mount alone and every share is what
+	// it was before the setting existed.
+	ReadOnlyExports bool
+
 	// ShareOwner is the owner a mount naming none reports (ADR 0046). The
 	// session always sets it, root unless REMOTE_DOCKER_SHARE_OWNER says
 	// otherwise; a Rewriter built without one treats it as root.
@@ -393,6 +398,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]bool, host
 			return nil, err
 		}
 		parsed.Options = options
+		asked.ReadOnly = r.ReadOnlyExports && optionRO(options)
 		words, err := r.resolveMount(ctx, modes, parsed.Source, asked, spelled)
 		if err != nil {
 			return nil, err
@@ -428,7 +434,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]bool, host
 }
 
 // fileMount renders a single-file bind as a volume mount. Typed, since it has
-// no caller fields to preserve. `ro` must survive (the export is read-write),
+// no caller fields to preserve. `ro` stays on the container's mount (ADR 0058),
 // and any option beyond ro/rw is refused rather than dropped.
 func fileMount(volume, file string, bind BindSpec) (map[string]json.RawMessage, error) {
 	readOnly := false
@@ -536,6 +542,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]bool, hos
 		if err != nil {
 			return err
 		}
+		asked.ReadOnly = r.ReadOnlyExports && mountReadOnly(mount)
 		words, err := r.resolveMount(ctx, modes, source, asked, spelled)
 		if err != nil {
 			return err

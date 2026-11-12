@@ -332,9 +332,21 @@ premise of the project, and it applies to building it too. So:
   of that rule. The forward manager lists containers around the proxy and must
   keep seeing the daemon's numbers.
 - **A rewritten mount keeps every option it arrived with, `ro` above all.**
-  A bind becomes an NFS volume the workspace daemon mounts for itself, and that
-  export is read-write -- so the read-only flag surviving the rewrite is the
-  only thing between a container and the user's files. Both paths carry it
+  The flag stays on the container's mount, where the daemon enforces it. With
+  the opt-in `read-only-exports` setting (off by default; off changes nothing)
+  it ALSO makes the share read-only (ADR 0058): `ShareVariant.ReadOnly`, read from the
+  `Binds` option list or `ReadOnly: true` on a `Mounts` entry, so a read-only
+  and a read-write mount of one directory are two shares, and `write=back`
+  becomes `write=ephemeral` for it. This machine's NFS server then refuses every
+  mutation (`nfsserve.readOnlyFS`), so a container mounting the `rd-` volume by
+  name without `ro` is refused too. It is a wrapper and never a
+  `billy.WriteCapability` flag, which would make go-nfs refuse SETATTR and strip
+  write from ACCESS: the agent's poker needs its time-set to succeed
+  (`readOnlyChange.Chtimes` accepts every one and applies none: an identity-only
+  rule fails under `read=cached`, where the poker's mtime is stale), or `ro`
+  with `watch=` silently stops working. A
+  read-write export of the same directory still writes the same files. Both
+  paths carry the flag
   because neither interprets what it does not have to: `Binds` keeps the
   trailing option field verbatim, and a `Mounts` entry stays a generic map with
   only `Type` and `Source` touched. `BindOptions` is the one deliberate
@@ -403,7 +415,8 @@ premise of the project, and it applies to building it too. So:
   when this machine has one.
 - **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]`, `fmask=O`,
   `dmask=O`, `watch=off|partial|coarse` or `prefetch=off|eager|tree`, nothing
-  else, and it is consumed, never forwarded** (ADR 0042). `owner=`, the masks,
+  else, and it is consumed, never forwarded** (ADR 0042). The variant also
+  includes a read-only bind (`ro`, Docker's word, not consumed) when `read-only-exports` is on (ADR 0058). `owner=`, the masks,
   `watch=` and `prefetch=` are words of the SHARE and not of the mode:
   `workspace.ParseMode` (the session settings) refuses them, `ParseMount` reads
   them, and `IsModeWord` claims the key so a misspelt value is
@@ -1419,6 +1432,15 @@ is a tmpfs AND a mount of its own, pid 1 is planted in its `containerd.pid`,
 and the daemon must come back after `docker restart -t 0` with the planted pid
 gone. Both halves, because a daemon that happened to start would otherwise hide
 a missing mount until the next coincidence.
+
+Read-only exports (ADR 0058), green on PR 379 (2026-11-12): in `integration.sh`
+9b, with the setting off, the volume of a `:ro` bind mounted by name without
+`ro` is writable, which is the default; in 15c2, with it on, the same write is
+refused and the directory here is unchanged, a `ro` mount with `watch=partial`
+still fires inotify, a `ro,read=cached` mount sees an edit made here within 20s,
+and a `ro` mount asking `write=back` is a union with no write-back in `remote
+status`. Planting a file in that union's cache layer from the workspace is not
+run.
 
 Host ports (ADR 0057), green on PR 367 (2026-11-06): in `integration.sh` 10c a
 container on the default bridge and one on a user-defined network reading a

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/lhns/remote-docker/core/workspace"
@@ -63,6 +64,24 @@ func takeMode(mount map[string]json.RawMessage) (workspace.MountWords, string, e
 	}
 	delete(mount, "Consistency")
 	return got, dockerSpelling(value), nil
+}
+
+// optionRO reports whether a `-v` option list holds Docker's own `ro`, which
+// stays on the container's mount and also makes the share read-only (ADR 0058).
+func optionRO(options string) bool {
+	for _, opt := range strings.Split(options, ",") {
+		if strings.TrimSpace(opt) == "ro" {
+			return true
+		}
+	}
+	return false
+}
+
+// mountReadOnly reports whether a `--mount` entry asks for ReadOnly.
+func mountReadOnly(mount map[string]json.RawMessage) bool {
+	var readOnly bool
+	raw, ok := mount["ReadOnly"]
+	return ok && json.Unmarshal(raw, &readOnly) == nil && readOnly
 }
 
 // withoutOurWords takes our words (read=, write=, owner=) out of an option list
@@ -159,6 +178,11 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, sou
 	if !resolved.DMask.Set {
 		resolved.DMask = workspace.Mask{Bits: r.ShareDMask.Bits, Set: true}
 	}
+	// Write-back is a second way into the user's directory (ADR 0058): nothing
+	// the workspace writes into a read-only share is carried home.
+	if resolved.ReadOnly && resolved.Mode.Write == workspace.WriteBack {
+		resolved.Mode.Write = workspace.WriteEphemeral
+	}
 	got := resolved.Mode
 
 	watch, err := r.resolveWatch(source, asked.Watch, got)
@@ -184,7 +208,8 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, sou
 	}
 
 	key := workspace.CanonicalKey(source) + "\x00" + got.String() + "\x00" + resolved.Owner.String() +
-		"\x00" + resolved.FMask.String() + "\x00" + resolved.DMask.String()
+		"\x00" + resolved.FMask.String() + "\x00" + resolved.DMask.String() +
+		"\x00" + strconv.FormatBool(resolved.ReadOnly)
 	if mounts[key] {
 		// The union, its owner and the share are settled by the first mount of
 		// the variant. This one may still ask for a watch the first did not.

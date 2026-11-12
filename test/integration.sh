@@ -428,6 +428,24 @@ else
     bad "a read-only mount could not be read: $(echo "$out" | tail -2 | tr '\n' ' ')"
 fi
 
+# The default, documented: with read-only-exports off (ADR 0058) `ro` binds only
+# the container that carries it, and the export behind it is read-write. A
+# container naming the same rd- volume without `ro` writes. This is also what
+# proves the setting is a switch: section 15c2 runs the same thing with it on.
+if dockert run -d --name itest-ro-holder -v "$PROJECT:/w:ro" alpine:3 sleep 300 >/dev/null 2>&1; then
+    rovol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-ro-holder 2>/dev/null)
+    if [ -n "$rovol" ] && out=$(dockert run --rm -v "$rovol:/w" alpine:3 sh -c 'echo off > /w/by-name-off' 2>&1) &&
+        [ -f "$PROJECT/by-name-off" ]; then
+        ok "with read-only-exports off, the volume of a ro bind is writable by name (the default)"
+        rm -f "$PROJECT/by-name-off"
+    else
+        bad "with read-only-exports off, a write by name to [$rovol] failed: [${out:-}]"
+    fi
+else
+    bad "the read-only holder container would not start"
+fi
+docker rm -f itest-ro-holder >/dev/null 2>&1
+
 echo
 echo "== 9c. a single file can be bind mounted =="
 # A file has no directory to export, so the client exports a SYNTHESISED
@@ -2288,7 +2306,7 @@ echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
     # Prefetch is off by default (ADR 0045); this client turns the tree on so
     # 15c and 15e keep covering it. The other suites run the default.
-    REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
+    REMOTE_DOCKER_READONLY_EXPORTS=on REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
     if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
@@ -2563,6 +2581,147 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     # client restart.
 else
     bad "no client is running, so the union could not be tested"
+fi
+
+echo
+echo "== 15c2. a read-only bind keeps watching, caching and unions working (ADR 0058) =="
+# The export refuses writes, but the agent's poker sets an mtime to its own value
+# and opens the file for writing, and both must still succeed or an edit here
+# stops reaching a read-only container. Uses section 15's watching client, which
+# runs with REMOTE_DOCKER_READONLY_EXPORTS=on.
+ROWATCH="$WORK/ro-watch"
+mkdir -p "$ROWATCH"
+echo "before the watch" >"$ROWATCH/reloaded.txt"
+
+# With read-only-exports on, the export behind a read-only bind refuses writes itself (ADR 0058), so a
+# container that reaches the volume WITHOUT `ro` is refused too. A named volume
+# is never rewritten, so naming the rd- volume is exactly that: another
+# container, with no flag, on the same export. The refusal is the NFS server's,
+# so it reads "Permission denied" and not "Read-only file system".
+if dockert run -d --name itest-ro-holder -v "$PROJECT:/w:ro" alpine:3 sleep 300 >/dev/null 2>&1; then
+    rovol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-ro-holder 2>/dev/null)
+    info "the read-only share's volume is [$rovol]"
+    if [ -z "$rovol" ]; then
+        bad "no volume name for the read-only share"
+    else
+        out=$(dockert run --rm -v "$rovol:/w" alpine:3 sh -c 'echo nope > /w/by-name' 2>&1) && rc=0 || rc=$?
+        if [ "$rc" -ne 0 ] && [[ $out == *"Permission denied"* ]]; then
+            ok "a container mounting the read-only share's volume by name is refused a write by the export"
+        else
+            bad "a write through the read-only volume by name was not refused (rc=$rc): [$out]"
+        fi
+        out=$(dockert run --rm -v "$rovol:/w" alpine:3 sh -c '
+            rm /w/marker 2>&1; touch /w/marker2 2>&1; mkdir /w/d 2>&1; chmod 600 /w/marker 2>&1; ln /w/marker /w/hard 2>&1; mv /w/marker /w/moved 2>&1; true' 2>&1)
+        refused=$(grep -c "Permission denied" <<<"$out" || true)
+        if [ "$refused" -ge 6 ]; then
+            ok "remove, create, mkdir, chmod, link and rename by name are refused too"
+        else
+            bad "mutations by name were refused $refused times of 6: [$out]"
+        fi
+        if [ -f "$PROJECT/marker" ] && [ ! -e "$PROJECT/by-name" ] && [ ! -e "$PROJECT/marker2" ] &&
+            [ ! -d "$PROJECT/d" ] && [ ! -e "$PROJECT/hard" ] && [ ! -e "$PROJECT/moved" ]; then
+            ok "the directory on this machine is unchanged"
+        else
+            bad "the directory changed through the read-only volume: $(ls "$PROJECT" | tr '\n' ' ')"
+        fi
+        if outputs 'from the project directory' dockert run --rm -v "$rovol:/w" alpine:3 cat /w/marker; then
+            ok "the read-only volume is still readable by name"
+        else
+            bad "the read-only volume could not be read by name: [$LAST_OUTPUT]"
+        fi
+    fi
+else
+    bad "the read-only holder container would not start"
+fi
+docker rm -f itest-ro-holder >/dev/null 2>&1
+
+if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" &&
+    [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if ! dockert run -d --name itest-ro-watch \
+        -v "$PROJECT:/probe:ro" \
+        -v "$ROWATCH:/data:ro,watch=partial" \
+        alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/ro-watch-run.log" 2>&1; then
+        bad "the read-only watch probe container would not start"
+        sed 's/^/        /' "$WORK/ro-watch-run.log"
+    else
+        wait_ready itest-ro-watch 30
+        sleep 2
+        echo "edited on the client at $(date +%s)" >"$ROWATCH/reloaded.txt"
+        timeout 90 docker wait itest-ro-watch >/dev/null 2>&1
+        rowatch=$(docker logs itest-ro-watch 2>&1)
+        echo "        events for the edited file:"
+        echo "$rowatch" | grep -E "^INOTIFY .* reloaded\.txt$" | sort | uniq -c | sed 's/^/          /'
+        if echo "$rowatch" | grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* reloaded\.txt$"; then
+            ok "an edit here fires inotify in a read-only container with watch=partial"
+        else
+            bad "a read-only mount's watcher never fired: $(echo "$rowatch" | tail -5 | tr '\n' ' ')"
+            sed 's/^/        /' "$WORK/watch-up.log" | tail -20
+        fi
+    fi
+    docker rm -f itest-ro-watch >/dev/null 2>&1
+    rm -f "$PROJECT/watchprobe"
+else
+    bad "could not build the read-only watch probe, or no watching client is running"
+fi
+
+ROCACHED="$WORK/ro-cached"
+mkdir -p "$ROCACHED"
+echo "first" >"$ROCACHED/marker"
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-ro-cached -v "$ROCACHED:/w:ro,read=cached" \
+        alpine:3 sleep 300 >"$WORK/ro-cached-run.log" 2>&1; then
+        if outputs '^first$' docker exec itest-ro-cached cat /w/marker; then
+            ok "a read-only read=cached mount reads the file"
+        else
+            bad "reading through a read-only cached mount: [$LAST_OUTPUT]"
+        fi
+        # actimeo=60 again: only the watcher's SETATTR, which a read-only
+        # export must accept even when the mtime in it is the kernel's stale
+        # one, refreshes it sooner.
+        echo "second" >"$ROCACHED/marker"
+        if wait_output '^second$' 20 docker exec itest-ro-cached cat /w/marker; then
+            ok "an edit here is visible through a read-only cached mount (${WAITED}s, under actimeo=60)"
+        else
+            bad "the read-only cached mount still reads [$LAST_OUTPUT] after 20s"
+        fi
+    else
+        bad "a read-only cached mount would not start"
+        sed 's/^/        /' "$WORK/ro-cached-run.log"
+    fi
+    docker rm -f itest-ro-cached >/dev/null 2>&1
+fi
+
+# write=back on a read-only mount is write=ephemeral: nothing is carried home.
+# The share still has its union and cache, and no write-back row. A file planted
+# in the cache layer from the workspace side is not exercised: the layer's path
+# is the agent's, and a guess at it would pass vacuously.
+ROUNION="$WORK/ro-union"
+mkdir -p "$ROUNION"
+echo "lower" >"$ROUNION/marker"
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-ro-union -v "$ROUNION:/w:ro,read=cached,write=back" \
+        alpine:3 sleep 300 >"$WORK/ro-union-run.log" 2>&1; then
+        if union_is_fuse docker itest-ro-union; then
+            ok "a read-only write=back mount is still a union"
+        else
+            bad "a read-only write=back mount is not a fuse mount: [$LAST_OUTPUT]"
+        fi
+        if outputs '^lower$' docker exec itest-ro-union cat /w/marker; then
+            ok "the read-only union reads through"
+        else
+            bad "reading the read-only union: [$LAST_OUTPUT]"
+        fi
+        rostatus=$("$WORK/remote-docker" remote status 2>&1)
+        if grep -qE "^ *cache .*$ROUNION" <<<"$rostatus" && ! grep -qE "^ *write-back .*$ROUNION" <<<"$rostatus"; then
+            ok "the share is cached and has no write-back: write=back became write=ephemeral"
+        else
+            bad "remote status for the read-only union: $(grep -F "$ROUNION" <<<"$rostatus" | tr '\n' ' ')"
+        fi
+    else
+        bad "a read-only write=back mount would not start"
+        sed 's/^/        /' "$WORK/ro-union-run.log"
+    fi
+    docker rm -f itest-ro-union >/dev/null 2>&1
 fi
 
 echo

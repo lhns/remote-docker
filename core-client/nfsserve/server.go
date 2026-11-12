@@ -115,8 +115,11 @@ func (h *mountHandler) Mount(_ context.Context, _ net.Conn, req nfs.MountRequest
 // Root() is the share's directory, which the names reaching attrChange are
 // relative to. For a single-file share that directory is the one CONTAINING
 // the file, so the change goes through singleFileChange, which refuses every
-// name but the file itself.
+// name but the file itself. A read-only share (ADR 0058) refuses all of it.
 func (h *mountHandler) Change(fs billy.Filesystem) billy.Change {
+	if readOnlyOf(fs) {
+		return &readOnlyChange{}
+	}
 	c := &attrChange{root: fs.Root()}
 	if one, ok := singleFileOf(fs); ok {
 		return &singleFileChange{attrChange: c, fs: one}

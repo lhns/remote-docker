@@ -10,6 +10,30 @@ software.
 
 ## Unreleased
 
+### New
+
+- **`read-only-exports`: serve a read-only bind as a read-only export, off by
+  default.** `ro` (`-v ...:ro`, or `readonly` on `--mount`) stays on the
+  container's mount, which is all it protected. With the setting on
+  (`readOnlyExports`, `REMOTE_DOCKER_READONLY_EXPORTS=on`, `remote set <name>
+  --read-only-exports on`) this machine's NFS server also refuses every write
+  to the share, so anything else on the workspace that reaches the export, such
+  as another container mounting the `rd-` volume by name without `ro`, is
+  refused too. The watcher's no-op time-set still succeeds, so `watch=` and
+  `read=cached` keep working, and `write=back` on a read-only mount becomes
+  `write=ephemeral`. It is read when the session starts and applies to mounts
+  made afterwards; existing containers keep their volume until recreated
+  (`compose down && up`). It is off because the benefit is narrow: it protects
+  a directory only against the workspace side, and only while nothing mounts
+  that directory read-write, since a read-write export reaches the same files.
+  A read-only and a read-write mount of one directory are then two shares,
+  where they used to share an export and, under `write=back`, one union, so a
+  reader saw a writer's changes at once. Under `write=back` the read-only
+  container sees the other's writes only after write-back lands them on this
+  machine and its own share is refreshed (seconds), and the directory is cached
+  twice. Under `write=through` nothing changes in what is visible. With the
+  setting off nothing changes at all. See ADR 0058.
+
 ### Fixes
 
 - **The workspace agent resolves a cache's paths inside the account's own
