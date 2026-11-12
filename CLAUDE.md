@@ -1433,6 +1433,15 @@ and the daemon must come back after `docker restart -t 0` with the planted pid
 gone. Both halves, because a daemon that happened to start would otherwise hide
 a missing mount until the next coincidence.
 
+Read-only exports (ADR 0058), green on PR 379 (2026-11-12): in `integration.sh`
+9b, with the setting off, the volume of a `:ro` bind mounted by name without
+`ro` is writable, which is the default; in 15c2, with it on, the same write is
+refused and the directory here is unchanged, a `ro` mount with `watch=partial`
+still fires inotify, a `ro,read=cached` mount sees an edit made here within 20s,
+and a `ro` mount asking `write=back` is a union with no write-back in `remote
+status`. Planting a file in that union's cache layer from the workspace is not
+run.
+
 Host ports (ADR 0057), green on PR 367 (2026-11-06): in `integration.sh` 10c a
 container on the default bridge and one on a user-defined network reading a
 server on the runner's loopback through `host.docker.internal`, a port that is

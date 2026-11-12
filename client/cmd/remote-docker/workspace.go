@@ -264,7 +264,7 @@ func (o *onOffFlag) Set(s string) error {
 	*o = onOffFlag(v)
 	return err
 }
-func (o *onOffFlag) String() string { return map[bool]string{true: "on", false: "off"}[bool(*o)] }
+func (o *onOffFlag) String() string { return config.OnOff(bool(*o)) }
 func (o *onOffFlag) Type() string   { return "on|off" }
 
 func (f *workspaceFlags) given(name string) bool { return f.set.Lookup(name).Changed }

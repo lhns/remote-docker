@@ -35,8 +35,8 @@ func TestReadOnlyExportsPrecedence(t *testing.T) {
 	t.Setenv(EnvReadOnlyExports, "on")
 	var env Config
 	applyEnv(&env)
-	if !env.ReadOnlyExports || env.SessionSettings()["readonly-exports"] != "on" {
-		t.Errorf("the environment did not turn it on: %v", env.SessionSettings()["readonly-exports"])
+	if !env.ReadOnlyExports || env.SessionSettings()["read-only-exports"] != "on" {
+		t.Errorf("the environment did not turn it on: %v", env.SessionSettings()["read-only-exports"])
 	}
 	t.Setenv(EnvReadOnlyExports, "garbage")
 	keep := Config{ReadOnlyExports: true}

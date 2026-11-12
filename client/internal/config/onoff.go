@@ -16,8 +16,8 @@ func ParseOnOff(s string) (bool, error) {
 	return false, fmt.Errorf("%q is not on or off", s)
 }
 
-// onOff is a switch in its one spelling.
-func onOff(b bool) string {
+// OnOff is a switch in its one spelling.
+func OnOff(b bool) string {
 	if b {
 		return "on"
 	}
