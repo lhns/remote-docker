@@ -1592,8 +1592,9 @@ the command that adds them. A stricter reading is the safe direction.
 `installer/windows/remote-docker.wxs`) gives Authenticated Users query, start
 and read control, and no stop, pause, configuration or DACL right, so a standard
 user starting a stopped service is how the client reaches it. *Covered by*
-`test/msi.ps1` section 14, whose check refuses only `WD`, `DC`, `SD` and `WO`
-for that group: a grant of stop or pause would pass it.
+`test/msi.ps1` section 14 (`Assert-ServiceDacl`), which compares the DACL ACE by
+ACE and right by right with the installer's, after the install and after an
+upgrade.
 
 **T — the machine image the service downloads (9).** For a machine made
 through the service, SYSTEM downloads Flatcar from a pinned https URL, through
@@ -1940,6 +1941,31 @@ Stated here rather than buried, because each is a deliberate trade.
   the mechanism. There is no way around it while the remote daemon does the
   pulling, so treat a workspace as trusted with every registry you log into
   from it, and prefer tokens scoped to what that workspace needs.
+- **A build gives BuildKit what the build session can serve** (flow 14). The
+  auth provider hands over the stored login for any registry the daemon names,
+  the daemon chooses the filter over every directory the build registers, so
+  `.dockerignore` keeps nothing from the workspace and `-f` exposes its whole
+  directory, and an SSH git context forwards the default ssh-agent for the
+  length of the build. Stock docker against a remote daemon does the same; the
+  build runs on the workspace, so the workspace is trusted with what it builds
+  from.
+- **One account's disk use can remove another's unused images** (flow 13,
+  ADR 0056). The threshold is the workspace's disk, not the account's, so
+  pressure from one account prunes images every account last used more than an
+  hour ago. Pruning never removes a volume or a used image, and an image is a
+  pull away.
+- **Host ports are not counted, and the gateway is the workspace's word**
+  (flow 12). The client accepts any IPv4 literal as the gateway and lists as
+  many ports as the setting names; the agent refuses `0.0.0.0` and loopback,
+  and every port is one the user listed.
+- **The Hyper-V disk is hashed once** (flow 11). The download is checked
+  against the pinned SHA512 before it is unpacked, through a temporary renamed
+  into place; after that the disk is trusted for what can write its directory,
+  which is SYSTEM and Administrators under the service, or the user's own
+  profile without it. Either can already do more than replace a disk.
+- **An NFS connection buffers up to 8 requests of 2 MiB** (ADR 0047). It is the
+  price of answering requests concurrently, per connection, and only the
+  workspace's own NFS client reaches the export.
 - **A member of `remote-docker-users` can fill the disk** (ADR 0055). The
   Hyper-V service has no per-user quota, so one member can create machines
   until the disk is full. Members are users an administrator chose; flow 11 has
@@ -1976,6 +2002,9 @@ Stated here rather than buried, because each is a deliberate trade.
 - **A `null` port binding no longer stops the client** (0.16.7). The workspace
   answering an inspect with `[null]` in `PortBindings` panicked the session.
   Flow 5.
+- **The service's DACL is asserted exactly** (`test/msi.ps1` section 14). The
+  check looked for the grants it expected, so a DACL that also let
+  Authenticated Users stop the service passed it. Flow 11.
 
 - **Write-back goes through `os.Root`.** It used to check a joined path as a
   string and then follow any link in the share, so a container in a
