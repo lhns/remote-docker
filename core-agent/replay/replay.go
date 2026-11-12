@@ -17,7 +17,6 @@ import (
 	"io"
 	"log/slog"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +36,21 @@ import (
 // ADR 0016. It means no container enumeration, no PID lookup and no entering
 // anyone's mount namespace.
 type Volumes interface {
-	Mountpoint(ctx context.Context, volume string) (string, error)
+	Mountpoint(ctx context.Context, volume string) (Mount, error)
+}
+
+// Mount is where a volume is mounted, split at the point where the agent stops
+// trusting the path.
+type Mount struct {
+	// Trusted is a directory the agent chose: the daemon's root as the agent
+	// reaches it (/proc/<pid>/root) with a daemon per account, or the volume's
+	// mountpoint itself with the shared daemon. It may be reached through links.
+	Trusted string
+
+	// Path is the rest of the way to the volume, inside the daemon's filesystem
+	// and reported by the daemon, so untrusted and resolved without following a
+	// link. Empty when Trusted is already the volume.
+	Path string
 }
 
 // Poker performs the operation that makes a watcher notice a path.
@@ -46,7 +59,8 @@ type Volumes interface {
 // resolution, coarsening) is testable on a machine with no Linux kernel,
 // which is every development machine this project has.
 type Poker interface {
-	Poke(path string, isDir bool) error
+	// Poke touches rel below the directory trusted, following no link in rel.
+	Poke(trusted, rel string, isDir bool) error
 }
 
 // mountpointTTL is how long a resolved volume mountpoint is trusted. Short,
@@ -73,8 +87,8 @@ type Replayer struct {
 }
 
 type cachedMountpoint struct {
-	path string
-	at   time.Time
+	mount Mount
+	at    time.Time
 }
 
 // Serve reads frames until the stream ends.
@@ -186,22 +200,18 @@ func (r *Replayer) apply(ctx context.Context, frame notify.Frame) {
 
 // poke resolves an in-share path and performs the operation.
 func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
-	root, err := r.mountpoint(ctx, export)
-	if err != nil || root == "" {
+	mount, err := r.mountpoint(ctx, export)
+	if err != nil || mount.Trusted == "" {
 		return
 	}
-	abs, ok := resolve(root, share)
-	if !ok {
-		r.log().Warn("notify: a share does not resolve under its root",
-			"export", export, "share", share, "root", root)
-		return
-	}
-	if err := r.Poker.Poke(abs, isDir); err != nil {
+	// Cleaned as a rooted path, so no ".." survives to climb out of the mount.
+	rel := path.Join("/", mount.Path, path.Clean("/"+share))
+	if err := r.Poker.Poke(mount.Trusted, rel, isDir); err != nil {
 		// A path that is not there is the ordinary case, not a fault: the
 		// container may not have looked at it, or it may have changed again
 		// since. Debug, because logging every one at a higher level would
 		// drown the log during a build.
-		r.log().Debug("notify: poking a path", "path", abs, "err", err)
+		r.log().Debug("notify: poking a path", "mount", mount.Trusted, "path", rel, "err", err)
 	}
 }
 
@@ -213,16 +223,16 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 // poke reaches only the mount it names. Today there is exactly one, dockerd's
 // volume (ADR 0018). Adding a second mount without poking both would make
 // changes appear under one and not the other, with nothing failing.
-func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error) {
+func (r *Replayer) mountpoint(ctx context.Context, export string) (Mount, error) {
 	volume, err := workspace.VolumeNameForExport(r.Client, export)
 	if err != nil {
-		return "", err
+		return Mount{}, err
 	}
 
 	r.mu.Lock()
 	if c, ok := r.cached[volume]; ok && time.Since(c.at) < mountpointTTL {
 		r.mu.Unlock()
-		return c.path, nil
+		return c.mount, nil
 	}
 	r.mu.Unlock()
 
@@ -231,53 +241,20 @@ func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error
 		// A share no container has mounted yet is ordinary: the user shared a
 		// directory and has not started anything using it. Cached as empty so
 		// a stream of events does not become a stream of docker calls.
-		mp = ""
+		mp = Mount{}
 	}
 
 	r.mu.Lock()
 	if r.cached == nil {
 		r.cached = map[string]cachedMountpoint{}
 	}
-	r.cached[volume] = cachedMountpoint{path: mp, at: time.Now()}
+	r.cached[volume] = cachedMountpoint{mount: mp, at: time.Now()}
 	r.mu.Unlock()
 
-	if mp == "" {
-		return "", err
+	if mp.Trusted == "" {
+		return Mount{}, err
 	}
 	return mp, nil
-}
-
-// resolve joins an in-share path onto a root and confirms the result is still
-// under it.
-//
-// notify.Event.Validate has already refused "..", so this cannot fail for
-// a validated event. It is here because the consequence of being wrong is a
-// root process touching an arbitrary path, and a check that can only ever be
-// redundant is the right price for that.
-func resolve(root, share string) (string, bool) {
-	rel := strings.TrimPrefix(path.Clean("/"+share), "/")
-	abs := filepath.Join(root, filepath.FromSlash(rel))
-	if !Under(root, abs, string(filepath.Separator)) {
-		return "", false
-	}
-	return abs, true
-}
-
-// Under reports whether p is root itself or something inside it.
-//
-// The one containment check, for every root process here that is told which
-// path to touch: JOINING IS NOT CONTAINMENT. path.Join and filepath.Join both
-// CLEAN, so joining "/proc/42/root" to "/../../etc/shadow" yields
-// "/proc/etc/shadow": outside the root, with no error, looking correct. So the
-// RESULT of a join is checked, never its input.
-//
-// The separator is a parameter because the callers differ: resolve works in the
-// agent's own filesystem and uses filepath so its tests mean something on the
-// development machine, while Relocate and the union writer work on paths a
-// Linux daemon reported and use path. The prefix must include the separator or
-// "/proc/42/rootkit" passes as being under "/proc/42/root".
-func Under(root, p, sep string) bool {
-	return p == root || strings.HasPrefix(p, root+sep)
 }
 
 // parentDir is the in-share directory holding a path.

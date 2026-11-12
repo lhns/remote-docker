@@ -170,6 +170,10 @@ func WriteTarNaming(open func(string) (*os.File, error), files []TarFile, spool 
 	return unreadable, tar.NewWriter(spool).Close()
 }
 
+// statOpened is f.Stat, replaced by a test to make a file shrink between its
+// stat and its read.
+var statOpened = (*os.File).Stat
+
 // skipError is a file left out of the archive, as opposed to an archive that
 // cannot be written. err is nil for one that is simply not a regular file.
 type skipError struct{ err error }
@@ -184,7 +188,7 @@ func writeEntry(open func(string) (*os.File, error), file TarFile, w io.Writer) 
 		return &skipError{err}
 	}
 	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
+	info, err := statOpened(f)
 	if err != nil {
 		return &skipError{err}
 	}
@@ -213,11 +217,12 @@ func writeEntry(open func(string) (*os.File, error), file TarFile, w io.Writer) 
 		}
 		return fmt.Errorf("workspace: writing %s: %w", file.Name, err)
 	}
-	// A file that shrank while it was read: padded, as WriteTarFrom does.
-	if pad := header.Size - written; pad > 0 {
-		if _, err := tw.Write(make([]byte, pad)); err != nil {
-			return fmt.Errorf("workspace: padding %s: %w", file.Name, err)
-		}
+	// A file that shrank while it was read is cut out rather than padded as
+	// WriteTarFrom pads: this archive is carried back onto the user's machine,
+	// where NULs would be a wrong file, and the container's next listing
+	// reports the file again as it is now.
+	if written < header.Size {
+		return &skipError{}
 	}
 	// Pads the entry to its block; the trailer is the caller's.
 	if err := tw.Flush(); err != nil {

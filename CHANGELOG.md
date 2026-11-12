@@ -41,6 +41,16 @@ software.
   `write=back` or `write=ephemeral` share now goes through a root confined to
   that daemon, and a link that leaves it is refused. With the shared daemon the
   path down to the cache volume is followed as before.
+- **The workspace agent no longer follows links when it pokes a path for a
+  watcher.** The path is walked one component at a time from the daemon's root
+  (with the shared daemon, from the volume's mountpoint), a link in any
+  component is refused, and the poke acts on what the walk reached. The events
+  a watcher sees are unchanged.
+- **The union probes read the daemon's filesystem without following links.**
+  Whether a union is mounted, which shares are mounted and whether `/dev/fuse`
+  and `fuse-overlayfs` are present are asked of the account's daemon through
+  paths that are not followed through links. The capability check still follows
+  a link that stays inside the image, such as `/bin` to `usr/bin`.
 - **A large file carried back no longer has to fit in the agent's memory.** The
   agent spools what a container wrote to a temporary file and copies each file
   by the size it declared, and a FIFO in a share is skipped instead of
