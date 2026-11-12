@@ -129,6 +129,8 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   tokens/                single-use enrolment tokens: mint, claim by rename,
                          expiry, and the global failure limiter (ADR 0051)
   replay/                replays the client's changes as real syscalls
+  nofollow/              walking a path below a trusted directory without
+                         following a link in any component (Linux)
   nofollow/              resolve a path below a trusted directory with no link
                          followed in any component (poker, union probes)
   netns/                 run a function inside another process's netns
