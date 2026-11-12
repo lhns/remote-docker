@@ -25,7 +25,7 @@ type Target struct {
 
 	// Root is this daemon's filesystem as seen from the agent, where a volume
 	// mountpoint it reports lives: "/" or /proc/<pid>/root. What it reports is
-	// untrusted, since the account is root inside it; see replay.Relocate.
+	// untrusted, since the account is root inside it; see replay.Locate.
 	Root string
 
 	// PID is the process whose mount namespace a union is mounted INSIDE (ADR

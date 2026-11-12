@@ -9,6 +9,6 @@ import "errors"
 // cross-compile matrix stays green.
 type SyscallPoker struct{}
 
-func (SyscallPoker) Poke(string, bool) error {
+func (SyscallPoker) Poke(string, string, bool) error {
 	return errors.New("notify: replaying change events only works on Linux")
 }
