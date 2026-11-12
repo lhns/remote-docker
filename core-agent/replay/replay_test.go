@@ -24,7 +24,8 @@ type fakePoker struct {
 
 func newFakePoker() *fakePoker { return &fakePoker{dirs: map[string]bool{}} }
 
-func (p *fakePoker) Poke(path string, isDir bool) error {
+func (p *fakePoker) Poke(trusted, rel string, isDir bool) error {
+	path := filepath.Join(trusted, rel)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.poked = append(p.poked, path)
@@ -60,14 +61,14 @@ type fakeVolumes struct {
 	calls  int
 }
 
-func (v *fakeVolumes) Mountpoint(_ context.Context, volume string) (string, error) {
+func (v *fakeVolumes) Mountpoint(_ context.Context, volume string) (Mount, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.calls++
 	if mp, ok := v.byName[volume]; ok {
-		return mp, nil
+		return Mount{Trusted: mp}, nil
 	}
-	return "", errors.New("no such volume")
+	return Mount{}, errors.New("no such volume")
 }
 
 // share is the export most tests replay into, and shareVolume its volume.
@@ -225,21 +226,18 @@ func TestRefusesMalformedEvents(t *testing.T) {
 	}
 }
 
-// resolve is the last line of defence and must hold even if validation is
-// somehow bypassed.
-func TestResolveRefusesEscapes(t *testing.T) {
+// Validation refuses "..", but the path handed to the poker must not depend on
+// it: whatever the share says, the relative path stays below the mount.
+func TestPokedPathNeverClimbs(t *testing.T) {
 	root := filepath.FromSlash("/mnt/share")
-	for _, share := range []string{"/../etc", "/../../etc/shadow", "/a/../../.."} {
-		if got, ok := resolve(root, share); ok && !strings.HasPrefix(got, root) {
-			t.Errorf("resolve(%q, %q) = %q, which escapes the root", root, share, got)
+	for _, p := range []string{"/../etc", "/../../etc/shadow", "/a/../../.."} {
+		r, poker, _ := newReplayer(map[string]string{shareVolume: root})
+		r.poke(context.Background(), share, p, false)
+		for _, got := range poker.sorted() {
+			if !strings.HasPrefix(got, root) {
+				t.Errorf("path %q poked %q, which is outside %q", p, got, root)
+			}
 		}
-	}
-	// The ordinary cases still work.
-	if got, ok := resolve(root, "/a/b.go"); !ok || got != filepath.Join(root, "a", "b.go") {
-		t.Errorf("resolve of an ordinary path = %q, %v", got, ok)
-	}
-	if got, ok := resolve(root, "/"); !ok || got != root {
-		t.Errorf("resolve of the share root = %q, %v; want %q", got, ok, root)
 	}
 }
 

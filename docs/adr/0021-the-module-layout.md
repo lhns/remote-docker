@@ -284,7 +284,7 @@ The test is AGREEMENT, not "looks like infrastructure".
   identity; the hint names a file in the workspace's `authorized_keys.d`, which is
   policy.
 - Also not shared: `envOr`/`envInt` (small, differently shaped), and the
-  path-containment helpers — `replay.Relocate` guards untrusted daemon output and
+  path-containment helpers — `replay.Locate` and `core-agent/nofollow` guard untrusted daemon output and
   the client's lookalike is unrelated.
 
 ## The membership test, and why the obvious one fails

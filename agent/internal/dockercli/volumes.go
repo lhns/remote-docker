@@ -22,19 +22,19 @@ type Volumes struct {
 	Root func() (string, error)
 }
 
-func (v Volumes) Mountpoint(ctx context.Context, volume string) (string, error) {
+func (v Volumes) Mountpoint(ctx context.Context, volume string) (replay.Mount, error) {
 	host, err := call(v.Host)
 	if err != nil {
 		// Refused rather than falling back to "", which is the AGENT's daemon
 		// and holds a different set of volumes.
-		return "", fmt.Errorf("dockercli: locating the daemon holding volume %s: %w", volume, err)
+		return replay.Mount{}, fmt.Errorf("dockercli: locating the daemon holding volume %s: %w", volume, err)
 	}
 
 	mp, err := mountpoint(ctx, host, volume)
 	if err != nil {
-		return "", err
+		return replay.Mount{}, err
 	}
-	return replay.Relocate(mp, v.Root)
+	return replay.Locate(mp, v.Root)
 }
 
 // mountpoint asks the daemon at host where a volume's data is, in the daemon's

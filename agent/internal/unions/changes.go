@@ -267,7 +267,7 @@ type Spool struct {
 	Size int64
 }
 
-// Close closes the file and removes it.
+// Close closes the file and removes it, if pull could not already.
 func (s *Spool) Close() error {
 	err := s.File.Close()
 	_ = os.Remove(s.Name())
@@ -305,6 +305,11 @@ func pull(upper *os.Root, paths []string, carry bool) (*Spool, []cache.Unreadabl
 	if err != nil {
 		return nil, nil, fmt.Errorf("unions: spooling what the container wrote: %w", err)
 	}
+	// Unlinked at once, so an agent killed mid-pull leaves no copy of the
+	// container's files in /tmp; the open descriptor keeps it readable. Close
+	// removes it by name as well, for a platform that refuses to unlink an
+	// open file.
+	_ = os.Remove(f.Name())
 	spool := &Spool{File: f}
 	fail := func(err error) (*Spool, []cache.Unreadable, error) {
 		_ = spool.Close()

@@ -25,6 +25,8 @@ func TestEverySettingIsComparedOrExcluded(t *testing.T) {
 		switch v.Kind() {
 		case reflect.String:
 			v.SetString("x")
+		case reflect.Bool:
+			v.SetBool(true)
 		case reflect.Int, reflect.Int64:
 			v.SetInt(7)
 		case reflect.Slice:

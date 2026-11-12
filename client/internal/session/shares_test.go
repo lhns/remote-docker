@@ -257,6 +257,39 @@ func TestARecordCarriesTheVariant(t *testing.T) {
 	}
 }
 
+// A read-only share restores read-only, under the export its variant derives,
+// and a record that does not say is read-write (ADR 0058).
+func TestAReadOnlyRecordRestoresReadOnly(t *testing.T) {
+	st, project, _ := store(t)
+	words := alice1000
+	words.ReadOnly = true
+	ro := shareWith(t, project, workspace.DefaultMode, words)
+	st.remember(ro)
+
+	_, _, got, ok := newShareStore(st.path, nil).restore(ro.ExportPath)
+	if !ok || !got.ReadOnly {
+		t.Fatalf("restore = %+v, %v; want a read-only share", got, ok)
+	}
+
+	rw := shareWith(t, project, workspace.DefaultMode, alice1000)
+	if rw.ExportPath == ro.ExportPath {
+		t.Fatal("read-only and read-write share one export")
+	}
+	rec := recordFor(rw)
+	if rec.ReadOnly {
+		t.Error("a read-write share was recorded read-only")
+	}
+
+	// The flag cannot be flipped in the file: the export is recomputed.
+	flipped := recordFor(ro)
+	flipped.ReadOnly = false
+	next := newShareStore(filepath.Join(t.TempDir(), "shares.json"), nil)
+	next.records[flipped.Export] = flipped
+	if _, _, _, ok := next.restore(flipped.Export); ok {
+		t.Error("a read-only export restored as read-write")
+	}
+}
+
 // A record written before the variant was in the id has no read or write and
 // the export a path alone derived. It restores under that export with the mode
 // unknown, so the registry keeps it out of the by-path lookup.

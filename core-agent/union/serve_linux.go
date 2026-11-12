@@ -154,7 +154,7 @@ func setns(pid int, kind string, flag int) error {
 // a second container wants the same directory. The second call finds the mount
 // and says nothing.
 func mountLower(spec Spec) error {
-	if mountedAt(spec.Lower()) {
+	if mountedAt("/", spec.Lower()) {
 		return nil
 	}
 	source, fstype, data, words := spec.LowerMount()

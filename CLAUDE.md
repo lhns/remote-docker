@@ -129,6 +129,10 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   tokens/                single-use enrolment tokens: mint, claim by rename,
                          expiry, and the global failure limiter (ADR 0051)
   replay/                replays the client's changes as real syscalls
+  nofollow/              walking a path below a trusted directory without
+                         following a link in any component (Linux)
+  nofollow/              resolve a path below a trusted directory with no link
+                         followed in any component (poker, union probes)
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
   union/                 the cache over the live export: mounting it,
@@ -330,9 +334,21 @@ premise of the project, and it applies to building it too. So:
   of that rule. The forward manager lists containers around the proxy and must
   keep seeing the daemon's numbers.
 - **A rewritten mount keeps every option it arrived with, `ro` above all.**
-  A bind becomes an NFS volume the workspace daemon mounts for itself, and that
-  export is read-write -- so the read-only flag surviving the rewrite is the
-  only thing between a container and the user's files. Both paths carry it
+  The flag stays on the container's mount, where the daemon enforces it. With
+  the opt-in `read-only-exports` setting (off by default; off changes nothing)
+  it ALSO makes the share read-only (ADR 0058): `ShareVariant.ReadOnly`, read from the
+  `Binds` option list or `ReadOnly: true` on a `Mounts` entry, so a read-only
+  and a read-write mount of one directory are two shares, and `write=back`
+  becomes `write=ephemeral` for it. This machine's NFS server then refuses every
+  mutation (`nfsserve.readOnlyFS`), so a container mounting the `rd-` volume by
+  name without `ro` is refused too. It is a wrapper and never a
+  `billy.WriteCapability` flag, which would make go-nfs refuse SETATTR and strip
+  write from ACCESS: the agent's poker needs its time-set to succeed
+  (`readOnlyChange.Chtimes` accepts every one and applies none: an identity-only
+  rule fails under `read=cached`, where the poker's mtime is stale), or `ro`
+  with `watch=` silently stops working. A
+  read-write export of the same directory still writes the same files. Both
+  paths carry the flag
   because neither interprets what it does not have to: `Binds` keeps the
   trailing option field verbatim, and a `Mounts` entry stays a generic map with
   only `Type` and `Source` touched. `BindOptions` is the one deliberate
@@ -401,7 +417,8 @@ premise of the project, and it applies to building it too. So:
   when this machine has one.
 - **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]`, `fmask=O`,
   `dmask=O`, `watch=off|partial|coarse` or `prefetch=off|eager|tree`, nothing
-  else, and it is consumed, never forwarded** (ADR 0042). `owner=`, the masks,
+  else, and it is consumed, never forwarded** (ADR 0042). The variant also
+  includes a read-only bind (`ro`, Docker's word, not consumed) when `read-only-exports` is on (ADR 0058). `owner=`, the masks,
   `watch=` and `prefetch=` are words of the SHARE and not of the mode:
   `workspace.ParseMode` (the session settings) refuses them, `ParseMount` reads
   them, and `IsModeWord` claims the key so a misspelt value is
@@ -1204,9 +1221,15 @@ premise of the project, and it applies to building it too. So:
 - **A per-account daemon's answers are untrusted input.** It reports its own
   volume mountpoints and the account is root inside it. `path.Join` is not
   containment -- it CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is
-  `/proc/etc/shadow`, outside the root and looking correct. `replay.Relocate` checks
-  the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
-  tidiness the moment those paths left the agent's own filesystem.
+  `/proc/etc/shadow`, outside the root and looking correct. Nor does joining
+  stop a LINK: an absolute one in the middle resolves against the agent's root.
+  So the daemon's root and the path the daemon reported are kept apart
+  (`replay.Locate`, `replay.Mount`), and everything below the root is resolved
+  without following a link in any component: `core-agent/nofollow` for the
+  poker and the union probes (`union.Alive`, `MountedShares`), an `os.Root` for
+  the cache (`unions.openAt`) and for `unions.Capability`, which follows a link
+  that stays inside the image and nothing else. With the shared daemon the
+  trusted part runs down to where the account's own data starts.
 - **`rd-dind-<account>-lib` is the account, and the container in front of it is
   disposable.** The graph volume is named and labelled so the daemon container
   can be removed and recreated without losing anything, and so an operator can
@@ -1411,6 +1434,15 @@ is a tmpfs AND a mount of its own, pid 1 is planted in its `containerd.pid`,
 and the daemon must come back after `docker restart -t 0` with the planted pid
 gone. Both halves, because a daemon that happened to start would otherwise hide
 a missing mount until the next coincidence.
+
+Read-only exports (ADR 0058), green on PR 379 (2026-11-12): in `integration.sh`
+9b, with the setting off, the volume of a `:ro` bind mounted by name without
+`ro` is writable, which is the default; in 15c2, with it on, the same write is
+refused and the directory here is unchanged, a `ro` mount with `watch=partial`
+still fires inotify, a `ro,read=cached` mount sees an edit made here within 20s,
+and a `ro` mount asking `write=back` is a union with no write-back in `remote
+status`. Planting a file in that union's cache layer from the workspace is not
+run.
 
 Host ports (ADR 0057), green on PR 367 (2026-11-06): in `integration.sh` 10c a
 container on the default bridge and one on a user-defined network reading a

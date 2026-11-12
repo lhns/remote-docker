@@ -24,7 +24,7 @@ import (
 
 // shareRecord is one directory this workspace asked to export.
 //
-// Read, Write, Owner and the masks are the share's variant and Watch and
+// Read, Write, Owner, the masks and ReadOnly are the share's variant and Watch and
 // Prefetch its raised words, all resolved. A record without one predates the
 // word and takes the session's default, which is why the file version does not
 // move: a bump would make every restore fail after an upgrade (ADR 0027). A
@@ -41,6 +41,7 @@ type shareRecord struct {
 	Owner    string    `json:"owner,omitempty"` // uid:gid
 	FMask    string    `json:"fmask,omitempty"` // four octal digits
 	DMask    string    `json:"dmask,omitempty"`
+	ReadOnly bool      `json:"ro,omitempty"` // absent: read-write, as every record before it
 	Watch    string    `json:"watch,omitempty"`
 	Prefetch string    `json:"prefetch,omitempty"`
 }
@@ -77,6 +78,7 @@ func (r shareRecord) words() workspace.ShareWords {
 	if prefetch, err := workspace.ParsePrefetch(r.Prefetch); err == nil {
 		w.Prefetch = prefetch
 	}
+	w.ReadOnly = r.ReadOnly
 	return w
 }
 
@@ -97,6 +99,7 @@ func recordFor(share *nfsserve.Share) shareRecord {
 	if words.DMask.Bits != 0 {
 		rec.DMask = words.DMask.String()
 	}
+	rec.ReadOnly = words.ReadOnly
 	rec.Watch, rec.Prefetch = string(words.Watch), string(words.Prefetch)
 	return rec
 }

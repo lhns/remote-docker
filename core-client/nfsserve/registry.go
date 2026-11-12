@@ -39,7 +39,7 @@ type Share struct {
 	Mode workspace.Mode
 
 	// words are what this share is registered with, resolved: the owner and
-	// the masks are always set. They are identity and fixed, since the
+	// the masks are always set. They and ReadOnly are identity and fixed, since the
 	// filesystem is built with them and never replaced (ADR 0046); watch and
 	// prefetch are raised by later mounts, never lowered, hence the lock.
 	// Read with Words.
@@ -227,13 +227,20 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 		base, file = filepath.Dir(localPath), filepath.Base(localPath)
 	}
 
+	// A read-only share is wrapped between the stack and its attributes, so
+	// every mutation is refused before it reaches the disk and a Chroot into
+	// a subdirectory stays wrapped (ADR 0058).
+	stack := r.shareFS(base, file)
+	if words.ReadOnly {
+		stack = withReadOnly(stack)
+	}
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
 		Mode:       mode,
 		words:      words,
-		fs:         withAttrs(r.shareFS(base, file), attrs, exportPath, r.OnRead),
+		fs:         withAttrs(stack, attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
 	return share, nil

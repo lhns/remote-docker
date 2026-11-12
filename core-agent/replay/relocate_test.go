@@ -9,14 +9,15 @@ import (
 // A per-account daemon reports a mountpoint in ITS filesystem, which the agent
 // cannot open by that path. The root is how it reaches it, and this is the
 // whole of what changes for the replayer (ADR 0019).
-func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
-	got, err := Relocate("/var/lib/docker/volumes/rd-1111111111111111/_data",
+func TestLocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
+	got, err := Locate("/var/lib/docker/volumes/rd-1111111111111111/_data",
 		func() (string, error) { return "/proc/42/root", nil })
 	if err != nil {
-		t.Fatalf("relocate: %v", err)
+		t.Fatalf("locate: %v", err)
 	}
-	if want := "/proc/42/root/var/lib/docker/volumes/rd-1111111111111111/_data"; got != want {
-		t.Errorf("relocate = %q, want %q", got, want)
+	want := Mount{Trusted: "/proc/42/root", Path: "/var/lib/docker/volumes/rd-1111111111111111/_data"}
+	if got != want {
+		t.Errorf("locate = %+v, want %+v", got, want)
 	}
 }
 
@@ -29,7 +30,7 @@ func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
 // escape attempt, and the integration suite is what said so. The unit tests
 // asserted the value "/" without ever passing it through the code that reads
 // it, which is a test agreeing with a bug rather than catching it.
-func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
+func TestLocateLeavesOurOwnPathsAlone(t *testing.T) {
 	const mp = "/var/lib/docker/volumes/rd-1111111111111111/_data"
 
 	for _, root := range []func() (string, error){
@@ -37,8 +38,8 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 		func() (string, error) { return "", nil },
 		func() (string, error) { return "/", nil },
 	} {
-		if got, err := Relocate(mp, root); err != nil || got != mp {
-			t.Errorf("relocate = %q, %v; want it unchanged", got, err)
+		if got, err := Locate(mp, root); err != nil || got != (Mount{Trusted: mp}) {
+			t.Errorf("locate = %+v, %v; want the mountpoint trusted whole", got, err)
 		}
 	}
 }
@@ -47,57 +48,36 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 // unrelocated path. That path EXISTS in the agent's filesystem: it is the
 // shared daemon's, so a silent fallback would replay one account's edits
 // into another daemon's volume.
-func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
+func TestLocateFailsRatherThanFallingBack(t *testing.T) {
 	boom := errors.New("no such daemon")
 
-	got, err := Relocate("/var/lib/docker/volumes/rd-1111111111111111/_data",
+	got, err := Locate("/var/lib/docker/volumes/rd-1111111111111111/_data",
 		func() (string, error) { return "", boom })
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want it to carry the cause", err)
 	}
-	if got != "" {
-		t.Errorf("a path was returned alongside the error: %q", got)
+	if got != (Mount{}) {
+		t.Errorf("a mount was returned alongside the error: %+v", got)
 	}
 }
 
-// A mountpoint that climbs out of the root must be refused, not cleaned.
+// A mountpoint that climbs is cleaned against the daemon's root, so it can
+// never name anything outside it.
 //
-// This is the test that found the hole. Joining looks like containment and is
-// not: path.Join CLEANS, so "/proc/42/root" joined to "/../../etc/shadow" is
-// "/proc/etc/shadow": outside the root, no error, looking right.
-//
-// It matters because of what this input is. The mountpoint is whatever the
-// account's daemon says, and in per-account mode the account is root inside
-// that daemon's container, so this is attacker-controlled input to a root
-// process choosing a path to touch.
-func TestRelocateRefusesAPathThatLeavesTheRoot(t *testing.T) {
-	// Only paths that actually leave. "/var/lib/docker/../../../etc" is NOT
-	// one of them: its .. are absorbed before they reach the root, landing on
-	// /etc inside the account's own container, which is the account's own
-	// business.
-	for _, mp := range []string{
-		"/../../etc/shadow",
-		"/..",
-		"/../../../",
-	} {
-		got, err := Relocate(mp, func() (string, error) { return "/proc/42/root", nil })
-		if err == nil {
-			t.Errorf("Relocate(%q) = %q with no error; it escaped the daemon's root", mp, got)
+// The mountpoint is whatever the account's daemon says, and in per-account mode
+// the account is root inside that daemon's container, so this is
+// attacker-controlled input to a root process choosing a path to touch. Joining
+// it to the root would look like containment and is not (path.Join cleans, and
+// "/proc/42/root" + "/../../etc/shadow" is "/proc/etc/shadow"), which is why
+// the two stay apart.
+func TestLocateKeepsAClimbingMountpointInsideTheRoot(t *testing.T) {
+	for _, mp := range []string{"/../../etc/shadow", "/..", "/../../../", "/a/../../.."} {
+		got, err := Locate(mp, func() (string, error) { return "/proc/42/root", nil })
+		if err != nil {
+			t.Fatalf("locate(%q): %v", mp, err)
 		}
-		if got != "" {
-			t.Errorf("Relocate(%q) returned %q alongside its error", mp, got)
+		if got.Trusted != "/proc/42/root" || strings.Contains(got.Path, "..") || !strings.HasPrefix(got.Path, "/") {
+			t.Errorf("locate(%q) = %+v; the path must stay rooted and clean", mp, got)
 		}
-	}
-}
-
-// And a path that merely SHARES A PREFIX with the root is not inside it.
-// "/proc/42/rootkit" starts with "/proc/42/root" and is a different directory.
-func TestRelocateDoesNotAcceptASiblingOfTheRoot(t *testing.T) {
-	got, err := Relocate("kit/x", func() (string, error) { return "/proc/42/root", nil })
-	if err != nil {
-		t.Fatalf("relocate: %v", err)
-	}
-	if !strings.HasPrefix(got, "/proc/42/root/") {
-		t.Errorf("relocate = %q, which is not under the root", got)
 	}
 }

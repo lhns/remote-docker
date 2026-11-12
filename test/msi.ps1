@@ -398,8 +398,11 @@ $released = @(Get-ChildItem $relDir -Filter '*.msi')
 if ($released.Count -ne 1) { Fail "expected one released x64 MSI in $relDir, found $($released.Count): $gh" }
 Ok "downloaded $($released[0].Name)"
 
-Invoke-Msi @('/i', $released[0].FullName) 'released-install' 0
+# Without docker.exe by name: releases since 0.16.4 install it by default, and
+# what is checked below is that an upgrade keeps an install that left it out.
+Invoke-Msi @('/i', $released[0].FullName, 'ADDLOCAL=Main,Path') 'released-install' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the released MSI left PATH without $InstallDir : $(MachinePath)" }
+if (Test-Path $Alias) { Fail "the released MSI installed $Alias although ADDLOCAL left it out" }
 Invoke-Msi @('/i', $Msi) 'released-upgrade' 0
 if ((MachinePath) -notlike "*$InstallDir*") { Fail "the upgrade dropped the PATH entry: $(MachinePath)" }
 # docker.exe is on by default now, but an upgrade keeps what was installed.
@@ -882,6 +885,43 @@ function ServiceExists() {
   return ($LASTEXITCODE -eq 0)
 }
 
+# The service's DACL, ACE by ACE, as installer/windows/remote-docker.wxs
+# (CA.SvcSdset) sets it. Compared exactly, trustee by trustee and right by
+# right, because a pattern that looks for the grants it expects passes a DACL
+# that also hands Authenticated Users stop (WP), a generic or hex mask, an ACE
+# with inheritance flags, or any right to Everyone or Users. Order of ACEs and
+# of rights within one is not compared: Windows may canonicalise either.
+$ServiceDacl = [ordered]@{
+  SY = 'CCLCSWRPWPDTLOCRRC'          # SYSTEM: everything but delete and the DACL
+  BA = 'CCDCLCSWRPWPDTLOCRSDRCWDWO'  # Administrators: full
+  IU = 'CCLCSWLOCRRC'                # interactive: query only
+  SU = 'CCLCSWLOCRRC'                # service logons: query only
+  AU = 'CCLCSWRPLORC'                # Authenticated Users: query and start (RP)
+}
+
+function Rights([string]$r) { return (($r -split '(..)' | Where-Object { $_ }) | Sort-Object) -join ',' }
+
+function Assert-ServiceDacl([string]$What) {
+  $sd = (& sc.exe sdshow $Service | Out-String).Trim()
+  if ($sd -notmatch '^D:(?<flags>[A-Z]*)(?<aces>(\([^)]*\))*)(S:.*)?$') { Fail "${What}: the service's descriptor does not parse as a DACL: $sd" }
+  if ($Matches.flags) { Fail "${What}: the service's DACL carries flags '$($Matches.flags)': $sd" }
+  $seen = @{}
+  foreach ($m in [regex]::Matches($Matches.aces, '\(([^)]*)\)')) {
+    $f = $m.Groups[1].Value -split ';'
+    if ($f.Count -ne 6 -or $f[0] -ne 'A' -or $f[1] -or $f[3] -or $f[4]) { Fail "${What}: an ACE other than a plain allow: ($($m.Groups[1].Value)) in $sd" }
+    if ($seen.ContainsKey($f[5])) { Fail "${What}: two ACEs for $($f[5]): $sd" }
+    $seen[$f[5]] = $f[2]
+  }
+  foreach ($t in $seen.Keys) {
+    if (-not $ServiceDacl.Contains($t)) { Fail "${What}: $t is granted $($seen[$t]), and nobody but $($ServiceDacl.Keys -join ', ') may hold any right: $sd" }
+  }
+  foreach ($t in $ServiceDacl.Keys) {
+    if (-not $seen.ContainsKey($t)) { Fail "${What}: $t holds no right, want $($ServiceDacl[$t]): $sd" }
+    if ((Rights $seen[$t]) -ne (Rights $ServiceDacl[$t])) { Fail "${What}: $t holds $($seen[$t]), want exactly $($ServiceDacl[$t]): $sd" }
+  }
+  return $sd
+}
+
 function GroupText() {
   $text = (& net.exe localgroup $Group 2>&1 | Out-String)
   return @{ Exists = ($LASTEXITCODE -eq 0); Text = $text }
@@ -1001,11 +1041,8 @@ if ($qc -notmatch 'LocalSystem') { Fail "the service does not run as LocalSystem
 if ($qc -notmatch 'remote machine service run') { Fail "the service does not run the service command: $qc" }
 Ok 'the service is LocalSystem, demand start, running `remote machine service run`'
 
-$sd = (& sc.exe sdshow $Service | Out-String).Trim()
-if ($sd -notmatch '\(A;;[A-Z]*RP[A-Z]*;;;AU\)') { Fail "Authenticated Users cannot start the service: $sd" }
-if ($sd -match '\(A;;[A-Z]*(WD|DC|SD|WO)[A-Z]*;;;AU\)') { Fail "Authenticated Users hold more than start and query: $sd" }
-if ($sd -notmatch ';;;SY\)' -or $sd -notmatch ';;;BA\)') { Fail "SYSTEM or Administrators lost their rights: $sd" }
-Ok "Authenticated Users may start it and nothing more: $sd"
+$sd = Assert-ServiceDacl 'after the install'
+Ok "the service's DACL is exactly the installer's, so Authenticated Users may query and start it and nothing more: $sd"
 
 $g = GroupText
 if (-not $g.Exists) { Fail "the group $Group does not exist" }
@@ -1122,9 +1159,8 @@ $ver = InstalledVersion
 if ($ver -ne '0.0.2') { Fail "after the upgrade the installed version is '$ver', not 0.0.2" }
 Ok 'version 0.0.2 is installed'
 if (-not (ServiceExists)) { Fail 'the service is gone after the upgrade' }
-$sd = (& sc.exe sdshow $Service | Out-String).Trim()
-if ($sd -notmatch '\(A;;[A-Z]*RP[A-Z]*;;;AU\)') { Fail "the upgraded service lost the Authenticated Users grant: $sd" }
-Ok 'the service is installed again, with the grant'
+$null = Assert-ServiceDacl 'after the upgrade'
+Ok "the service is installed again, with the installer's DACL exactly"
 if ((Get-FileHash (Join-Path $ServiceDir 'machines.json')).Hash -ne $hashRecords) { Fail 'machines.json changed' }
 if ((Get-FileHash $MyConfig).Hash -ne $hashConfig) { Fail "$MyConfig changed" }
 if ((GroupText).Text -ne $membersBefore) { Fail "the group changed: $((GroupText).Text)" }
