@@ -63,6 +63,11 @@ func TestReadOnlyAndReadWriteAreTwoShares(t *testing.T) {
 	if len(volumes.created) != 2 {
 		t.Errorf("volumes = %v, want two", volumes.created)
 	}
+	for _, id := range []string{readOnlyShareID("/home/alice/project"), defaultShareID("/home/alice/project")} {
+		if _, ok := volumes.created[workspace.VolumeNameForID("", id)]; !ok {
+			t.Errorf("no volume for share %s in %v", id, volumes.created)
+		}
+	}
 	if sharer.exports[0] != sharer.exports[2] || sharer.exports[0] == sharer.exports[1] {
 		t.Errorf("exports = %v, want the two ro mounts to share one and the rw mount another", sharer.exports)
 	}
