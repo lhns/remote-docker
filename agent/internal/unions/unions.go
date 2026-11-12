@@ -230,7 +230,7 @@ func (m *Manager) share(account, client, export string) (*live, bool) {
 // root. The daemon's root is opened once, which is the one place the /proc link
 // is followed on purpose, and everything below it is resolved by the kernel
 // relative to that descriptor with links that leave it refused. The lexical
-// check in replay.Relocate cannot see a link and is not enough alone.
+// check in replay.Locate cannot see a link and is not enough alone.
 //
 // With the shared daemon (the agent's own root, ADR 0012) the data root is the
 // operator's and may itself be reached through a link, so the path is followed
@@ -911,15 +911,26 @@ func drain(l *live) {
 // differs: in per-account mode the binary has to be in the image that daemon
 // runs (see daemons.DefaultImage), and the agent's own filesystem says nothing
 // about it.
+//
+// A daemon's filesystem is its account's to arrange, so it is read through a
+// Root confined to it. /bin may legitimately be a link to usr/bin in an image;
+// a link that leaves the image, or is absolute, finds nothing.
 func Capability(root string) string {
-	if root == "" {
-		root = "/"
+	stat := func(p string) (os.FileInfo, error) { return os.Stat("/" + p) }
+	if root != "" && root != "/" {
+		r, err := os.OpenRoot(root)
+		if err != nil {
+			return workspace.UnionNoDevice
+		}
+		defer func() { _ = r.Close() }()
+		stat = r.Stat
 	}
-	if _, err := os.Stat(path.Join(root, "dev/fuse")); err != nil {
+
+	if _, err := stat("dev/fuse"); err != nil {
 		return workspace.UnionNoDevice
 	}
 	for _, dir := range []string{"usr/bin", "bin", "usr/local/bin", "usr/sbin", "sbin"} {
-		if _, err := os.Stat(path.Join(root, dir, union.Binary)); err == nil {
+		if _, err := stat(path.Join(dir, union.Binary)); err == nil {
 			return workspace.UnionReady
 		}
 	}

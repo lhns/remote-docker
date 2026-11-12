@@ -68,9 +68,11 @@ So no container enumeration, no PID lookup, no `setns`, no `nsenter` (and
 > account the mountpoint is reported by *that* daemon, in its own filesystem,
 > so `/proc/<pid>/root/...` becomes the route. The account is root inside that
 > daemon, so the path is attacker-controlled input to a root process:
-> `replay.Relocate` (`core-agent/replay/relocate.go`) checks the result stays
-> under the daemon's root rather than trusting `path.Join`, and `O_NOFOLLOW` /
-> `AT_SYMLINK_NOFOLLOW` stop a planted symlink redirecting a poke.
+> `replay.Locate` (`core-agent/replay/relocate.go`) keeps the daemon's root apart
+> from the mountpoint it reported, rather than trusting `path.Join`, and
+> `core-agent/nofollow` walks the rest one component at a time with `O_NOFOLLOW`,
+> so a planted symlink in any component is refused instead of redirecting a
+> poke. The poke then acts on the descriptor the walk reached.
 
 ### Which syscalls, and why those
 

@@ -194,11 +194,12 @@ position. The code does not differ; the blast radius does.)*
   `docker ps` answering "permission denied"). Traversal reveals only names of
   directories nobody else may enter; the 0750 separates the accounts.
 - **A per-account daemon is untrusted input.** It reports its own volume
-  mountpoints and the account is root inside it, so `relocate` checks the result
-  stays under the daemon's root: `path.Join` CLEANS, so `/proc/42/root` joined to
-  `/../../etc/shadow` is `/proc/etc/shadow` — outside, silently, looking correct.
-  `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in `SyscallPoker` stopped being tidiness
-  the moment those paths left the agent's filesystem.
+  mountpoints and the account is root inside it, so `replay.Locate` keeps the
+  daemon's root apart from the reported path instead of joining them: `path.Join`
+  CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is `/proc/etc/shadow`
+  — outside, silently, looking correct. Nor does a join stop a link in the
+  middle, so the path below the root is walked without following one in any
+  component (`core-agent/nofollow`).
 - **A netns helper must never return a thread whose namespace it could not
   restore.** `socket(2)` uses the calling thread's namespace, so the switch and the
   socket call are pinned to one `LockOSThread`ed thread; a failed restoring `Setns`

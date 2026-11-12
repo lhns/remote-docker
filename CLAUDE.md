@@ -129,6 +129,8 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   tokens/                single-use enrolment tokens: mint, claim by rename,
                          expiry, and the global failure limiter (ADR 0051)
   replay/                replays the client's changes as real syscalls
+  nofollow/              resolve a path below a trusted directory with no link
+                         followed in any component (poker, union probes)
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
   union/                 the cache over the live export: mounting it,
@@ -1204,9 +1206,15 @@ premise of the project, and it applies to building it too. So:
 - **A per-account daemon's answers are untrusted input.** It reports its own
   volume mountpoints and the account is root inside it. `path.Join` is not
   containment -- it CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is
-  `/proc/etc/shadow`, outside the root and looking correct. `replay.Relocate` checks
-  the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
-  tidiness the moment those paths left the agent's own filesystem.
+  `/proc/etc/shadow`, outside the root and looking correct. Nor does joining
+  stop a LINK: an absolute one in the middle resolves against the agent's root.
+  So the daemon's root and the path the daemon reported are kept apart
+  (`replay.Locate`, `replay.Mount`), and everything below the root is resolved
+  without following a link in any component: `core-agent/nofollow` for the
+  poker and the union probes (`union.Alive`, `MountedShares`), an `os.Root` for
+  the cache (`unions.openAt`) and for `unions.Capability`, which follows a link
+  that stays inside the image and nothing else. With the shared daemon the
+  trusted part runs down to where the account's own data starts.
 - **`rd-dind-<account>-lib` is the account, and the container in front of it is
   disposable.** The graph volume is named and labelled so the daemon container
   can be removed and recreated without losing anything, and so an operator can

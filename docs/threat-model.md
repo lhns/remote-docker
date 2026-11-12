@@ -1059,9 +1059,9 @@ sequenceDiagram
     Ch->>Ag: validate on arrival
     Ag->>Ag: export is /m/ and 16 hex?
     Ag->>Ag: path whitelisted? (never path.Clean)
-    Ag->>Ag: resolve volume, relocate under the daemon's root
-    Ag->>Ag: containment re-checked after the join
-    Ag->>Vol: utimensat via /proc/PID/root, O_NOFOLLOW
+    Ag->>Ag: resolve volume, keep the daemon's root apart from its path
+    Ag->>Ag: walk the path below the root, refusing a link in any component
+    Ag->>Vol: utimensat on the descriptor the walk reached
     Vol-->>C: IN_MODIFY
     Note over Ag,Vol: never O_CREAT, never O_TRUNC,<br/>never a non-identity time
 ```
@@ -1085,8 +1085,9 @@ appearing in somebody's project. `O_CREAT`, `O_TRUNC` and non-identity
 
 **T — a per-account daemon's answers are untrusted (5).** The daemon reports
 its own volume mountpoints and the account is root inside it, so its answers
-are input, not fact. `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` stopped being
-tidiness the moment those paths left the agent's own filesystem.
+are input, not fact. A path below the daemon's root is resolved without
+following a link in any component, because those paths left the agent's own
+filesystem.
 
 **I — the channel carries paths, not contents.** Shipping data here would make
 this a sync, which ADR 0014 explicitly is not.

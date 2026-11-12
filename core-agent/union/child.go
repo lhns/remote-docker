@@ -125,19 +125,20 @@ type prober struct {
 	mu       sync.Mutex
 	inflight map[string]*probe
 
-	// mounted is mountedAt, indirected so a test can hold a probe open. Set at
-	// construction and never reassigned, because the goroutine below reads it.
-	// Nil in production: there is no way to wedge a FUSE server on a
-	// development machine.
+	// mounted is mountedAt, indirected so a test can hold a probe open. It is
+	// given the root and the path joined. Set at construction and never
+	// reassigned, because the goroutine below reads it. Nil in production:
+	// there is no way to wedge a FUSE server on a development machine.
 	mounted func(string) bool
 }
 
-// at reports whether anything is mounted at path.
-func (p *prober) at(path string) bool {
+// at reports whether anything is mounted at dir, inside the daemon whose root is
+// given.
+func (p *prober) at(root, dir string) bool {
 	if p.mounted != nil {
-		return p.mounted(path)
+		return p.mounted(path.Join(root, dir))
 	}
-	return mountedAt(path)
+	return mountedAt(root, dir)
 }
 
 // probe is one Lstat and whatever it eventually answered. Waiters read err
@@ -167,13 +168,15 @@ func Alive(ctx context.Context, spec Spec) error {
 
 // alive is Alive against this prober's in-flight set.
 func (p *prober) alive(ctx context.Context, spec Spec) error {
+	// Joined only to tell one union from another; the probe itself resolves
+	// spec.Merged() below the root without following a link.
 	merged := path.Join(spec.Root(), spec.Merged())
 
 	pr, ours := p.begin(merged)
 	if ours {
 		go func() {
 			var err error
-			if !p.at(merged) {
+			if !p.at(spec.Root(), spec.Merged()) {
 				err = errNotAMount
 			}
 			p.finish(merged, pr, err)
@@ -238,12 +241,12 @@ func (p *prober) finish(merged string, pr *probe, err error) {
 // An error is a directory that could not be read, which a caller deciding
 // what may be deleted must treat as every cache mounted.
 func MountedShares(root, client string) ([]string, error) {
-	out, err := mountedUnder(path.Join(root, Root))
+	out, err := mountedUnder(root, Root)
 	if err != nil {
 		return nil, err
 	}
 	if validClient(client) {
-		more, err := mountedUnder(path.Join(root, Root, client))
+		more, err := mountedUnder(root, path.Join(Root, client))
 		if err != nil {
 			return nil, err
 		}
@@ -253,21 +256,22 @@ func MountedShares(root, client string) ([]string, error) {
 	return out, nil
 }
 
-// mountedUnder names the directories under dir whose merged is a mount. A dir
-// that is not there is no unions, the ordinary case on a workspace that has
-// never served one.
-func mountedUnder(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+// mountedUnder names the directories under dir, inside the daemon whose root is
+// given, whose merged is a mount. A dir that is not there is no unions, the
+// ordinary case on a workspace that has never served one. A link in the way is
+// an error, not a follow.
+func mountedUnder(root, dir string) ([]string, error) {
+	entries, err := listDir(root, dir)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("union: listing %s: %w", dir, err)
+		return nil, fmt.Errorf("union: listing %s: %w", path.Join(root, dir), err)
 	}
 	var out []string
-	for _, e := range entries {
-		if e.IsDir() && mountedAt(path.Join(dir, e.Name(), "merged")) {
-			out = append(out, e.Name())
+	for _, name := range entries {
+		if mountedAt(root, path.Join(dir, name, "merged")) {
+			out = append(out, name)
 		}
 	}
 	return out, nil
