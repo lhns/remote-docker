@@ -5,8 +5,8 @@
 - Current answer: the proxy decodes `/containers/create`, the error message
   of a start or restart whose share volume could not mount, the port fields
   of `GET /containers/json` and `GET /containers/{id}/json`, and the `filters`
-  query of `POST /volumes/prune`, and copies everything else through. A shell on the workspace is a stock `ssh`,
-  not a subcommand
+  query of `POST /volumes/prune`, and copies everything else through. A shell
+  on the workspace is a stock `ssh`, not a subcommand
   ([ADR 0018](0018-one-way-to-do-each-thing.md)).
 
 ## Context
