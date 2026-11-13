@@ -24,6 +24,8 @@ software.
   does not label its anonymous volumes (before Engine 23) loses none. On a shared
   daemon one account's disk pressure can remove another account's dangling
   volume. See ADR 0056.
+- **Every on/off setting of the agent also takes `on` and `off`**, beside
+  `true`, `false`, `1` and `0`.
 
 ## 0.16.8 — 2026-11-13
 
