@@ -1,0 +1,87 @@
+name: unprivileged-probe
+
+# A measurement, not a gate: can the workspace run where privileged pods are
+# refused? test/unprivileged-probe.sh RECORDS what a bare runner and a kind
+# cluster answer for each Pod Security tier and never fails on a refusal. Run it
+# with the `probe-unprivileged` label on a pull request (workflow_dispatch exists
+# only on main), and read the table in the job summary. Never on every push: it
+# starts a cluster and a dozen nested engines.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+
+# Never cancelled: a probe cut off by a push loses the whole measurement.
+concurrency:
+  group: unprivileged-probe-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # `synchronize` carries no label name, so the gate reads the labels the pull
+    # request has, and a fix pushed to a labelled branch runs again.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'probe-unprivileged')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PROBE_OUT: ${{ runner.temp }}/probe-out
+      KIND_CLUSTER: probe
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go
+
+      - name: install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      # The manifests are templates with comment placeholders, valid as they
+      # stand; render each tier both ways against the API schemas.
+      - name: validate the pod manifests
+        run: |
+          set -euo pipefail
+          for t in permissive-nonroot permissive-root baseline restricted control; do
+            for h in default false; do
+              bash test/unprivileged-probe.sh render "$t" probe ns "$h" \
+                | kubeconform -strict -kubernetes-version 1.34.0 -summary -
+            done
+          done
+
+      - name: the NFS client module, for the runner and the cluster's node
+        run: sudo modprobe nfs
+
+      # Before the cluster exists, so the rootless engines on the bare runner
+      # do not compete with kind's node for the machine.
+      - name: rows on the bare runner
+        run: bash test/unprivileged-probe.sh runner
+
+      - name: create a cluster
+        uses: helm/kind-action@v1
+        with:
+          version: v0.30.0
+          kubectl_version: v1.34.0
+          node_image: kindest/node:v1.34.0
+          cluster_name: probe
+          wait: 120s
+          config: test/kind-unprivileged.yaml
+
+      - name: rows in the cluster, one pod per tier
+        run: bash test/unprivileged-probe.sh kind
+
+      - name: the table
+        if: always()
+        run: bash test/unprivileged-probe.sh report
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: unprivileged-probe
+          path: ${{ runner.temp }}/probe-out
+          if-no-files-found: warn

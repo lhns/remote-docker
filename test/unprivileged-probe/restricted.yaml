@@ -1,0 +1,34 @@
+# Tier "restricted": the `restricted` Pod Security level, as its documentation
+# spells it. Non-root, every capability dropped, no privilege escalation (which
+# sets no_new_privs, so setuid newuidmap cannot work) and the default seccomp.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  namespace: __NS__
+  labels:
+    app: unprivileged-probe
+spec:
+  #__HOSTUSERS__
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: unprivileged-probe:kind
+      imagePullPolicy: Never
+      command: ["bash", "/usr/local/bin/unprivileged-probe.sh", "rows"]
+      env:
+        - {name: PROBE_TIER, value: __NAME__}
+        - {name: PROBE_WORK, value: /work}
+        - {name: HOME, value: /work/home}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities: {drop: ["ALL"]}
+        seccompProfile: {type: RuntimeDefault}
+      volumeMounts:
+        - {name: work, mountPath: /work}
+  volumes:
+    - name: work
+      emptyDir: {}
