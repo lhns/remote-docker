@@ -802,9 +802,15 @@ func envBool(name, raw string, unset bool) (bool, error) {
 	if raw == "" {
 		return unset, nil
 	}
+	switch raw {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
-		return false, fmt.Errorf("%s: %q is not true or false", name, raw)
+		return false, fmt.Errorf("%s: %q is not on, off, true or false", name, raw)
 	}
 	return v, nil
 }

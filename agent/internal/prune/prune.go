@@ -1,8 +1,8 @@
 // Package prune decides what the agent removes from a daemon: images nothing
-// has used for a while, stopped containers and dangling anonymous volumes when
-// asked (ADR 0056). It is
-// pure: listings, the record of when each image was last in use, and the time
-// go in; what to remove comes out. Running docker is dockercli's job.
+// has used for a while, and stopped containers and dangling anonymous volumes
+// when asked (ADR 0056). It is pure: listings, the record of when each image
+// was last in use and each volume first dangled, and the time go in; what to
+// remove comes out. Running docker is dockercli's job.
 package prune
 
 import (
