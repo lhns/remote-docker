@@ -1248,6 +1248,16 @@ containers reach whatever the pod network reaches, which on most clusters is
 every other service in it. A policy restricting egress is the operator's to
 add, and worth adding on a shared cluster.
 
+**D — the probes decide what a busy daemon costs (4, 7).** Readiness asks only
+that SSH accepts (`remote-dockerd healthcheck --docker-socket=`), so a daemon
+busy with a large prune or an I/O stall does not take a replica off the ingress.
+Liveness still asks the daemon but restarts the pod after ten failures in a row,
+about five minutes, because a restart kills every account's daemon at once
+(ADR 0035). A replica whose daemon is hung but whose SSH accepts stays Ready
+until liveness acts, so a client can connect to it and wait. *Covered by* the
+probe step of `kubernetes.yml`, which checks the rendered probes and runs the
+readiness command in the pod.
+
 **I — the metrics port (8, 9).** `metrics.enabled` renders
 `WORKSPACE_METRICS_ADDR=:<port>`, every interface of the pod, and the
 `prometheus.io` annotations; the Service carries only SSH and WebSocket, so
@@ -1704,11 +1714,13 @@ refused with a warning. It can serve that port's connections itself, which is
 the same trust as any process on a shared daemon, and no more than flow 5 already
 accepts.
 
-## Flow 13: pruning removes images nobody uses
+## Flow 13: pruning removes images, and with the switch on, volumes, nobody uses
 
-On by default (ADR 0056): the agent, as root, removes images and build cache
-from the daemons it serves, on a timer and when the disk is full. The one place
-here where the agent deletes an account's asset (4) without being asked.
+On by default for images and build cache, and off for volumes
+(`WORKSPACE_PRUNE_VOLUMES=on`) (ADR 0056): the agent, as root, removes images
+and build cache from the daemons it serves, and with the switch on dangling
+anonymous volumes, on a timer and when the disk is full. The one place here
+where the agent deletes an account's asset (4) without being asked.
 
 ```mermaid
 sequenceDiagram
@@ -1724,6 +1736,7 @@ sequenceDiagram
     D-->>A: its own answers, untrusted
     A->>A: age from the record under <state>/prune/
     A->>D: image rm <ref> without -f, builder prune
+    A->>D: volume rm of a dangling anonymous volume, only with the switch on
     A->>P: image rm <ref>, never the dind image
 ```
 
@@ -1735,14 +1748,42 @@ the same one (`agent/cmd/remote-dockerd/prune.go`). The record is written to
 validated account name; image ids are only keys inside it. *Covered by*
 `TestAgePerAccount`, `TestParentNeverLosesContainers` and `test/prune.sh`.
 
-**T — nothing in use, and nothing that is data (6, 7).** No volume operation
-exists in the pruner, so `rd-*-cache` volumes behind a union, which the daemon
-always calls unused, are out of reach. An image goes by each reference, without
+**T — nothing in use, and nothing that is data (6, 7).** The pruner removes no
+named volume. The only volume operation it has takes a name the daemon listed
+with `dangling=true` and its own `com.docker.volume.anonymous` label, skips any
+name `workspace.IsManagedVolume` accepts, and is never forced. So `rd-*-cache`
+volumes behind a union, which the daemon always calls unused, are out of reach,
+and so is anything on a daemon too old to label its anonymous volumes. A
+volume goes only after the agent has seen it dangling for
+`WORKSPACE_PRUNE_AFTER`; the parent daemon of a daemon per account is never
+asked about volumes, since its volumes are the accounts' storage. An image goes by each reference, without
 `-f`, so Docker itself refuses one a stopped container still uses. A stopped
 container goes only with `WORKSPACE_PRUNE_CONTAINERS`, never on the parent and
 never one named `rd-*`, and without `-v`. A daemon that is not running is never
 started for this. *Covered by* `TestAgeKeepsWhatDockerRefuses`,
-`TestAgeContainers` and `test/prune.sh` in both daemon modes.
+`TestAgeContainers`, `TestVolumesNeverAManagedName`,
+`TestVolumesPerAccountNeverTheParent` and `test/prune.sh` in both daemon modes.
+
+**T — the client's own `docker volume prune` keeps the cache volume (4, 6).**
+The daemon calls the cache volume of a running `write=back` union unused, so
+`docker volume prune -a` through the client would delete it. The proxy adds a
+`label!` exclusion of managed volumes to the prune and then runs the session's
+collector, which asks the workspace which caches are mounted (ADR 0005,
+2026-11-13). A stock docker over ssh on the workspace, and an older client, are
+not guarded: a convenience and not a boundary. *Covered by* `integration.sh`'s
+write-back section.
+
+**D/T — with volumes on, one account's disk use can remove another's dangling
+volume data (1, 4, 6).** On a shared daemon (ADR 0012) every account's volumes
+are in one daemon and the threshold is the shared disk, so after build cache and
+images, pressure removes dangling anonymous volumes oldest first, whichever
+account left them, none first seen dangling within the last hour. With a daemon
+per account each account's own are removed, but the trigger is still the disk
+every account shares. Unlike an image, a deleted volume's data does not come
+back with a pull. This risk is **not accepted**: it is why the switch is off by
+default, and whether to leave it available is the owner's call. *Covered by*
+`TestPressureVolumesAfterImagesAndWithinTheFloor` and `test/prune.sh` section 6;
+no test covers the order across accounts.
 
 **D — one account's disk use removes another's images (1, 6).** The threshold
 is the parent's `DockerRootDir`, which holds every account's `-lib` volume. Above
@@ -1970,8 +2011,10 @@ Stated here rather than buried, because each is a deliberate trade.
 - **One account's disk use can remove another's unused images** (flow 13,
   ADR 0056). The threshold is the workspace's disk, not the account's, so
   pressure from one account prunes images every account last used more than an
-  hour ago. Pruning never removes a volume or a used image, and an image is a
-  pull away.
+  hour ago. Pruning removes no used image and, with the default, no volume, and
+  an image is a pull away. **With `WORKSPACE_PRUNE_VOLUMES=on` the same pressure
+  also removes dangling anonymous volumes, whichever account left them, and
+  that data is not a pull away. Not accepted; see flow 13.**
 - **Host ports are not counted, and the gateway is the workspace's word**
   (flow 12). The client accepts any IPv4 literal as the gateway and lists as
   many ports as the setting names; the agent refuses `0.0.0.0` and loopback,

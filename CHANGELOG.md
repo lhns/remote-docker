@@ -8,6 +8,23 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The agent can prune dangling anonymous volumes, opt in.** A container
+  removed without `-v`, or a compose project brought `down` without it, leaves
+  its anonymous volumes behind, and a CI runner doing that on every job leaks
+  them for good. With `WORKSPACE_PRUNE_VOLUMES=on` (chart `prune.volumes`) the
+  agent removes volumes no container names that the daemon labelled anonymous,
+  once they have dangled for `WORKSPACE_PRUNE_AFTER`, and under disk pressure
+  after build cache and images, never within the last hour. Off by default, since
+  a deleted volume's data does not come back with a pull. Never a named volume,
+  an `rd-*` volume or the workspace's own daemon's volumes, and a daemon that
+  does not label its anonymous volumes (before Engine 23) loses none. On a shared
+  daemon one account's disk pressure can remove another account's dangling
+  volume. See ADR 0056.
+
 ## 0.16.8 — 2026-11-13
 
 ### Fixes

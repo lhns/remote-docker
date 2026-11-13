@@ -16,7 +16,8 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Pruning of unused images and build cache (ADR 0056).
+// Pruning of unused images, build cache and, opt in, dangling anonymous
+// volumes (ADR 0056).
 const (
 	// envPruneAfter is how long an image may go unused before it is removed:
 	// a Go duration or whole days, 0 or off for never. Build cache unused that
@@ -30,6 +31,11 @@ const (
 	// envPruneContainers also removes containers stopped for longer than
 	// envPruneAfter. Never on the parent daemon of a daemon per account.
 	envPruneContainers = "WORKSPACE_PRUNE_CONTAINERS"
+
+	// envPruneVolumes also removes anonymous volumes no container names, once
+	// they have dangled for envPruneAfter. Off unless on: a volume's data does
+	// not come back with a pull. Never a volume the workspace manages (rd-*).
+	envPruneVolumes = "WORKSPACE_PRUNE_VOLUMES"
 
 	// envPruneInterval and envPruneFloor are test hooks: how often the age
 	// rules run, and how long an image is protected from the pressure rule.
@@ -65,6 +71,7 @@ type pruneConfig struct {
 	After      time.Duration // 0: no age pruning
 	Above      float64       // percent; 0: no pressure pruning
 	Containers bool
+	Volumes    bool
 	Interval   time.Duration
 	Floor      time.Duration
 }
@@ -73,7 +80,7 @@ func (c pruneConfig) enabled() bool { return c.After > 0 || c.Above > 0 }
 
 // pruneSettings reads the pruning variables. Unset is the default;
 // anything unusable refuses the start, naming the variable.
-func pruneSettings(after, above, containers, interval, floor string) (pruneConfig, error) {
+func pruneSettings(after, above, containers, volumes, interval, floor string) (pruneConfig, error) {
 	cfg := pruneConfig{After: defaultPruneAfter, Above: defaultPruneAbove,
 		Interval: defaultPruneInterval, Floor: defaultPruneFloor}
 
@@ -105,6 +112,15 @@ func pruneSettings(after, above, containers, interval, floor string) (pruneConfi
 	if cfg.Containers, err = envBool(envPruneContainers, containers, false); err != nil {
 		return cfg, err
 	}
+	switch strings.TrimSpace(volumes) {
+	case "on":
+		cfg.Volumes = true
+	case "off":
+	default:
+		if cfg.Volumes, err = envBool(envPruneVolumes, volumes, false); err != nil {
+			return cfg, err
+		}
+	}
 	if interval != "" {
 		d, err := parseDuration(interval)
 		if err != nil || d == 0 {
@@ -129,6 +145,8 @@ type pruneDocker interface {
 	CreatedImages(ctx context.Context, host string, since, until time.Time) ([]string, error)
 	RemoveImage(ctx context.Context, host, ref string) error
 	RemoveContainer(ctx context.Context, host, id string) error
+	DanglingAnonymousVolumes(ctx context.Context, host string) ([]string, error)
+	RemoveVolume(ctx context.Context, host, name string) error
 	BuildPrune(ctx context.Context, host string, unusedFor time.Duration) error
 	RootDir(ctx context.Context, host string) (string, error)
 }
@@ -139,12 +157,14 @@ type pruneDaemon struct {
 	host string // a -H value; empty for the default socket
 
 	// imagesOnly: the parent of a daemon per account, whose containers are the
-	// accounts' daemons and whose build cache nothing uses.
+	// accounts' daemons, whose build cache nothing uses and whose volumes are
+	// the accounts' graph storage.
 	imagesOnly bool
 }
 
 // pruner removes what a daemon no longer needs, on the rules in ADR 0056. It
-// never touches a volume, never forces a removal and never starts a daemon.
+// touches a volume only when asked and then only a dangling anonymous one, never
+// forces a removal and never starts a daemon.
 type pruner struct {
 	cfg      pruneConfig
 	targets  daemons.Targets
@@ -241,6 +261,7 @@ type pruneState struct {
 	images     []prune.Image
 	containers []prune.Container
 	protected  map[string]bool
+	volumes    []string // dangling anonymous volumes; nil when not asked or not listed
 }
 
 // snapshot lists a daemon and notes what is in use in its record, which it
@@ -266,6 +287,16 @@ func (p *pruner) snapshot(ctx context.Context, d pruneDaemon, events bool) (*pru
 		}
 	}
 	rec.Observe(now, images, containers, created)
+	var volumes []string
+	if p.cfg.Volumes && !d.imagesOnly {
+		// A listing that fails leaves the record as it was and removes nothing.
+		if v, verr := p.docker.DanglingAnonymousVolumes(ctx, d.host); verr != nil {
+			p.log.Debug("could not list the dangling volumes", "account", d.name, "err", verr)
+		} else {
+			volumes = v
+			rec.ObserveVolumes(now, v)
+		}
+	}
 	if events {
 		rec.Swept = now
 	}
@@ -273,7 +304,7 @@ func (p *pruner) snapshot(ctx context.Context, d pruneDaemon, events bool) (*pru
 		p.log.Warn("could not save the record of when images were used", "path", path, "err", err)
 	}
 
-	s := &pruneState{d: d, rec: rec, images: images, containers: containers, protected: map[string]bool{}}
+	s := &pruneState{d: d, rec: rec, images: images, containers: containers, protected: map[string]bool{}, volumes: volumes}
 	if d.name == pruneParent {
 		for _, name := range p.keep {
 			if id, ok := prune.Resolve(images, name); ok {
@@ -334,7 +365,7 @@ func (p *pruner) cannotMeasure(err error) {
 func (p *pruner) age(ctx context.Context, s *pruneState) {
 	before, measured := p.usage(ctx)
 	now := p.now()
-	var images, containers int
+	var images, containers, volumes int
 
 	if p.cfg.Containers && !s.d.imagesOnly {
 		for _, c := range prune.AgeContainers(s.containers, p.cfg.After, now) {
@@ -351,6 +382,11 @@ func (p *pruner) age(ctx context.Context, s *pruneState) {
 			images++
 		}
 	}
+	for _, v := range prune.AgeVolumes(s.rec, s.volumes, p.cfg.After, now) {
+		if p.removeVolume(ctx, s.d, v.Name) {
+			volumes++
+		}
+	}
 	if !s.d.imagesOnly {
 		if err := p.docker.BuildPrune(ctx, s.d.host, p.cfg.After); err != nil {
 			p.log.Debug("could not prune the build cache", "account", s.d.name, "err", err)
@@ -362,9 +398,9 @@ func (p *pruner) age(ctx context.Context, s *pruneState) {
 		freed = after.Avail - before.Avail
 		p.reclaimed(float64(freed), s.d.name, reasonAge)
 	}
-	if images > 0 || containers > 0 || freed > 0 {
+	if images > 0 || containers > 0 || volumes > 0 || freed > 0 {
 		p.log.Info("pruned what had gone unused", "account", s.d.name, "images", images,
-			"containers", containers, "reclaimed", freed, "unused-for", p.cfg.After)
+			"containers", containers, "volumes", volumes, "reclaimed", freed, "unused-for", p.cfg.After)
 	}
 }
 
@@ -381,9 +417,22 @@ func (p *pruner) removeImage(ctx context.Context, d pruneDaemon, img prune.Image
 	return true
 }
 
+// removeVolume removes a dangling anonymous volume, never forced, so the daemon
+// refuses one a container has come to name since the listing.
+func (p *pruner) removeVolume(ctx context.Context, d pruneDaemon, name string) bool {
+	if err := p.docker.RemoveVolume(ctx, d.host, name); err != nil {
+		p.log.Debug("the daemon kept a volume", "account", d.name, "volume", name, "err", err)
+		return false
+	}
+	delete(p.records[d.name].Dangling, name)
+	return true
+}
+
 // pressure frees space when the data directory is fuller than cfg.Above: first
 // build cache unused for an hour, then unused images oldest first, none that
-// was in use within the floor, re-measuring after each until it is below.
+// was in use within the floor, then with volumes on the dangling anonymous
+// ones, oldest first, none first seen dangling within the floor. It re-measures
+// after each until it is below.
 func (p *pruner) pressure(ctx context.Context, ds []pruneDaemon) {
 	u, ok := p.usage(ctx)
 	if !ok {
@@ -398,8 +447,9 @@ func (p *pruner) pressure(ctx context.Context, ds []pruneDaemon) {
 	}
 
 	type tally struct {
-		images int
-		bytes  uint64
+		images  int
+		volumes int
+		bytes   uint64
 	}
 	done := map[string]*tally{}
 	account := func(name string) *tally {
@@ -468,9 +518,42 @@ func (p *pruner) pressure(ctx context.Context, ds []pruneDaemon) {
 		}
 	}
 
+	if !below && p.cfg.Volumes {
+		type pick struct {
+			s *pruneState
+			v prune.DanglingVolume
+		}
+		var picks []pick
+		now := p.now()
+		for _, d := range ds {
+			s, err := p.snapshot(ctx, d, false)
+			if err != nil {
+				continue
+			}
+			for _, v := range prune.PressureVolumes(s.rec, s.volumes, p.cfg.Floor, now) {
+				picks = append(picks, pick{s, v})
+			}
+		}
+		slices.SortStableFunc(picks, func(a, b pick) int { return a.v.Since.Compare(b.v.Since) })
+
+		for _, pk := range picks {
+			if ctx.Err() != nil {
+				return
+			}
+			if !p.removeVolume(ctx, pk.s.d, pk.v.Name) {
+				continue
+			}
+			account(pk.s.d.name).volumes++
+			if now := credit(pk.s.d.name); now.Percent() <= p.cfg.Above {
+				below = true
+				break
+			}
+		}
+	}
+
 	for _, name := range slices.Sorted(maps.Keys(done)) {
-		if t := done[name]; t.images > 0 || t.bytes > 0 {
-			p.log.Info("pruned under disk pressure", "account", name, "images", t.images, "reclaimed", t.bytes)
+		if t := done[name]; t.images > 0 || t.volumes > 0 || t.bytes > 0 {
+			p.log.Info("pruned under disk pressure", "account", name, "images", t.images, "volumes", t.volumes, "reclaimed", t.bytes)
 		}
 	}
 	if !below && !p.warned {

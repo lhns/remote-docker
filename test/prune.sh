@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pruning of unused images and build cache (ADR 0056), end to end.
+# Pruning of unused images, build cache and dangling anonymous volumes (ADR
+# 0056), end to end.
 #
 #   bash test/prune.sh shared|per-account
 #
@@ -8,9 +9,13 @@
 # directly. Three workspaces, one after another, because the settings are the
 # agent's environment and a daemon's images live in its container:
 #
-#   1. AFTER=20s: what goes and what stays, and that volumes are never touched.
+#   1. AFTER=20s: what goes and what stays, and that named volumes are never touched.
 #   2. AFTER=20s and CONTAINERS=true: a stopped container goes, a running one stays.
 #   3. ABOVE=1% and AFTER=off: usage pressure removes unused images, once warned.
+#   4. AFTER=20s and VOLUMES=on: a dangling anonymous volume goes, named,
+#      managed, attached and unlabelled ones stay.
+#   5. the same without VOLUMES: nothing is removed.
+#   6. ABOVE=1% and VOLUMES=on: a fresh dangling volume waits for the floor.
 #
 # Every other suite runs with pruning off (start_workspace in lib.sh).
 #
@@ -313,6 +318,105 @@ if [ "$WARNED" -eq 1 ]; then
 else
     bad "the warning was logged $WARNED times, want once: $(agent_log | grep 'still above' | tail -3)"
 fi
+
+# anon_volume makes a container with an anonymous volume and prints the volume's
+# name. The container is left in place.
+#
+#   anon_volume <container>
+anon_volume() {
+    wsdocker create --name "$1" -v /data alpine:3 true >/dev/null 2>&1
+    wsdocker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' "$1" 2>/dev/null
+}
+
+# dangling_volume leaves an anonymous volume with no container and prints its
+# name: the leak a container removed without -v makes.
+#
+#   dangling_volume <container>
+dangling_volume() {
+    local name
+    name=$(anon_volume "$1")
+    wsdocker rm "$1" >/dev/null 2>&1
+    echo "$name"
+}
+
+# HEX64 is what the daemon names an anonymous volume. Made by hand it lacks the
+# label the daemon adds, so it is not one.
+HEX64=$(printf 'ab%.0s' $(seq 1 32))
+
+# volumes_workspace starts a workspace for sections 4 to 6.
+#
+#   volumes_workspace <docker-run-arg...>
+volumes_workspace() {
+    workspace_for -e "WORKSPACE_PRUNE_INTERVAL=${INTERVAL}s" "$@"
+}
+
+echo
+echo "== 4. dangling anonymous volumes, only when asked =="
+volumes_workspace -e "WORKSPACE_PRUNE_AFTER=${AGE}s" -e WORKSPACE_PRUNE_ABOVE=off \
+    -e WORKSPACE_PRUNE_VOLUMES=on
+
+LEAKED=$(dangling_volume anon-leak)
+HELD=$(anon_volume anon-held)
+wsdocker volume create prune-keep >/dev/null 2>&1
+wsdocker volume create rd-prune-cache >/dev/null 2>&1
+wsdocker volume create "$HEX64" >/dev/null 2>&1
+if [ -n "$LEAKED" ] && [ -n "$HELD" ]; then
+    ok "two anonymous volumes made: $LEAKED and $HELD"
+else
+    bad "no anonymous volumes: leaked [$LEAKED] held [$HELD]"
+fi
+if outputs 'com.docker.volume.anonymous' wsdocker volume inspect --format '{{json .Labels}}' "$LEAKED"; then
+    ok "the daemon labels an anonymous volume"
+else
+    bad "the daemon did not label the anonymous volume: [$LAST_OUTPUT]"
+fi
+if [ "$PER_USER_DIND" = true ]; then
+    # Never the parent daemon's volumes in this mode (ADR 0056).
+    parentdocker volume create --label com.docker.volume.anonymous "$HEX64" >/dev/null 2>&1
+fi
+
+info "waiting for a volume dangling for ${AGE}s to be removed"
+if wait_gone $((AGE * 6)) "$LEAKED" volumes; then
+    ok "the dangling anonymous volume is gone after its age"
+else
+    bad "the dangling anonymous volume was never removed: [$(volumes | tr '\n' ' ')]"
+    agent_log | grep prune | tail -20 | sed 's/^/        /'
+fi
+check_present volume "$HELD" volumes
+check_present volume prune-keep volumes
+check_present volume rd-prune-cache volumes
+check_present volume "$HEX64" volumes
+if [ "$PER_USER_DIND" = true ]; then
+    parentvolumes() { parentdocker volume ls --format '{{.Name}}'; }
+    check_present volume "$HEX64" parentvolumes
+fi
+
+echo
+echo "== 5. the same, with volumes not asked for =="
+volumes_workspace -e "WORKSPACE_PRUNE_AFTER=${AGE}s" -e WORKSPACE_PRUNE_ABOVE=off
+LEAKED=$(dangling_volume anon-leak)
+info "waiting past the age; the volume must stay"
+sleep $((AGE + INTERVAL * 3))
+check_present volume "$LEAKED" volumes
+
+echo
+echo "== 6. a dangling volume under pressure waits for the floor =="
+FLOOR=40
+volumes_workspace -e WORKSPACE_PRUNE_AFTER=off -e WORKSPACE_PRUNE_ABOVE=1% \
+    -e "WORKSPACE_PRUNE_FLOOR=${FLOOR}s" -e WORKSPACE_PRUNE_VOLUMES=on
+# Held, or the pressure rule removes alpine:3 once it is past the floor.
+wsdocker create --name prune-hold alpine:3 true >/dev/null 2>&1
+LEAKED=$(dangling_volume anon-leak)
+wsdocker volume create prune-keep >/dev/null 2>&1
+sleep $((INTERVAL * 3))
+check_present volume "$LEAKED" volumes
+if wait_gone $((FLOOR * 4)) "$LEAKED" volumes; then
+    ok "the volume went once it was past the floor"
+else
+    bad "the volume survived the pressure: [$(volumes | tr '\n' ' ')]"
+    agent_log | grep prune | tail -20 | sed 's/^/        /'
+fi
+check_present volume prune-keep volumes
 
 if [ "$FAIL" -ne 0 ]; then
     echo

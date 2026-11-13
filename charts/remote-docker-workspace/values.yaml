@@ -125,8 +125,8 @@ ephemeral:
   cleanupContainers: false
 
 # Pruning of unused images and build cache (ADR 0056), over the workspace's own
-# daemon and every account's. Never volumes. An `env` entry for the same
-# variable wins.
+# daemon and every account's. Volumes only with `volumes: true`, and then only
+# dangling anonymous ones. An `env` entry for the same variable wins.
 prune:
   # How long an image may go unused before it is removed, counted from when a
   # container last used it. A Go duration or whole days, such as 36h or 7d;
@@ -138,6 +138,12 @@ prune:
   # Also remove containers stopped for longer than `after`. Never the
   # workspace's own daemon containers.
   containers: false
+  # Also remove anonymous volumes no container names (what `docker rm` without
+  # `-v` leaves), once they have dangled for `after`, and under disk pressure
+  # after build cache and images. Off: the data in a deleted volume does not come
+  # back with a pull. Never a volume the workspace manages (rd-*), and never the
+  # workspace's own daemon's volumes in a daemon-per-account workspace.
+  volumes: false
 
 # Prometheus metrics (ADR 0054): GET /metrics in plain HTTP on a port of its
 # own (WORKSPACE_METRICS_ADDR), never the SSH or WebSocket one. Enabled, the pod

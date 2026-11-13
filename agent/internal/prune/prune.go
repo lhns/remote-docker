@@ -1,5 +1,6 @@
 // Package prune decides what the agent removes from a daemon: images nothing
-// has used for a while, and stopped containers when asked (ADR 0056). It is
+// has used for a while, stopped containers and dangling anonymous volumes when
+// asked (ADR 0056). It is
 // pure: listings, the record of when each image was last in use, and the time
 // go in; what to remove comes out. Running docker is dockercli's job.
 package prune
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Image is an image as a daemon lists it.
@@ -153,4 +156,39 @@ func AgeContainers(containers []Container, after time.Duration, now time.Time) [
 		}
 	}
 	return out
+}
+
+// DanglingVolume is an anonymous volume no container names, and since when.
+type DanglingVolume struct {
+	Name  string
+	Since time.Time
+}
+
+// dangling lists the volumes the caller may remove, oldest first. A name the
+// workspace manages (rd-*) is never one, whatever the daemon says about it.
+func dangling(rec *Record, names []string, now time.Time) []DanglingVolume {
+	var out []DanglingVolume
+	for _, n := range names {
+		if workspace.IsManagedVolume(n) {
+			continue
+		}
+		out = append(out, DanglingVolume{Name: n, Since: rec.DanglingSince(n, now)})
+	}
+	slices.SortStableFunc(out, func(a, b DanglingVolume) int { return a.Since.Compare(b.Since) })
+	return out
+}
+
+// AgeVolumes is every dangling anonymous volume dangling longer than after.
+func AgeVolumes(rec *Record, names []string, after time.Duration, now time.Time) []DanglingVolume {
+	return slices.DeleteFunc(dangling(rec, names, now), func(v DanglingVolume) bool {
+		return now.Sub(v.Since) <= after
+	})
+}
+
+// PressureVolumes is every dangling anonymous volume not first seen dangling
+// within floor, oldest first.
+func PressureVolumes(rec *Record, names []string, floor time.Duration, now time.Time) []DanglingVolume {
+	return slices.DeleteFunc(dangling(rec, names, now), func(v DanglingVolume) bool {
+		return now.Sub(v.Since) < floor
+	})
 }

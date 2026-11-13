@@ -1,13 +1,14 @@
 # 0056 — The agent prunes unused images and build cache, by age and under disk pressure
 
 - Status: Accepted
-- Date: 2026-10-19
+- Date: 2026-10-19, amended 2026-11-13 (dangling anonymous volumes)
 - Current answer: one loop in the agent, over the workspace's own daemon and
   every running account daemon. Images no container has used for
   `WORKSPACE_PRUNE_AFTER` (7d) go, removed by reference and never forced; build
   cache unused that long goes; above `WORKSPACE_PRUNE_ABOVE` (80%) cache and
-  then images go oldest first. Never volumes, never a daemon started to be
-  pruned.
+  then images go oldest first. Never a named volume; with
+  `WORKSPACE_PRUNE_VOLUMES=on` (off by default) dangling anonymous volumes go
+  too, by age and last under pressure. Never a daemon started to be pruned.
 
 ## What forced it
 
@@ -92,5 +93,44 @@
   rule reports it cannot measure, once, and the age rules still run.
 - **Pressure can remove what age would have kept.** That is its purpose; the
   floor of an hour is the only protection for an image nothing uses yet.
-- **A volume is never reclaimed.** A full disk of volumes is the operator's to
-  resolve, and the warning says nothing is left to prune.
+- **A named volume is never reclaimed.** A full disk of volumes is the operator's
+  to resolve, and the warning says nothing is left to prune.
+
+## Amendment, 2026-11-13: dangling anonymous volumes, opt in
+
+- **What forced it.** A container removed without `-v`, or a compose project
+  brought `down` without it, leaves its anonymous volumes behind. A CI runner
+  doing that on every job leaks them for good, and nothing pruned them. The
+  pruner's own container removal is a plain `rm` and leaks the same way.
+- **Selection is explicit, not `docker volume prune`.** The agent runs
+  `volume ls --quiet --filter dangling=true --filter label=com.docker.volume.anonymous`
+  and then `volume rm <name>` for each, never forced.
+  - Since API 1.42 (Engine 23) `volume prune` itself removes only anonymous
+    volumes; against an older daemon it removes every unused one, named ones and
+    an `rd-*-cache` behind a running union included (ADR 0044). A VM workspace
+    (ADR 0025) runs whatever dockerd its operator installed.
+  - It has no age. An older daemon labels nothing anonymous, so the explicit
+    form removes nothing there, which is the safe direction.
+  - A name `workspace.IsManagedVolume` accepts is never chosen, whatever the
+    daemon says.
+- **Age is the agent's own record.** `<state>/prune/<name>.json` gains
+  `dangling`, a map of volume name to when it was first seen dangling, absent
+  meaning empty, so no version bump. A volume that is listed again keeps its
+  time; one that is attached again drops out and starts over. A missing or
+  unreadable record means now. A volume goes after `WORKSPACE_PRUNE_AFTER`.
+- **Under pressure** the order is build cache, then images, then dangling
+  volumes oldest first, none first seen dangling within `WORKSPACE_PRUNE_FLOOR`.
+  Data is kept longest.
+- **Daemons.** The shared daemon, or each account's through `Targets.Lookup`
+  (never `Ensure`). Never the parent of a daemon per account: its volumes are
+  `rd-dind-*-lib`, the accounts' storage.
+- **One rule for containers.** `WORKSPACE_PRUNE_CONTAINERS` keeps its plain
+  `rm`; the volume it leaves dangles and goes by the same age, so no second path
+  skips the age.
+- **Off by default:** `WORKSPACE_PRUNE_VOLUMES=on` (chart `prune.volumes`). A
+  deleted volume's data does not come back with a pull. Once on it follows
+  `WORKSPACE_PRUNE_AFTER` and `WORKSPACE_PRUNE_ABOVE`.
+- **Cost.** On a shared daemon (ADR 0012) one account's disk pressure removes
+  another account's dangling volume. A volume that is dangling while its owner
+  is away longer than the age is gone when they return.
+- **Invariant, now:** pruning never touches a named volume.

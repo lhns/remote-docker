@@ -203,3 +203,60 @@ func TestUnusableRecordIsNow(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordVolumes(t *testing.T) {
+	r := NewRecord()
+	r.ObserveVolumes(t0, []string{"anon1", "anon2"})
+	r.ObserveVolumes(t0.Add(time.Hour), []string{"anon1", "anon3"})
+	if got := r.DanglingSince("anon1", t0.Add(2*time.Hour)); !got.Equal(t0) {
+		t.Errorf("still dangling: since %v, want %v", got, t0)
+	}
+	if _, ok := r.Dangling["anon2"]; ok {
+		t.Error("a volume no longer dangling stayed in the record")
+	}
+	if got := r.DanglingSince("anon3", t0.Add(2*time.Hour)); !got.Equal(t0.Add(time.Hour)) {
+		t.Errorf("first seen later: since %v", got)
+	}
+	if got := r.DanglingSince("never", t0); !got.Equal(t0) {
+		t.Errorf("an unmet volume is as young as now, got %v", got)
+	}
+
+	data, err := r.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Parse(data)
+	if err != nil || !back.Dangling["anon3"].Equal(t0.Add(time.Hour)) {
+		t.Errorf("round trip = %+v, %v", back, err)
+	}
+}
+
+func TestParseRecordWithoutVolumes(t *testing.T) {
+	r, err := Parse([]byte(`{"version":1,"swept":"2026-10-19T12:00:00Z","seen":{"sha256:a":"2026-10-19T12:00:00Z"}}`))
+	if err != nil || r.Dangling == nil || len(r.Dangling) != 0 || len(r.Seen) != 1 {
+		t.Errorf("a record from before volumes = %+v, %v", r, err)
+	}
+}
+
+func TestVolumeDecisions(t *testing.T) {
+	r := NewRecord()
+	r.Dangling["old"] = t0.Add(-48 * time.Hour)
+	r.Dangling["mid"] = t0.Add(-2 * time.Hour)
+	r.Dangling["fresh"] = t0.Add(-time.Minute)
+	r.Dangling["rd-alice-cache"] = t0.Add(-1000 * time.Hour)
+	names := []string{"fresh", "mid", "old", "rd-alice-cache", "unmet"}
+	name := func(vs []DanglingVolume) []string {
+		var out []string
+		for _, v := range vs {
+			out = append(out, v.Name)
+		}
+		return out
+	}
+
+	if got := name(AgeVolumes(r, names, 24*time.Hour, t0)); !slices.Equal(got, []string{"old"}) {
+		t.Errorf("AgeVolumes = %v, want only old (not due: mid, fresh, unmet; never an rd- name)", got)
+	}
+	if got := name(PressureVolumes(r, names, time.Hour, t0)); !slices.Equal(got, []string{"old", "mid"}) {
+		t.Errorf("PressureVolumes = %v, want oldest first and none inside the floor", got)
+	}
+}
