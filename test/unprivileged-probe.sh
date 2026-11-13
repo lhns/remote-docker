@@ -198,7 +198,14 @@ row2() {
 
 NFS_PID=""
 nfs_server() {
-    mkdir -p "$W/export" "$W/mnt"
+    mkdir -p "$W/mnt"
+    if [ -n "${PROBE_NFS_EXPORT:-}" ]; then
+        # A server the driver started (the pod image's unfsd, in a container).
+        NFS_EXPORT=$PROBE_NFS_EXPORT
+        return 0
+    fi
+    NFS_EXPORT=$W/export
+    mkdir -p "$W/export"
     echo "from the server" >"$W/export/hello"
     echo "$W/export 127.0.0.1(rw,no_root_squash,insecure)" >"$W/exports"
     if ! command -v unfsd >/dev/null 2>&1; then
@@ -226,13 +233,13 @@ row3() {
         for r in 3a 3b; do emit "$r" notrun "no NFS server: $NFS_ERR"; done
         return
     fi
-    attempt 3a 30 sh -c "mount -t nfs -o $NFS_OPTS 127.0.0.1:$W/export $W/mnt && cat $W/mnt/hello"
+    attempt 3a 30 sh -c "mount -t nfs -o $NFS_OPTS 127.0.0.1:$NFS_EXPORT $W/mnt && cat $W/mnt/hello"
     umount "$W/mnt" 2>/dev/null
     if [ "$USERNS_OK" -ne 1 ]; then
         emit 3b notrun "no user namespace (row 1)"
         return
     fi
-    attempt 3b 30 unshare -Urm sh -c "mount -t nfs -o $NFS_OPTS 127.0.0.1:$W/export $W/mnt && cat $W/mnt/hello"
+    attempt 3b 30 unshare -Urm sh -c "mount -t nfs -o $NFS_OPTS 127.0.0.1:$NFS_EXPORT $W/mnt && cat $W/mnt/hello"
 }
 
 # The script both fuse rows run: build a union, make a replaced directory and a
@@ -359,41 +366,58 @@ row6() {
     fi
     make_engine_wrapper
 
-    # 6a: rootless dockerd. Where the script lives depends on the image or
-    # package, so look for it and say what was found.
-    local drl rk
+    # 6a: rootless dockerd, the way docker:dind-rootless starts it. The image
+    # carries rootlesskit and an entrypoint but no dockerd-rootless.sh, so the
+    # candidates are tried in turn and each one's first error is kept.
+    local drl rk ep cand dpid dsock clog errs=""
     drl=$(command -v dockerd-rootless.sh || find /usr /opt /bin -name 'dockerd-rootless.sh' 2>/dev/null | head -n1)
     rk=$(command -v rootlesskit || true)
-    say "dockerd-rootless.sh: [${drl:-not found}] rootlesskit: [${rk:-not found}] dockerd: [$(command -v dockerd || true)]"
-    say "rootless files: $(find / -xdev \( -name 'dockerd-rootless*' -o -name 'rootlesskit*' \) 2>/dev/null | head -n5 | tr '\n' ' ')"
-    local dpid=""
-    if [ -n "$drl" ]; then
-        $ENG "$drl" --host="unix://$W/run/docker.sock" --data-root="$W/home/docker" >"$W/dockerd-rootless.log" 2>&1 &
-        dpid=$!
-    elif [ -n "$rk" ]; then
-        # The script's own command line, when only rootlesskit is present.
-        $ENG "$rk" --net=slirp4netns --copy-up=/etc --copy-up=/run --propagation=rslave \
-            dockerd --host="unix://$W/run/docker.sock" --data-root="$W/home/docker" >"$W/dockerd-rootless.log" 2>&1 &
-        dpid=$!
-    else
-        echo "neither dockerd-rootless.sh nor rootlesskit is installed" >"$W/dockerd-rootless.log"
+    ep=$(command -v dockerd-entrypoint.sh || true)
+    say "dockerd-rootless.sh: [${drl:-not found}] rootlesskit: [${rk:-not found}] entrypoint: [${ep:-not found}] dockerd: [$(command -v dockerd || true)]"
+    say "running as uid $(id -u), engine uid $ENG_UID ($ENGMODE), NoNewPrivs=$(awk '/^NoNewPrivs/{print $2}' /proc/self/status)"
+    say "sysctls: unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo absent) apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent) max_user_namespaces=$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo absent)"
+    if [ -n "$ep" ]; then
+        echo "---- $ep (the image's own start-up)"
+        sed 's/^/        /' "$ep"
     fi
-    local dsock="$ENG docker -H unix://$W/run/docker.sock"
-    if [ -n "$dpid" ]; then
-        for _ in $(seq 1 90); do
+    dsock="$ENG docker -H unix://$W/run/docker.sock"
+    for cand in entrypoint script rootlesskit; do
+        clog=$W/dockerd-rootless-$cand.log
+        case "$cand" in
+            entrypoint)
+                [ -n "$ep" ] || continue
+                set -- "$ENG" env DOCKER_TLS_CERTDIR= "$ep" dockerd --host="unix://$W/run/docker.sock" --data-root="$W/home/docker"
+                ;;
+            script)
+                [ -n "$drl" ] || continue
+                set -- "$ENG" "$drl" --host="unix://$W/run/docker.sock" --data-root="$W/home/docker"
+                ;;
+            rootlesskit)
+                [ -n "$rk" ] || continue
+                set -- "$ENG" "$rk" --net=slirp4netns --mtu=65520 --disable-host-loopback --port-driver=builtin \
+                    --copy-up=/etc --copy-up=/run dockerd --host="unix://$W/run/docker.sock" --data-root="$W/home/docker"
+                ;;
+        esac
+        "$@" >"$clog" 2>&1 &
+        dpid=$!
+        for _ in $(seq 1 60); do
             if timeout 5 $dsock info >/dev/null 2>&1; then ENGINE_OK=1; break; fi
             kill -0 "$dpid" 2>/dev/null || break
             sleep 1
         done
-    fi
-    echo "---- row 6a: rootless dockerd (log tail)"
-    tail -n 15 "$W/dockerd-rootless.log" | sed 's/^/        /'
+        echo "---- row 6a via $cand (log tail)"
+        tail -n 25 "$clog" | sed 's/^/        /'
+        [ "$ENGINE_OK" -eq 1 ] && break
+        errs="$errs [$cand: $(firsterr "$clog")]"
+        pkill -f "$W/run/docker.sock" 2>/dev/null
+        wait "$dpid" 2>/dev/null
+    done
     if [ "$ENGINE_OK" -eq 1 ]; then
         ENGINE=docker-rootless
         DOCKER=$dsock
-        emit 6a ok "$(timeout 10 $DOCKER info --format 'driver={{.Driver}} cgroup={{.CgroupVersion}}/{{.CgroupDriver}} security={{.SecurityOptions}}' 2>&1)"
+        emit 6a ok "via $cand: $(timeout 10 $DOCKER info --format 'driver={{.Driver}} cgroup={{.CgroupVersion}}/{{.CgroupDriver}} security={{.SecurityOptions}}' 2>&1)"
     else
-        emit 6a refused "$(firsterr "$W/dockerd-rootless.log")"
+        emit 6a refused "${errs:-nothing to start: no entrypoint, script or rootlesskit} [uid $(id -u) engine uid $ENG_UID NoNewPrivs=$(awk '/^NoNewPrivs/{print $2}' /proc/self/status) apparmor_restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)]"
     fi
 
     # 6b and 6d: rootless podman, its API service and a container. pasta, the
@@ -518,6 +542,42 @@ row8() {
     emit 8 refused "no way into the namespace:$seen"
 }
 
+# watch_matrix <container> <dir> <direct|inns>: a watcher in a container on
+# <dir>, poked from outside; MATRIX gets the masks seen per primitive and WLOG
+# the container's log. The files poke-<primitive>.txt must exist in <dir>.
+watch_matrix() {
+    local c=$1 dir=$2 how=$3 p out seen
+    MATRIX=""
+    WLOG=""
+    if ! timeout 60 $DOCKER run $RUN_NET -d --name "$c" -v "$dir:/data" \
+        -v /usr/local/bin/watchprobe:/probe/watchprobe:ro \
+        $IMG /probe/watchprobe -timeout 40s /data >"$W/$c.out" 2>&1; then
+        MATRIX="the watch container would not start: $(firstline "$(cat "$W/$c.out")")"
+        return 1
+    fi
+    for _ in $(seq 1 30); do
+        $DOCKER logs "$c" 2>&1 | grep -q '^READY' && break
+        sleep 1
+    done
+    for p in openclose mtime touch; do
+        if [ "$how" = inns ]; then
+            out=$(inns "/usr/local/bin/pokeprobe $p $dir/poke-$p.txt" 2>&1)
+        else
+            out=$($ENG /usr/local/bin/pokeprobe "$p" "$dir/poke-$p.txt" 2>&1)
+        fi
+        say "pokeprobe $p ($how): $out"
+    done
+    timeout 90 $DOCKER wait "$c" >/dev/null 2>&1
+    WLOG=$($DOCKER logs "$c" 2>&1)
+    $DOCKER rm -f "$c" >/dev/null 2>&1
+    echo "$WLOG" | grep -v 'IN_ISDIR data/$' | sed 's/^/        /'
+    for p in openclose mtime touch; do
+        seen=$(grep "^INOTIFY .* poke-$p\.txt$" <<<"$WLOG" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
+        MATRIX="$MATRIX $p=${seen:-<nothing>}"
+    done
+    return 0
+}
+
 row9() {
     echo "== 9. inotify on a FUSE mount bound into a container =="
     need_engine 9 || return
@@ -526,39 +586,34 @@ row9() {
         return
     fi
     if ! command -v fuse-overlayfs >/dev/null 2>&1; then emit 9 notrun "fuse-overlayfs is not installed"; return; fi
-    local B=$W/f9 out
+    # The positive control: the same watcher and pokes on a plain bind of a
+    # local directory. If even that shows nothing, the harness is at fault and
+    # the FUSE answer below means nothing.
+    local C=$W/f9ctl B=$W/f9 out p ctl
+    mkdir -p "$C"
+    for p in openclose mtime touch; do echo before >"$C/poke-$p.txt"; done
+    [ "$ENGMODE" = setpriv ] && chown -R "$ENG_UID:$ENG_UID" "$C" 2>/dev/null
+    if ! watch_matrix wp9c "$C" direct; then
+        emit 9 refused "positive control (plain bind) did not run: $MATRIX"
+        return
+    fi
+    ctl=$MATRIX
+    if ! grep -q "^INOTIFY .* poke-" <<<"$WLOG"; then
+        emit 9 refused "HARNESS FAULT: the positive control (plain bind, same watcher and pokes) saw no event for any poke:$ctl"
+        return
+    fi
     local cmd="mkdir -p $B/lower $B/upper $B/work $B/merged && for p in openclose mtime touch; do echo before >$B/lower/poke-\$p.txt; done && fuse-overlayfs -o lowerdir=$B/lower,upperdir=$B/upper,workdir=$B/work $B/merged"
     out=$(inns "$cmd" 2>&1)
     if [ $? -ne 0 ]; then
-        emit 9 refused "fuse-overlayfs would not mount where the runtime sees it: $(firstline "$out")"
+        emit 9 refused "fuse-overlayfs would not mount where the runtime sees it: $(firstline "$out") [positive control ok:$ctl]"
         return
     fi
-    timeout 60 $DOCKER run $RUN_NET -d --name wp9 -v "$B/merged:/data" \
-        -v /usr/local/bin/watchprobe:/probe/watchprobe:ro \
-        $IMG /probe/watchprobe -timeout 40s /data >"$W/wp9.out" 2>&1 || {
-        emit 9 refused "the watch container would not start: $(firstline "$(cat "$W/wp9.out")")"
-        return
-    }
-    for _ in $(seq 1 30); do
-        $DOCKER logs wp9 2>&1 | grep -q '^READY' && break
-        sleep 1
-    done
-    local p
-    for p in openclose mtime touch; do
-        out=$(inns "/usr/local/bin/pokeprobe $p $B/merged/poke-$p.txt" 2>&1)
-        say "pokeprobe $p: $out"
-    done
-    timeout 90 $DOCKER wait wp9 >/dev/null 2>&1
-    local log summary="" seen
-    log=$($DOCKER logs wp9 2>&1)
-    echo "$log" | sed 's/^/        /'
-    $DOCKER rm -f wp9 >/dev/null 2>&1
-    for p in openclose mtime touch; do
-        seen=$(grep "^INOTIFY .* poke-$p\.txt$" <<<"$log" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
-        summary="$summary $p=${seen:-<nothing>}"
-    done
+    if watch_matrix wp9 "$B/merged" inns; then
+        emit 9 ok "RECORDED masks on the FUSE mount:$MATRIX ; positive control on a plain bind:$ctl"
+    else
+        emit 9 refused "$MATRIX [positive control ok:$ctl]"
+    fi
     inns "fusermount3 -u $B/merged 2>/dev/null || umount $B/merged" >/dev/null 2>&1
-    emit 9 ok "RECORDED inotify masks seen in the container:$summary"
 }
 
 row4() {
@@ -575,16 +630,24 @@ row4() {
 row11() {
     echo "== 11. ports =="
     need_engine 11a 11b 11c || return
+    say "tun device: $(ls -l /dev/net/tun 2>&1); slirp4netns: $(command -v slirp4netns || echo absent); rootlessport: $(find /usr -name rootlessport 2>/dev/null | head -n1)"
     timeout 60 $DOCKER run $RUN_NET -d --name web11 -p 18080:80 $IMG httpd -f -p 80 -h /etc >"$W/web11.out" 2>&1
     sleep 3
-    say "listeners: $(ss -ltnp 2>&1 | grep -E '18080|rootlesskit|pasta|slirp|conmon' | head -n3 | tr '\n' ';')"
+    say "web11 start: $(cat "$W/web11.out")"
+    say "containers: $($DOCKER ps -a 2>&1 | tr '\n' ';')"
+    say "web11 log: $($DOCKER logs web11 2>&1 | head -n3 | tr '\n' ';')"
+    say "listeners: $(ss -ltnp 2>&1 | tr '\n' ';')"
     attempt 11a 15 wget -qO- -T5 http://127.0.0.1:18080/hostname
     $DOCKER rm -f web11 >/dev/null 2>&1
+    # Where the container's own network points: the gateway rows depend on it.
+    say "in a container: $(timeout 60 $DOCKER run $RUN_NET --rm $IMG sh -c 'ip -4 addr; ip route; cat /etc/resolv.conf' 2>&1 | tr '\n' ';')"
     busybox httpd -f -p 18081 -h /etc >"$W/pod-httpd.log" 2>&1 &
-    local hpid=$! ip
+    local hpid=$! ip net=$RUN_NET
     sleep 1
+    # slirp4netns refuses the host's loopback unless told otherwise.
+    [ "$ENGINE" = podman ] && net=${RUN_NET/slirp4netns/slirp4netns:allow_host_loopback=true}
     ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
-    attempt 11b 40 $DOCKER run $RUN_NET --rm $IMG wget -qO- -T5 http://10.0.2.2:18081/hostname
+    attempt 11b 40 $DOCKER run $net --rm $IMG wget -qO- -T5 http://10.0.2.2:18081/hostname
     if [ -n "$ip" ]; then
         attempt 11c 40 $DOCKER run $RUN_NET --rm $IMG wget -qO- -T5 "http://$ip:18081/hostname"
     else
@@ -651,22 +714,41 @@ build_probes() {
     done
 }
 
-# A root-made NFS mount whose transport lives in a private netns, made before
-# any rootless daemon starts so its mount namespace inherits it (row 4).
-prep_netns_nfs() {
-    local d=/srv/rdprobe
+# build_image: the probe image, for the pods and for the runner's NFS servers.
+build_image() {
+    local stage=$PROBE_OUT/stage
+    build_probes
+    mkdir -p "$stage"
+    cp "$HERE/unprivileged-probe/Dockerfile" "$SELF" "$BIN/watchprobe" "$BIN/pokeprobe" "$stage/"
+    docker build -t unprivileged-probe:kind "$stage" || { echo "setup error: image build" >&2; exit 2; }
+}
+
+# The runner has no unfs3 package, so the pod image's server runs in containers:
+# one on the host network (rows 3a, 3b), one in a private netns of its own whose
+# client mount a root process makes (row 4). The mount is made before any
+# rootless daemon starts, so that daemon's mount namespace inherits it.
+prep_nfs_servers() {
+    local d=/srv/rdprobe pid out
     sudo mkdir -p $d/export $d/mnt
     echo "from the server" | sudo tee $d/export/hello >/dev/null
     echo "owned by 1234" | sudo tee $d/export/owned-by-1234 >/dev/null
     sudo chown 1234:1234 $d/export/owned-by-1234
-    sudo chmod 755 /srv $d $d/export $d/mnt
+    sudo chmod -R a+rX /srv $d
     echo "$d/export 127.0.0.1(rw,no_root_squash,insecure)" | sudo tee $d/exports >/dev/null
-    sudo ip netns add rdprobe 2>/dev/null
-    sudo ip -n rdprobe link set lo up
-    (sudo nsenter --net=/run/netns/rdprobe unfsd -u -d -p -n 2049 -m 2049 -e $d/exports >"$PROBE_OUT/unfsd-netns.log" 2>&1 &)
-    sleep 2
-    local out
-    if out=$(sudo nsenter --net=/run/netns/rdprobe mount -t nfs -o "$NFS_OPTS" 127.0.0.1:$d/export $d/mnt 2>&1); then
+    docker rm -f rd-unfsd rd-unfsd-ns >/dev/null 2>&1
+    docker run -d --name rd-unfsd --network host --entrypoint unfsd -v $d:$d unprivileged-probe:kind \
+        -u -d -p -n 2049 -m 2049 -e $d/exports >/dev/null 2>&1 || echo "note: the host-network NFS server did not start"
+    docker run -d --name rd-unfsd-ns --network none --entrypoint unfsd -v $d:$d unprivileged-probe:kind \
+        -u -d -p -n 2049 -m 2049 -e $d/exports >/dev/null 2>&1 || echo "note: the private-netns NFS server did not start"
+    sleep 3
+    PROBE_NFS_EXPORT=$d/export
+    pid=$(docker inspect -f '{{.State.Pid}}' rd-unfsd-ns 2>/dev/null)
+    if [ -z "$pid" ] || [ "$pid" = 0 ]; then
+        PROBE_NFS_PRESET=""
+        PROBE_NFS_REASON="the private-netns NFS server container is not running: $(docker logs rd-unfsd-ns 2>&1 | head -n2)"
+        return
+    fi
+    if out=$(sudo nsenter --net="/proc/$pid/ns/net" mount -t nfs -o "$NFS_OPTS" 127.0.0.1:$d/export $d/mnt 2>&1); then
         PROBE_NFS_PRESET=$d/mnt
         PROBE_NFS_REASON=""
     else
@@ -681,12 +763,12 @@ run_tier() { # <tier> <who: root|user> [extra env...]
     log=$PROBE_OUT/log-$tier.txt
     if [ "$who" = root ]; then
         w=$(sudo mktemp -d)
-        sudo env PROBE_TIER="$tier" PROBE_WORK="$w" PROBE_ENGINE=none "$@" \
-            bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1
+        (cd /tmp && sudo env PROBE_TIER="$tier" PROBE_WORK="$w" PROBE_ENGINE=none "$@" \
+            bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1)
     else
         w=$(sudo -u probe mktemp -d)
-        sudo -H -u probe env PROBE_TIER="$tier" PROBE_WORK="$w" "$@" \
-            bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1
+        (cd /tmp && sudo -H -u probe env PROBE_TIER="$tier" PROBE_WORK="$w" "$@" \
+            bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1)
         sudo pkill -u probe 2>/dev/null
         sleep 2
     fi
@@ -703,8 +785,7 @@ runner_mode() {
         sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1 || echo "note: runner package $pkg did not install"
     done
     sudo modprobe nfs 2>/dev/null
-    command -v unfsd >/dev/null || echo "note: unfsd is not on the runner"
-    build_probes
+    build_image
     sudo cp "$BIN"/watchprobe "$BIN"/pokeprobe /usr/local/bin/
     sudo cp "$SELF" /usr/local/bin/unprivileged-probe.sh
     sudo useradd -m -s /bin/bash probe 2>/dev/null
@@ -715,20 +796,21 @@ runner_mode() {
         fact os "$(. /etc/os-release && echo "$PRETTY_NAME")" runner
         fact apparmor_restrict_unprivileged_userns "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)" runner
     } >>"$PROBE_OUT/results.txt"
-    run_tier runner-root root
-    prep_netns_nfs
-    run_tier runner-user user PROBE_NFS_PRESET="$PROBE_NFS_PRESET" PROBE_NFS_REASON="$PROBE_NFS_REASON"
+    prep_nfs_servers
+    run_tier runner-root root PROBE_NFS_EXPORT="$PROBE_NFS_EXPORT"
+    run_tier runner-user user PROBE_NFS_EXPORT="$PROBE_NFS_EXPORT" PROBE_NFS_PRESET="$PROBE_NFS_PRESET" PROBE_NFS_REASON="$PROBE_NFS_REASON"
     # The same user with the Ubuntu restriction lifted, clearly labelled: what
     # the rows say once the one sysctl that blocks them is off.
     local was
     was=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)
     if [ "${was:-0}" = 1 ]; then
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
-        run_tier runner-user-unrestricted user PROBE_NFS_PRESET="$PROBE_NFS_PRESET" PROBE_NFS_REASON="$PROBE_NFS_REASON"
+        run_tier runner-user-unrestricted user PROBE_NFS_EXPORT="$PROBE_NFS_EXPORT" PROBE_NFS_PRESET="$PROBE_NFS_PRESET" PROBE_NFS_REASON="$PROBE_NFS_REASON"
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 >/dev/null
     else
         say "the runner does not restrict unprivileged user namespaces; no second user pass"
     fi
+    docker rm -f rd-unfsd rd-unfsd-ns >/dev/null 2>&1
 }
 
 # ---- the cluster ------------------------------------------------------------
@@ -740,13 +822,10 @@ render() { # <tier> <name> <namespace> <hostusers: default|false>
         -e "s/#__PROCMOUNT__/${proc:-#}/" "$file"
 }
 
-kind_mode() {
-    local cluster=${KIND_CLUSTER:-probe} stage=$PROBE_OUT/stage
+kind_setup() {
+    local cluster=${KIND_CLUSTER:-probe}
     kubectl cluster-info >/dev/null 2>&1 || { echo "setup error: no cluster to talk to" >&2; exit 2; }
-    build_probes
-    mkdir -p "$stage"
-    cp "$HERE/unprivileged-probe/Dockerfile" "$SELF" "$BIN/watchprobe" "$BIN/pokeprobe" "$stage/"
-    docker build -t unprivileged-probe:kind "$stage" || { echo "setup error: image build" >&2; exit 2; }
+    build_image
     kind load docker-image unprivileged-probe:kind --name "$cluster" || { echo "setup error: kind load" >&2; exit 2; }
 
     {
@@ -755,34 +834,59 @@ kind_mode() {
         fact kind "$(kind version 2>&1)" cluster
     } >>"$PROBE_OUT/results.txt"
 
-    local ns
+    local ns lvl msg
     for ns in privileged baseline restricted; do
         kubectl create namespace "probe-$ns" >/dev/null 2>&1
         kubectl label --overwrite namespace "probe-$ns" "pod-security.kubernetes.io/enforce=$ns" >/dev/null
     done
 
     # The permissive spec offered to the stricter levels: what the admission says.
-    local lvl msg
     for lvl in baseline restricted; do
         msg=$(render permissive-root adm-probe "probe-$lvl" default | kubectl apply --dry-run=server -f - 2>&1)
         printf 'FACT|cluster|permissive-root spec offered to %s|%s\n' "$lvl" "$(clean <<<"$msg")" >>"$PROBE_OUT/results.txt"
     done
+}
 
+# kind_mode: the pods run on the runner's kernel, so the runner's AppArmor
+# restriction on user namespaces applies to them. Run the tiers with it as it
+# is (pods named plainly), then with it off (pods suffixed -ur0).
+kind_mode() {
+    kind_setup
+    local was
+    was=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)
+    printf 'FACT|cluster|apparmor_restrict_unprivileged_userns, pods without a suffix|%s\n' "$was" >>"$PROBE_OUT/results.txt"
+    kind_pass "" yes
+    if [ "$was" = 1 ]; then
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
+        printf 'FACT|cluster|apparmor_restrict_unprivileged_userns, pods suffixed -ur0|0\n' >>"$PROBE_OUT/results.txt"
+        kind_pass -ur0 no
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 >/dev/null
+    fi
+}
+
+# kind_pass <suffix> <yes|no>: every tier once; the second argument says whether
+# the hostUsers: false variants run too.
+kind_pass() {
+    local sfx=$1 withuns=$2
     # name|manifest|namespace
     local specs=(
         "perm-nonroot|permissive-nonroot|probe-privileged"
         "perm-root|permissive-root|probe-privileged"
         "baseline|baseline|probe-baseline"
         "restricted|restricted|probe-restricted"
+        "baseline-localhost|baseline-localhost|probe-baseline"
+        "restricted-localhost|restricted-localhost|probe-restricted"
         "control|control|probe-privileged"
     )
-    local s name file hu pod pods=() out rc
+    local s name file hu pod pods=() out rc ns
     for s in "${specs[@]}"; do
         IFS='|' read -r name file ns <<<"$s"
         for hu in default false; do
-            [ "$name" = control ] && [ "$hu" = false ] && continue
+            [ "$hu" = false ] && { [ "$name" = control ] || [ "$withuns" = no ]; } && continue
+            case "$name" in *-localhost) [ "$hu" = false ] && continue ;; esac
             pod=$name
             [ "$hu" = false ] && pod=$name-uns
+            pod=$pod$sfx
             kubectl delete pod "$pod" -n "$ns" --ignore-not-found >/dev/null 2>&1
             out=$(render "$file" "$pod" "$ns" "$hu" | kubectl apply -f - 2>&1)
             rc=$?
@@ -818,7 +922,7 @@ kind_mode() {
                         ev=$(kubectl get events -n "$n" --field-selector "involvedObject.name=$pod" \
                             -o jsonpath='{range .items[*]}{.type}: {.reason}: {.message}{"\n"}{end}' 2>&1 | grep -v '^Normal' | tail -n1)
                         echo "$pod: never started: $ev"
-                        case "$pod:$ev" in *-uns:*sysfs*) ev="$ev [kind limitation (nested node container), needs a real cluster]" ;; esac
+                        case "$pod:$ev" in *-uns*:*sysfs*) ev="$ev [kind limitation (nested node container), needs a real cluster]" ;; esac
                         printf 'RESULT|%s|0|refused|admitted but never started: %s\n' "$pod" "$(clean <<<"$ev")" >>"$PROBE_OUT/results.txt"
                         kubectl describe pod "$pod" -n "$n" >"$PROBE_OUT/describe-$pod.txt" 2>&1
                     else
@@ -876,11 +980,21 @@ ROWS=(
     "12b|docker run --memory 64m --cpus 0.5"
 )
 
+# ref_for <tier>: the tier whose pass makes a refusal in this one a measurement.
+ref_for() {
+    case "$1" in
+        runner-root | control | control-ur0) echo "" ;;
+        runner-user*) echo runner-root ;;
+        *-ur0) echo control-ur0 ;;
+        *) echo control ;;
+    esac
+}
+
 report() {
     local f=$PROBE_OUT/results.txt out=$PROBE_OUT/table.md
     [ -s "$f" ] || { echo "no results recorded in $f"; return 0; }
     declare -A res
-    local tiers=() line t r st d k v
+    local tiers=() line t r st d k v ref rs
     while IFS='|' read -r k t r st d; do
         [ "$k" = RESULT ] || continue
         res[$t|$r]="$st|$d"
@@ -889,7 +1003,7 @@ report() {
     {
         echo "# Unprivileged workspace probe"
         echo
-        echo "Recorded answers, never assertions. \`ok\` means the command succeeded, \`refused\` that it failed (first line shown), \`not run\` that it was not tried."
+        echo "Recorded answers, never assertions. A refusal counts as measured only where the reference tier (the privileged control pod for the cluster, the root pass for the runner) passed the same row; otherwise it is not measured."
         echo
         echo "## Environment"
         echo
@@ -921,10 +1035,21 @@ report() {
                 fi
                 st=${v%%|*}
                 d=${v#*|}
+                ref=$(ref_for "$t")
+                rs=""
+                [ -n "$ref" ] && rs=${res[$ref|$r]%%|*}
                 case "$st" in
-                    ok) a="ok${d:+: $d}" ;;
-                    refused) a="refused: $d" ;;
-                    *) a="not run: $d" ;;
+                    ok) a="measured ok${d:+: $d}" ;;
+                    refused)
+                        if [ -z "$ref" ]; then
+                            a="not measured (the reference itself failed): $d"
+                        elif [ "$rs" = ok ]; then
+                            a="measured refused (the reference passed): $d"
+                        else
+                            a="not measured (the reference ${rs:-has no result}, so a harness or kernel limit): $d"
+                        fi
+                        ;;
+                    *) a="not measured: $d" ;;
                 esac
                 echo "| $r | ${line#*|} | ${a//|/ } |"
             done

@@ -12,3 +12,8 @@ featureGates:
   ProcMountType: true
 nodes:
   - role: control-plane
+    # The Localhost seccomp profile the *-localhost tiers name, in the directory
+    # the kubelet reads profiles from. The workflow copies it to /tmp first.
+    extraMounts:
+      - hostPath: /tmp/rd-seccomp
+        containerPath: /var/lib/kubelet/seccomp
