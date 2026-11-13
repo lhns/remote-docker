@@ -213,7 +213,7 @@ func serve(addr, wsAddr string) error {
 	}
 
 	pruneCfg, err := pruneSettings(os.Getenv(envPruneAfter), os.Getenv(envPruneAbove),
-		os.Getenv(envPruneContainers), os.Getenv(envPruneInterval), os.Getenv(envPruneFloor))
+		os.Getenv(envPruneContainers), os.Getenv(envPruneVolumes), os.Getenv(envPruneInterval), os.Getenv(envPruneFloor))
 	if err != nil {
 		return err
 	}
@@ -519,7 +519,7 @@ func serve(addr, wsAddr string) error {
 			log:       logger("prune"),
 		}
 		log.Info("pruning unused images and build cache", "after", pruneCfg.After,
-			"above", pruneCfg.Above, "containers", pruneCfg.Containers)
+			"above", pruneCfg.Above, "containers", pruneCfg.Containers, "volumes", pruneCfg.Volumes)
 		wg.Go(func() { pr.run(ctx) })
 	} else {
 		log.Info("pruning is off", "vars", envPruneAfter+","+envPruneAbove)

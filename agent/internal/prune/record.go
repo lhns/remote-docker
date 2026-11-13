@@ -22,10 +22,41 @@ type Record struct {
 	// starts. Zero reads none: there is nothing earlier to catch up on.
 	Swept time.Time
 	Seen  map[string]time.Time
+
+	// Dangling is when each anonymous volume was first seen with no container
+	// naming it (ADR 0056, amended 2026-11-13). Absent from the file means
+	// empty, so it needs no version bump.
+	Dangling map[string]time.Time
 }
 
 // NewRecord is a record that knows nothing.
-func NewRecord() *Record { return &Record{Seen: map[string]time.Time{}} }
+func NewRecord() *Record {
+	return &Record{Seen: map[string]time.Time{}, Dangling: map[string]time.Time{}}
+}
+
+// ObserveVolumes notes which anonymous volumes are dangling at now. One met for
+// the first time is dangling since now; one no longer listed was attached again
+// or removed, and drops out, so its age starts over if it dangles again.
+func (r *Record) ObserveVolumes(now time.Time, dangling []string) {
+	next := make(map[string]time.Time, len(dangling))
+	for _, name := range dangling {
+		if t, ok := r.Dangling[name]; ok {
+			next[name] = t
+		} else {
+			next[name] = now
+		}
+	}
+	r.Dangling = next
+}
+
+// DanglingSince is when the volume was first seen dangling; one the record has
+// not met is as young as now.
+func (r *Record) DanglingSince(name string, now time.Time) time.Time {
+	if t, ok := r.Dangling[name]; ok {
+		return t
+	}
+	return now
+}
 
 // LastSeen is when the image was last in use. An image the record has never
 // met is as old as the record, which is now: an agent upgrade, or a lost file,
@@ -67,11 +98,13 @@ type file struct {
 	Version int                  `json:"version"`
 	Swept   time.Time            `json:"swept"`
 	Seen    map[string]time.Time `json:"seen"`
+
+	Dangling map[string]time.Time `json:"dangling,omitempty"`
 }
 
 // Marshal renders the record as the file holds it.
 func (r *Record) Marshal() ([]byte, error) {
-	return json.MarshalIndent(file{Version: recordVersion, Swept: r.Swept, Seen: r.Seen}, "", "  ")
+	return json.MarshalIndent(file{Version: recordVersion, Swept: r.Swept, Seen: r.Seen, Dangling: r.Dangling}, "", "  ")
 }
 
 // Parse reads what Marshal wrote.
@@ -86,7 +119,10 @@ func Parse(data []byte) (*Record, error) {
 	if f.Seen == nil {
 		f.Seen = map[string]time.Time{}
 	}
-	return &Record{Swept: f.Swept, Seen: f.Seen}, nil
+	if f.Dangling == nil {
+		f.Dangling = map[string]time.Time{}
+	}
+	return &Record{Swept: f.Swept, Seen: f.Seen, Dangling: f.Dangling}, nil
 }
 
 // Load reads the record at path. A missing file is an empty record and no

@@ -2,6 +2,7 @@ package dockercli
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,5 +39,12 @@ func TestParseContainers(t *testing.T) {
 	}
 	if !got[1].Since().Equal(got[1].Created) {
 		t.Errorf("a container that never ran is stopped since %v, want its creation", got[1].Since())
+	}
+}
+
+func TestDanglingVolumeArgs(t *testing.T) {
+	want := "volume ls --quiet --filter dangling=true --filter label=com.docker.volume.anonymous"
+	if got := strings.Join(danglingVolumeArgs, " "); got != want {
+		t.Errorf("args = %q, want %q", got, want)
 	}
 }

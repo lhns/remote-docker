@@ -1053,9 +1053,10 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_EPHEMERAL_MAX_CLIENTS` | `8` | runs per ephemeral account, connected or in grace; the next is refused |
 | `WORKSPACE_EPHEMERAL_GRACE` | `2m` | how long a run keeps its port after its last connection, for a reconnect. A Go duration or whole days, such as `90s` or `1d` |
 | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS` | `false` | also remove an expired run's containers and its compose networks; without it a run whose containers remain keeps its slot until they are removed |
-| `WORKSPACE_PRUNE_AFTER` | `7d` | remove images no container has used for this long, and build cache unused that long. A Go duration or whole days, such as `36h` or `7d`; `0` or `off` disables it. Never volumes. See [Pruning](#pruning) |
+| `WORKSPACE_PRUNE_AFTER` | `7d` | remove images no container has used for this long, and build cache unused that long. A Go duration or whole days, such as `36h` or `7d`; `0` or `off` disables it. See [Pruning](#pruning) |
 | `WORKSPACE_PRUNE_ABOVE` | `80%` | above this disk usage of the daemons' data directory, remove unused build cache and images whatever their age, oldest first; `off` disables it |
 | `WORKSPACE_PRUNE_CONTAINERS` | `false` | also remove containers stopped for longer than `WORKSPACE_PRUNE_AFTER`; never the workspace's own daemon containers |
+| `WORKSPACE_PRUNE_VOLUMES` | `off` | also remove anonymous volumes no container names, once they have dangled for `WORKSPACE_PRUNE_AFTER`; `on` enables it. See [Pruning](#pruning) |
 | `WORKSPACE_METRICS_ADDR` | empty | address such as `:9090` to serve Prometheus metrics on, in plain HTTP at `/metrics`; empty serves none. See [Metrics](#metrics) |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
@@ -1082,7 +1083,19 @@ own dockerd.
   images, oldest first, until usage is below the threshold. An image used in the
   last hour is never removed this way. If the disk stays above the threshold with
   nothing left to remove, the log says so once.
-- **Never** volumes, an image a container (even a stopped one) still uses, or the
+- **Volumes, only with `WORKSPACE_PRUNE_VOLUMES=on`, and only dangling anonymous
+  ones**: the volumes a container made without a name and left behind when it
+  was removed without `-v`, or a compose project brought down without `-v`. The
+  agent lists the daemon's volumes that no container names and that carry
+  the `com.docker.volume.anonymous` label, so a daemon that does not label them
+  (before Engine 23) loses none, and removes each after it has dangled for
+  `WORKSPACE_PRUNE_AFTER`, counted by the agent from when it first saw it. Under
+  disk pressure they go last, after build cache and images, oldest first and none
+  that dangled within the last hour. **A deleted volume's data is gone for good.**
+  Never a named volume, an `rd-*` volume or the workspace's own daemon's volumes
+  in a daemon-per-account workspace. On a shared daemon (ADR 0012) one account's
+  pressure can remove another account's dangling volume.
+- **Never** an image a container (even a stopped one) still uses, or the
   image an account's daemon runs. Stopped containers are removed only with
   `WORKSPACE_PRUNE_CONTAINERS=true`, and never the workspace's own daemon
   containers. A daemon that is not running is not started to be pruned.
@@ -1402,7 +1415,7 @@ daemon per account nests the same data one level deeper. So:
   destructive**: an idle account's daemon container goes, then its storage.
   `docker volume ls --filter label=remote-docker.daemon` lists what must not
   be pruned. The agent's own [pruning](#pruning) touches images and build cache
-  only, never a volume.
+  and, if you turn it on, dangling anonymous volumes; never a named one.
 - **A `rd-*-cache` volume looks unused and is not.** The daemon calls a volume
   in use only while a container names it, and a cache behind a `write=back` or
   `write=ephemeral` share is bound into the container by path, so it always

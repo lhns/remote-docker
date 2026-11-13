@@ -1330,10 +1330,17 @@ premise of the project, and it applies to building it too. So:
   `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
   primitive under test and would report "nothing happened" convincingly.
 
-- **Pruning never touches a volume, never starts a daemon and never forces an
-  image removal** (ADR 0056). A volume cannot be judged unused by the daemon: an
-  `rd-*-cache` behind a union is bound by path and always looks so, and removing
-  it empties a running container's mount. A daemon per account is reached with
+- **Pruning never touches a named volume, never starts a daemon and never forces
+  an image removal** (ADR 0056). A volume cannot be judged unused by the daemon:
+  an `rd-*-cache` behind a union is bound by path and always looks so, and
+  removing it empties a running container's mount. The one exception is opt in
+  (`WORKSPACE_PRUNE_VOLUMES=on`): a volume listed with `dangling=true` AND the
+  daemon's `com.docker.volume.anonymous` label, removed by `volume rm` without
+  force, never a name `workspace.IsManagedVolume` accepts, after
+  `WORKSPACE_PRUNE_AFTER` from the record's first-seen-dangling map, last under
+  pressure and never within the floor. Never `docker volume prune`: against an
+  older daemon it removes every unused volume. The pruner's container removal
+  stays a plain `rm`. A daemon per account is reached with
   `Targets.Lookup`, never `Ensure`. Images go by each tag or digest reference
   without `-f`, so Docker itself refuses one a stopped container uses; the
   parent daemon gets images only, and `WORKSPACE_DIND_IMAGE` is never a
@@ -1447,6 +1454,17 @@ still fires inotify, a `ro,read=cached` mount sees an edit made here within 20s,
 and a `ro` mount asking `write=back` is a union with no write-back in `remote
 status`. Planting a file in that union's cache layer from the workspace is not
 run.
+
+Probes and the volume prune guard, green on PRs 382 and 383 (2026-11-13): in
+`kubernetes.yml` the rendered readiness probe passing `--docker-socket=` and the
+liveness probe not, `failureThreshold: 10`, and the readiness command answering
+`ok (ssh; no local docker socket to check)` in the running pod (ADR 0035); in
+`integration.sh` the write-back section running `docker volume prune -a -f`
+through the client with a `write=back` container up, an unrelated unused volume
+and an unused managed one removed, the running container's `rd-*-cache` volume
+kept, and the file the container wrote before the prune still readable (ADR
+0005, 2026-11-13). A stock docker over ssh bypasses that guard and nothing tests
+it.
 
 Host ports (ADR 0057), green on PR 367 (2026-11-06): in `integration.sh` 10c a
 container on the default bridge and one on a user-defined network reading a
@@ -1674,10 +1692,16 @@ label. NOT on the release path: see the not-tested list below.
 
 `test/prune.sh` runs a workspace per daemon mode with pruning turned on (ADR
 0056): an image used by a stopped container surviving, an unused image tagged
-twice and a build's cache going after the age, volumes (including an `rd-*-cache`)
-untouched, a stopped container going only with `WORKSPACE_PRUNE_CONTAINERS` while
+twice and a build's cache going after the age, named volumes (including an
+`rd-*-cache`) untouched, a stopped container going only with `WORKSPACE_PRUNE_CONTAINERS` while
 a running one stays, the workspace's own image surviving with no account daemon
 left, and `WORKSPACE_PRUNE_ABOVE=1%` removing an unused image and warning once.
+With `WORKSPACE_PRUNE_VOLUMES=on` (sections 4 to 6): a dangling anonymous volume
+going after the age while a named one, an `rd-*-cache`, one still attached to a
+stopped container and a 64-hex volume without the anonymous label stay, and in
+a daemon per account the parent daemon's volume stays; with the switch off the
+same volume survives the age; under `WORKSPACE_PRUNE_ABOVE=1%` a fresh one is
+kept until the floor and then goes.
 
 ### NOT tested, and do not claim otherwise
 

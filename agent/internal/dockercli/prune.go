@@ -13,7 +13,8 @@ import (
 
 // Pruning is what the agent asks a daemon for in order to prune it (ADR 0056).
 // Every method takes the daemon as a -H value, empty for the default socket.
-// Nothing here removes a volume or forces anything.
+// Nothing here forces anything, and the only volumes it removes are dangling
+// anonymous ones.
 type Pruning struct{}
 
 // imageFormat prints an image as one tab-separated line. The tags and digests
@@ -139,6 +140,28 @@ func (Pruning) RemoveImage(ctx context.Context, host, ref string) error {
 // RemoveContainer removes a stopped container, keeping its volumes.
 func (Pruning) RemoveContainer(ctx context.Context, host, id string) error {
 	return CLI{Host: host}.Run(ctx, "dockercli: removing container "+id, "rm", id)
+}
+
+// danglingVolumeArgs lists volumes no container names that the daemon itself
+// labelled anonymous (API 1.42 and later). A daemon that labels none lists
+// none, which is the safe direction.
+var danglingVolumeArgs = []string{"volume", "ls", "--quiet",
+	"--filter", "dangling=true", "--filter", "label=com.docker.volume.anonymous"}
+
+// DanglingAnonymousVolumes is the names of the daemon's dangling anonymous
+// volumes.
+func (Pruning) DanglingAnonymousVolumes(ctx context.Context, host string) ([]string, error) {
+	out, err := CLI{Host: host}.Line(ctx, danglingVolumeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("dockercli: listing dangling volumes: %w", err)
+	}
+	return uniqueFields(out), nil
+}
+
+// RemoveVolume removes one volume. Never forced: the daemon refuses one a
+// container has come to name since it was listed.
+func (Pruning) RemoveVolume(ctx context.Context, host, name string) error {
+	return CLI{Host: host}.Run(ctx, "dockercli: removing volume "+name, "volume", "rm", name)
 }
 
 // BuildPrune removes build cache not used for unusedFor.

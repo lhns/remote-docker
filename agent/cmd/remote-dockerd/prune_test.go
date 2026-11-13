@@ -17,33 +17,44 @@ import (
 )
 
 func TestPruneSettings(t *testing.T) {
-	cfg, err := pruneSettings("", "", "", "", "")
+	cfg, err := pruneSettings("", "", "", "", "", "")
 	if err != nil || cfg.After != 7*24*time.Hour || cfg.Above != 80 || cfg.Containers ||
-		cfg.Interval != time.Hour || cfg.Floor != time.Hour {
+		cfg.Volumes || cfg.Interval != time.Hour || cfg.Floor != time.Hour {
 		t.Errorf("defaults = %+v, %v", cfg, err)
 	}
 	if !cfg.enabled() {
 		t.Error("pruning is not on by default")
 	}
 
-	cfg, err = pruneSettings("36h", "90%", "true", "5s", "1s")
-	if err != nil || cfg.After != 36*time.Hour || cfg.Above != 90 || !cfg.Containers ||
+	cfg, err = pruneSettings("36h", "90%", "true", "on", "5s", "1s")
+	if err != nil || cfg.After != 36*time.Hour || cfg.Above != 90 || !cfg.Containers || !cfg.Volumes ||
 		cfg.Interval != 5*time.Second || cfg.Floor != time.Second {
 		t.Errorf("set = %+v, %v", cfg, err)
 	}
 
 	for _, off := range []string{"0", "off"} {
-		cfg, err = pruneSettings(off, off, "", "", "")
+		cfg, err = pruneSettings(off, off, "", "", "", "")
 		if err != nil || cfg.After != 0 || cfg.Above != 0 || cfg.enabled() {
 			t.Errorf("%q = %+v, %v; want both rules off", off, cfg, err)
 		}
 	}
 
-	for _, bad := range [][5]string{
+	for _, v := range []string{"on", "true", "1"} {
+		if cfg, err := pruneSettings("", "", "", v, "", ""); err != nil || !cfg.Volumes {
+			t.Errorf("volumes %q = %+v, %v; want on", v, cfg, err)
+		}
+	}
+	for _, v := range []string{"", "off", "false"} {
+		if cfg, err := pruneSettings("", "", "", v, "", ""); err != nil || cfg.Volumes {
+			t.Errorf("volumes %q = %+v, %v; want off", v, cfg, err)
+		}
+	}
+
+	for _, bad := range [][6]string{
 		{"garbage"}, {"-1d"}, {"7"}, {"", "garbage"}, {"", "100%"}, {"", "-5"},
-		{"", "", "maybe"}, {"", "", "", "0"}, {"", "", "", "soon"}, {"", "", "", "", "soon"},
+		{"", "", "maybe"}, {"", "", "", "maybe"}, {"", "", "", "", "0"}, {"", "", "", "", "soon"}, {"", "", "", "", "", "soon"},
 	} {
-		if cfg, err := pruneSettings(bad[0], bad[1], bad[2], bad[3], bad[4]); err == nil {
+		if cfg, err := pruneSettings(bad[0], bad[1], bad[2], bad[3], bad[4], bad[5]); err == nil {
 			t.Errorf("%q was accepted: %+v", bad, cfg)
 		}
 	}
@@ -56,7 +67,9 @@ type fakeDocker struct {
 	refuse     map[string]bool // refs the daemon refuses to remove
 	removed    []string        // host/ref
 	rmContr    []string
-	builds     []string // host
+	volumes    map[string][]string // host -> dangling anonymous volumes
+	rmVol      []string            // host/name
+	builds     []string            // host
 	used       *diskModel
 }
 
@@ -94,6 +107,19 @@ func (f *fakeDocker) RemoveImage(_ context.Context, host, ref string) error {
 
 func (f *fakeDocker) RemoveContainer(_ context.Context, host, id string) error {
 	f.rmContr = append(f.rmContr, host+"/"+id)
+	return nil
+}
+
+func (f *fakeDocker) DanglingAnonymousVolumes(_ context.Context, host string) ([]string, error) {
+	return slices.Clone(f.volumes[host]), nil
+}
+
+func (f *fakeDocker) RemoveVolume(_ context.Context, host, name string) error {
+	f.rmVol = append(f.rmVol, host+"/"+name)
+	f.volumes[host] = slices.DeleteFunc(f.volumes[host], func(n string) bool { return n == name })
+	if f.used != nil {
+		f.used.used -= f.used.perImage
+	}
 	return nil
 }
 
@@ -315,3 +341,116 @@ func TestPressureFloorHolds(t *testing.T) {
 type writerFunc func(string)
 
 func (w writerFunc) Write(p []byte) (int, error) { w(string(p)); return len(p), nil }
+
+const anon1 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const anon2 = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+
+func volumeDocker(host string, names ...string) *fakeDocker {
+	return &fakeDocker{
+		images:     map[string][]prune.Image{host: {}},
+		containers: map[string][]prune.Container{},
+		volumes:    map[string][]string{host: names},
+	}
+}
+
+func TestAgeVolumesOnlyWhenAsked(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		d := volumeDocker("", anon1)
+		cfg := pruneConfig{After: time.Hour, Interval: time.Hour, Volumes: on}
+		h := newHarness(t, workspace.ModeShared, cfg, d, nil)
+		h.p.sweep(context.Background(), time.Hour)
+		h.advance(2 * time.Hour)
+		h.p.sweep(context.Background(), time.Hour)
+		if got := len(d.rmVol) == 1; got != on {
+			t.Errorf("volumes=%v: removed %v", on, d.rmVol)
+		}
+	}
+}
+
+func TestAgeVolumesWaitsForTheAge(t *testing.T) {
+	d := volumeDocker("", anon1)
+	cfg := pruneConfig{After: 2 * time.Hour, Interval: time.Hour, Volumes: true}
+	h := newHarness(t, workspace.ModeShared, cfg, d, nil)
+	h.p.sweep(context.Background(), time.Hour) // first seen dangling
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(d.rmVol) != 0 {
+		t.Fatalf("a volume dangling for less than the age was removed: %v", d.rmVol)
+	}
+	// Attached again, then dangling again: the clock starts over.
+	d.volumes[""] = nil
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	d.volumes[""] = []string{anon1}
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(d.rmVol) != 0 {
+		t.Fatalf("a volume attached in between kept its old age: %v", d.rmVol)
+	}
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if !slices.Equal(d.rmVol, []string{"/" + anon1}) {
+		t.Errorf("removed %v, want the volume once it had dangled past the age", d.rmVol)
+	}
+}
+
+func TestVolumesNeverAManagedName(t *testing.T) {
+	d := volumeDocker("", "rd-alice-cache", "rd-dind-alice-lib", anon1)
+	cfg := pruneConfig{After: time.Hour, Interval: time.Hour, Volumes: true}
+	h := newHarness(t, workspace.ModeShared, cfg, d, nil)
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if !slices.Equal(d.rmVol, []string{"/" + anon1}) {
+		t.Errorf("removed %v, want only the anonymous volume", d.rmVol)
+	}
+}
+
+func TestVolumesPerAccountNeverTheParent(t *testing.T) {
+	d := volumeDocker("unix://alice", anon1)
+	d.volumes[""] = []string{anon2}
+	d.images[""] = nil
+	cfg := pruneConfig{After: time.Hour, Interval: time.Hour, Volumes: true}
+	// bob has no running daemon, so Lookup finds none and nothing starts one.
+	h := newHarness(t, workspace.ModePerAccount, cfg, d, map[string]string{"alice": "unix://alice"})
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if !slices.Equal(d.rmVol, []string{"unix://alice/" + anon1}) {
+		t.Errorf("removed %v, want only alice's volume", d.rmVol)
+	}
+}
+
+func TestPressureVolumesAfterImagesAndWithinTheFloor(t *testing.T) {
+	d := &fakeDocker{
+		images:     map[string][]prune.Image{"": {{ID: "sha256:a", Tags: []string{"a:1"}}}},
+		containers: map[string][]prune.Container{},
+		volumes:    map[string][]string{"": {anon1, anon2}},
+		// Each removal frees 5 points; 95 -> 90 after the image, then below 88
+		// after one volume.
+		used: &diskModel{total: 100, used: 95, perImage: 5},
+	}
+	cfg := pruneConfig{Above: 88, Interval: time.Hour, Floor: time.Hour, Volumes: true}
+	h := newHarness(t, workspace.ModeShared, cfg, d, nil)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(d.removed) != 0 || len(d.rmVol) != 0 {
+		t.Fatalf("something inside the floor was removed: %v %v", d.removed, d.rmVol)
+	}
+
+	// Both are old enough now; anon2 has dangled longer.
+	rec, _ := h.p.record(pruneDaemon{name: pruneShared})
+	rec.Seen["sha256:a"] = base.Add(-5 * time.Hour)
+	rec.Dangling[anon1] = base.Add(-2 * time.Hour)
+	rec.Dangling[anon2] = base.Add(-4 * time.Hour)
+	h.advance(5 * time.Minute)
+	h.p.sweep(context.Background(), time.Hour)
+
+	if !slices.Equal(d.removed, []string{"/a:1"}) {
+		t.Errorf("images removed %v, want the image first", d.removed)
+	}
+	if !slices.Equal(d.rmVol, []string{"/" + anon2}) {
+		t.Errorf("volumes removed %v, want only the oldest, and none once below the threshold", d.rmVol)
+	}
+}

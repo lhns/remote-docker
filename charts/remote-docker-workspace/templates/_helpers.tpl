@@ -187,7 +187,8 @@ will not start. A variable `env` names is left to it.
 {{- $vars := dict
       "WORKSPACE_PRUNE_AFTER" $after
       "WORKSPACE_PRUNE_ABOVE" $above
-      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers) -}}
+      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers)
+      "WORKSPACE_PRUNE_VOLUMES" (ternary "on" "off" (eq (toString $p.volumes) "true")) -}}
 {{- range $name, $value := $vars }}
 {{- if not (hasKey $.Values.env $name) }}
 - name: {{ $name }}
