@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      PROBE_OUT: ${{ runner.temp }}/probe-out
+      PROBE_OUT: /tmp/probe-out
       KIND_CLUSTER: probe
     steps:
       - uses: actions/checkout@v7
@@ -83,5 +83,5 @@ jobs:
         if: always()
         with:
           name: unprivileged-probe
-          path: ${{ runner.temp }}/probe-out
+          path: /tmp/probe-out
           if-no-files-found: warn
