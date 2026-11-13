@@ -3809,12 +3809,24 @@ RESTDIR="$WORK/wb-restart"
 mkdir -p "$RESTDIR"
 echo "before" >"$RESTDIR/modified.txt"
 if REMOTE_DOCKER_PREFETCH=eager REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start >"$WORK/wb-start.log" 2>&1; then
+    PRUNE_CACHES_BEFORE=$(docker volume ls -q 2>&1 | grep -E '^rd-.*-cache$' || true)
     if dockert run -d --name itest-wb-restart -v "$RESTDIR:/w:read=cached,write=back" \
         alpine:3 sleep 900 >"$WORK/wb-restart-run.log" 2>&1; then
         if wait_output "$RESTDIR: .*, cached\$" 60 "$WORK/remote-docker" remote status; then
             ok "the fill completed before the restart"
         else
             bad "the share never reported a complete cache: [$LAST_OUTPUT]"
+        fi
+        # For the prune below: this container's cache volume is the one the
+        # daemon calls unused while a union is bound to it, and a managed
+        # volume no container names is what the restarted client may collect.
+        PRUNE_CACHES=$(docker volume ls -q 2>&1 | grep -E '^rd-.*-cache$' | grep -vxF -f <(printf '%s\n' "$PRUNE_CACHES_BEFORE") || true)
+        PRUNEDIR="$WORK/prune-unused"
+        mkdir -p "$PRUNEDIR"
+        PRUNE_UNUSED=""
+        if dockert create --name itest-prune-unused -v "$PRUNEDIR:/w" alpine:3 true >/dev/null 2>&1; then
+            PRUNE_UNUSED=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-prune-unused 2>&1)
+            docker rm -f itest-prune-unused >/dev/null 2>&1
         fi
         if REMOTE_DOCKER_PREFETCH=eager REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote restart -f >"$WORK/wb-restart.log" 2>&1; then
             dockert exec itest-wb-restart sh -c 'echo after >/w/modified.txt && echo made-after >/w/new.txt' >/dev/null 2>&1
@@ -3830,6 +3842,45 @@ if REMOTE_DOCKER_PREFETCH=eager REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker
                 bad "new.txt is [$seen] 40s after the container made it behind a restarted client"
                 share_diagnostics
             fi
+
+            # docker volume prune -a: the daemon calls the cache volume of a
+            # running union unused (ADR 0005, 2026-11-13). Managed volumes are
+            # excluded from its prune and this machine's collector then removes
+            # the unused ones by the rules of `remote gc`.
+            docker volume create itest-prune-plain >/dev/null 2>&1
+            echo "written before the prune" | dockert exec -i itest-wb-restart sh -c 'cat >/w/pre-prune.txt'
+            if [ -z "$PRUNE_CACHES" ] || [ -z "$PRUNE_UNUSED" ]; then
+                bad "no volumes to prune with: cache [$PRUNE_CACHES] unused managed [$PRUNE_UNUSED]"
+            elif outputs 'Total reclaimed space' dockert volume prune -a -f; then
+                ok "docker volume prune -a -f ran"
+                volumes_after=$(docker volume ls -q 2>&1)
+                info "volumes after the prune: $(echo $volumes_after)"
+                if grep -qxF itest-prune-plain <<<"$volumes_after"; then
+                    bad "an unrelated unused volume survived the prune"
+                else
+                    ok "an unrelated unused volume was pruned"
+                fi
+                if grep -qxF "$PRUNE_UNUSED" <<<"$volumes_after"; then
+                    bad "the unused managed volume $PRUNE_UNUSED survived the prune"
+                else
+                    ok "an unused managed volume was collected by the prune"
+                fi
+                for cache in $PRUNE_CACHES; do
+                    if grep -qxF "$cache" <<<"$volumes_after"; then
+                        ok "the running container's cache volume $cache survived the prune"
+                    else
+                        bad "the prune removed the running container's cache volume $cache"
+                    fi
+                done
+                if outputs '^written before the prune$' dockert exec itest-wb-restart cat /w/pre-prune.txt; then
+                    ok "the container still reads what it wrote before the prune"
+                else
+                    bad "the container lost its file in the prune: [$LAST_OUTPUT]"
+                fi
+            else
+                bad "docker volume prune -a -f failed: [$LAST_OUTPUT]"
+            fi
+            docker volume rm itest-prune-plain >/dev/null 2>&1
         else
             bad "remote restart failed: $(cat "$WORK/wb-restart.log")"
         fi

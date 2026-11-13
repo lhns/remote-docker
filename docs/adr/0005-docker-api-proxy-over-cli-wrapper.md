@@ -3,9 +3,10 @@
 - Status: Accepted
 - Date: 2026-08-07
 - Current answer: the proxy decodes `/containers/create`, the error message
-  of a start or restart whose share volume could not mount, and the port fields
-  of `GET /containers/json` and `GET /containers/{id}/json`, and copies
-  everything else through. A shell on the workspace is a stock `ssh`, not a subcommand
+  of a start or restart whose share volume could not mount, the port fields
+  of `GET /containers/json` and `GET /containers/{id}/json`, and the `filters`
+  query of `POST /volumes/prune`, and copies everything else through. A shell on the workspace is a stock `ssh`,
+  not a subcommand
   ([ADR 0018](0018-one-way-to-do-each-thing.md)).
 
 ## Context
@@ -86,6 +87,24 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
   `host` or `container:<id>`. It is the same generic-JSON edit as the
   rewrites above: one field of `HostConfig` decoded as a list of strings, every
   other field untouched.
+- **Amendment, 2026-11-13: `POST /volumes/prune` has its `filters` query read.**
+  The daemon calls a `write=back` union's `rd-*-cache` volume unused, because the
+  union is bound by path, so `docker volume prune -a` (and `docker system prune
+  --volumes`) deleted it under a running container.
+  - The query is decoded as moby's map form (`{"key":{"value":true}}`, or the
+    older list form) and `"label!":{"com.github.lhns.remote-docker":true}` is
+    added, so the daemon skips every managed volume. The daemon excludes a volume
+    only when it has EVERY listed `label!` key, so a user `label!` filter cannot
+    be merged and is refused, as is a filter that cannot be parsed, with a
+    one-line reason and a 400. A request is never forwarded unguarded.
+  - After the daemon answered 200, for `all=true` (or an API older than 1.42,
+    which prunes every volume) with no user `label` filter, the proxy runs the
+    session's collector, the one `remote gc` uses (`Proxy.AfterVolumePrune`),
+    before the reply is relayed, since a one-shot command's session ends when the
+    CLI returns. Its error is logged and never fails the prune. The response is
+    not decoded: volumes it removes are logged, not listed under "Deleted Volumes".
+  - A convenience, not a boundary: a stock docker in an ssh shell on the
+    workspace, or an older client, still prunes the cache volume.
 - The proxy sees every request, which is what makes ADR 0008's automatic port
   forwarding possible at no extra architectural cost.
 - Requests we do not understand are forwarded verbatim rather than rejected.

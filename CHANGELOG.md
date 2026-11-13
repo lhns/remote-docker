@@ -12,6 +12,12 @@ software.
 
 ### Fixes
 
+- **`docker volume prune -a` no longer deletes the cache volume of a running
+  `write=back` container.** The daemon calls it unused because the union is bound
+  by path. The client now excludes managed volumes from the prune and then
+  removes the unused ones as `remote gc` would, for the same reasons. They are
+  not listed under "Deleted Volumes". A stock docker in an ssh shell on the
+  workspace, or an older client, is not guarded.
 - **The Helm chart's readiness probe no longer asks the workspace's Docker
   daemon.** It checks only that SSH accepts, so a busy daemon (a large prune, an
   I/O stall) no longer takes the workspace off the ingress. Liveness still asks

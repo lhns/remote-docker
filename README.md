@@ -1416,7 +1416,11 @@ daemon per account nests the same data one level deeper. So:
 machine, and `remote-docker remote gc` removes unused ones. The exception is a
 `rd-*-cache` volume behind a `write=back` or `write=ephemeral` share, which
 holds a container's writes not yet carried back; leave those to `remote gc`,
-which asks the workspace whether they are mounted.
+which asks the workspace whether they are mounted. `docker volume prune -a`
+through this client keeps managed volumes away from the daemon and then removes
+exactly what `remote gc` would, for the same reasons, so a running union's cache
+survives; the volumes it removes are not listed under "Deleted Volumes". A
+stock docker run on the workspace itself is not guarded.
 
 #### Upgrading an existing workspace is a breaking change
 

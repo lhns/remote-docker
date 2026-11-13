@@ -15,6 +15,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
+	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -421,4 +422,14 @@ func (s *Session) cacheStatus() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// collectAfterPrune is the proxy's hook after `docker volume prune -a`: the
+// daemon cannot tell a write=back union's cache volume is in use, so the
+// prune excludes managed volumes and this removes the unused ones by the rules
+// of `remote gc`. An error is logged and never fails the prune.
+func (s *Session) collectAfterPrune(ctx context.Context) {
+	if _, err := s.Collect(ctx, CollectOptions{}); err != nil {
+		logx.Or(s.opts.Log).Warn("collecting managed volumes after a volume prune failed", "err", err)
+	}
 }

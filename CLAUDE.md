@@ -321,11 +321,15 @@ premise of the project, and it applies to building it too. So:
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
   and that is the whole reason the agent's go.sum did not move for it.
 - **Only `/containers/create`, the error message of a start or restart that
-  failed to mount a share volume, and the port fields of `GET /containers/json`
-  and `GET /containers/{id}/json` are ever decoded** (ADR 0005, amended
-  2026-10-14, 2026-10-20 and 2026-11-06, the last for `HostConfig.ExtraHosts`
-  under `host-ports`). Everything else is copied through. Bodies are
-  handled as generic JSON, never typed structs, so unknown fields survive. The
+  failed to mount a share volume, the port fields of `GET /containers/json`
+  and `GET /containers/{id}/json`, and the `filters` query of `POST
+  /volumes/prune` are ever decoded** (ADR 0005, amended 2026-10-14, 2026-10-20,
+  2026-11-06, the last for `HostConfig.ExtraHosts` under `host-ports`, and
+  2026-11-13). The prune gets a `label!` exclusion of managed volumes and then
+  this machine's collector, so `docker volume prune -a` cannot delete a running
+  union's cache volume; a convenience and not a boundary, since a stock docker
+  over ssh or an older client bypasses it. Everything else is copied through.
+  Bodies are handled as generic JSON, never typed structs, so unknown fields survive. The
   error is read bounded at 64 KiB and only when it matches; the two port
   responses at 16 MiB, chunked included (moby sends JSON over about 2 KiB
   without a length), and only for a 200 `application/json`. A response that
