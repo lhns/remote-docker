@@ -98,7 +98,7 @@ func TestServeRefusesAnEnrolledDirectoryInsideTheOperators(t *testing.T) {
 // Removing a run's containers is off unless asked, and a value that is not a
 // boolean refuses the start naming its variable.
 func TestEphemeralCleanupContainers(t *testing.T) {
-	for raw, want := range map[string]bool{"": false, "false": false, "true": true, "1": true} {
+	for raw, want := range map[string]bool{"": false, "false": false, "off": false, "true": true, "1": true, "on": true} {
 		if got, err := envBool(envEphemeralContainers, raw, false); err != nil || got != want {
 			t.Errorf("%q gave %v, %v; want %v", raw, got, err, want)
 		}
