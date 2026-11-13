@@ -68,7 +68,11 @@ NFS_OPTS="vers=3,proto=tcp,port=2049,mountport=2049,nolock"
 # One-line, pipe-free, bounded: results are parsed back from the log.
 clean() { tr '\n\r|\t' '    ' | sed 's/  */ /g' | cut -c1-300; }
 firstline() { awk 'NF{print; exit}' <<<"$1"; }
-emit() { printf 'RESULT|%s|%s|%s|%s\n' "$TIER" "$1" "$2" "$(clean <<<"$3")"; }
+emit() {
+    local d=$3
+    case "$1" in 4 | 7 | 8 | 9 | 11* | 12b) [ -n "${ENGINE:-}" ] && d="[engine: $ENGINE${RUN_NET:+ $RUN_NET}] $d" ;; esac
+    printf 'RESULT|%s|%s|%s|%s\n' "$TIER" "$1" "$2" "$(clean <<<"$d")"
+}
 fact() { printf 'FACT|%s|%s|%s\n' "${3:-$TIER}" "$1" "$(clean <<<"$2")"; }
 say() { echo "  ....  $*"; }
 
@@ -306,19 +310,23 @@ row5() {
 
 # ---- engines ----------------------------------------------------------------
 
+IMG=docker.io/library/alpine:3
+ENGINE=""
+RUN_NET=""
+
 make_engine_wrapper() {
     mkdir -p "$W/home" "$W/run" "$W/engine"
     chmod 700 "$W/run"
+    local envs="HOME=$W/home XDG_RUNTIME_DIR=$W/run XDG_CONFIG_HOME=$W/home/.config XDG_DATA_HOME=$W/home/.local/share"
     if [ "$ENGMODE" = setpriv ]; then
         chown -R "$ENG_UID:$ENG_UID" "$W/home" "$W/run" "$W/engine" 2>/dev/null
-        printf '#!/bin/sh\nexec setpriv --reuid=%s --regid=%s --clear-groups env HOME=%s XDG_RUNTIME_DIR=%s "$@"\n' \
-            "$ENG_UID" "$ENG_UID" "$W/home" "$W/run" >"$W/eng"
+        printf '#!/bin/sh\nexec setpriv --reuid=%s --regid=%s --clear-groups env %s "$@"\n' \
+            "$ENG_UID" "$ENG_UID" "$envs" >"$W/eng"
     else
-        printf '#!/bin/sh\nexec env HOME=%s XDG_RUNTIME_DIR=%s "$@"\n' "$W/home" "$W/run" >"$W/eng"
+        printf '#!/bin/sh\nexec env %s "$@"\n' "$envs" >"$W/eng"
     fi
     chmod 755 "$W/eng"
     ENG=$W/eng
-    DOCKER="$ENG docker -H unix://$W/run/docker.sock"
 }
 
 row6() {
@@ -351,24 +359,46 @@ row6() {
     fi
     make_engine_wrapper
 
-    # 6a: rootless dockerd, the way the docker:dind-rootless image starts it.
-    $ENG dockerd-rootless.sh --host="unix://$W/run/docker.sock" --data-root="$W/home/docker" \
-        >"$W/dockerd-rootless.log" 2>&1 &
-    local dpid=$!
-    for _ in $(seq 1 90); do
-        if timeout 5 $DOCKER info >/dev/null 2>&1; then ENGINE_OK=1; break; fi
-        kill -0 "$dpid" 2>/dev/null || break
-        sleep 1
-    done
+    # 6a: rootless dockerd. Where the script lives depends on the image or
+    # package, so look for it and say what was found.
+    local drl rk
+    drl=$(command -v dockerd-rootless.sh || find /usr /opt /bin -name 'dockerd-rootless.sh' 2>/dev/null | head -n1)
+    rk=$(command -v rootlesskit || true)
+    say "dockerd-rootless.sh: [${drl:-not found}] rootlesskit: [${rk:-not found}] dockerd: [$(command -v dockerd || true)]"
+    say "rootless files: $(find / -xdev \( -name 'dockerd-rootless*' -o -name 'rootlesskit*' \) 2>/dev/null | head -n5 | tr '\n' ' ')"
+    local dpid=""
+    if [ -n "$drl" ]; then
+        $ENG "$drl" --host="unix://$W/run/docker.sock" --data-root="$W/home/docker" >"$W/dockerd-rootless.log" 2>&1 &
+        dpid=$!
+    elif [ -n "$rk" ]; then
+        # The script's own command line, when only rootlesskit is present.
+        $ENG "$rk" --net=slirp4netns --copy-up=/etc --copy-up=/run --propagation=rslave \
+            dockerd --host="unix://$W/run/docker.sock" --data-root="$W/home/docker" >"$W/dockerd-rootless.log" 2>&1 &
+        dpid=$!
+    else
+        echo "neither dockerd-rootless.sh nor rootlesskit is installed" >"$W/dockerd-rootless.log"
+    fi
+    local dsock="$ENG docker -H unix://$W/run/docker.sock"
+    if [ -n "$dpid" ]; then
+        for _ in $(seq 1 90); do
+            if timeout 5 $dsock info >/dev/null 2>&1; then ENGINE_OK=1; break; fi
+            kill -0 "$dpid" 2>/dev/null || break
+            sleep 1
+        done
+    fi
     echo "---- row 6a: rootless dockerd (log tail)"
     tail -n 15 "$W/dockerd-rootless.log" | sed 's/^/        /'
     if [ "$ENGINE_OK" -eq 1 ]; then
+        ENGINE=docker-rootless
+        DOCKER=$dsock
         emit 6a ok "$(timeout 10 $DOCKER info --format 'driver={{.Driver}} cgroup={{.CgroupVersion}}/{{.CgroupDriver}} security={{.SecurityOptions}}' 2>&1)"
     else
         emit 6a refused "$(firsterr "$W/dockerd-rootless.log")"
     fi
 
-    # 6b and 6d: rootless podman, its API service and a container.
+    # 6b and 6d: rootless podman, its API service and a container. pasta, the
+    # default network, may be refused, so the run is retried with slirp4netns
+    # and then no network, and the first that works is used by later rows.
     $ENG podman system service --time=0 "unix://$W/run/podman.sock" >"$W/podman.log" 2>&1 &
     local ppid=$!
     for _ in $(seq 1 30); do
@@ -378,31 +408,76 @@ row6() {
     done
     echo "---- row 6b: podman system service (log)"
     sed 's/^/        /' "$W/podman.log"
+    local svc=0
     if [ -S "$W/run/podman.sock" ]; then
+        svc=1
         emit 6b ok "service listening on $W/run/podman.sock"
     else
         emit 6b refused "$(firsterr "$W/podman.log")"
     fi
-    attempt 6d 180 $ENG podman run --rm docker.io/library/alpine:3 true
+    local net out seq="" worked=""
+    for net in "" "--network=slirp4netns" "--network=none"; do
+        out=$(timeout 180 $ENG podman run $net --rm $IMG true 2>&1)
+        local rc=$?
+        echo "---- row 6d: podman run ${net:-(default network)} (exit $rc)"
+        sed 's/^/        /' <<<"$out"
+        if [ "$rc" -eq 0 ]; then
+            seq="$seq [${net:-default}: ok]"
+            worked=${worked:-$net}
+            [ -n "$worked" ] || worked=default
+            break
+        fi
+        seq="$seq [${net:-default}: $(grep -m1 -iE 'error|fail|denied|refus|unable' <<<"$out" || firstline "$out")]"
+    done
+    if [ -n "$worked" ]; then
+        emit 6d ok "$seq"
+        [ "$worked" = default ] || RUN_NET=$worked
+    else
+        emit 6d refused "$seq"
+    fi
+    if [ "$ENGINE_OK" -ne 1 ] && [ "$svc" -eq 1 ]; then
+        ENGINE_OK=1
+        ENGINE=podman
+        DOCKER="$ENG podman"
+        say "no rootless dockerd: rows 7 to 12 use rootless podman${RUN_NET:+ with $RUN_NET}"
+    fi
 }
 
 need_engine() { # <row...>: returns 1 after recording, if no engine started
     [ "$ENGINE_OK" -eq 1 ] && return 0
     local r
-    for r in "$@"; do emit "$r" notrun "no engine (row 6a)"; done
+    for r in "$@"; do emit "$r" notrun "no engine (rows 6a, 6b)"; done
     return 1
 }
 
 row7() {
     echo "== 7. image storage =="
     need_engine 7 || return
-    say "$(timeout 10 $DOCKER info --format 'storage driver: {{.Driver}} {{.DriverStatus}}' 2>&1)"
-    attempt 7 240 sh -c "$DOCKER pull alpine:3 && $DOCKER run --rm alpine:3 echo ran-in-container"
+    if [ "$ENGINE" = podman ]; then
+        say "$(timeout 10 $DOCKER info --format 'storage driver: {{.Store.GraphDriverName}}' 2>&1)"
+    else
+        say "$(timeout 10 $DOCKER info --format 'storage driver: {{.Driver}} {{.DriverStatus}}' 2>&1)"
+    fi
+    attempt 7 240 sh -c "$DOCKER pull $IMG && $DOCKER run $RUN_NET --rm $IMG echo ran-in-container"
+}
+
+# inns <shell command>: run where the container runtime's mounts live: the
+# rootless daemon's mount namespace (row 8), or for podman the engine user's own.
+inns() {
+    if [ "$ENGINE" = podman ]; then
+        $ENG sh -c "$1"
+    else
+        $NS_PRE nsenter -t "$NS_PID" $NS_ARGS sh -c "$1"
+    fi
 }
 
 row8() {
     echo "== 8. enter the daemon's mount namespace =="
     need_engine 8 || return
+    if [ "$ENGINE" = podman ]; then
+        emit 8 notrun "the engine is rootless podman, which has no daemon namespace to enter"
+        return
+    fi
     NS_PID=$(cat "$W/run/docker.pid" 2>/dev/null)
     [ -n "$NS_PID" ] && [ -d "/proc/$NS_PID" ] || NS_PID=$($ENG pgrep -x dockerd | head -n1)
     say "daemon pid $NS_PID"
@@ -430,7 +505,7 @@ row8() {
         fi
         NS_PRE=$pre
         NS_ARGS=$args
-        out=$(timeout 60 $DOCKER run --rm -v "$W/nsmount:/w" alpine:3 ls /w 2>&1)
+        out=$(timeout 60 $DOCKER run $RUN_NET --rm -v "$W/nsmount:/w" $IMG ls /w 2>&1)
         echo "        docker run -v: $out"
         if grep -qw marker <<<"$out"; then
             emit 8 ok "[$who nsenter $args] made a mount, a container bound from it saw: $(clean <<<"$out")"
@@ -444,20 +519,23 @@ row8() {
 }
 
 row9() {
-    echo "== 9. inotify on a FUSE mount in the daemon's namespace =="
-    if ! need_engine 9; then return; fi
-    if [ -z "$NS_PID" ]; then emit 9 notrun "could not enter the daemon's namespace (row 8)"; return; fi
-    if ! command -v fuse-overlayfs >/dev/null 2>&1; then emit 9 notrun "fuse-overlayfs is not installed"; return; fi
-    local B=$W/f9 out
-    out=$(timeout 60 $NS_PRE nsenter -t "$NS_PID" $NS_ARGS sh -c \
-        "mkdir -p $B/lower $B/upper $B/work $B/merged && for p in openclose mtime touch; do echo before >$B/lower/poke-\$p.txt; done && fuse-overlayfs -o lowerdir=$B/lower,upperdir=$B/upper,workdir=$B/work $B/merged" 2>&1)
-    if [ $? -ne 0 ]; then
-        emit 9 refused "fuse-overlayfs would not mount in the daemon's namespace: $(firstline "$out")"
+    echo "== 9. inotify on a FUSE mount bound into a container =="
+    need_engine 9 || return
+    if [ "$ENGINE" != podman ] && [ -z "$NS_PID" ]; then
+        emit 9 notrun "could not enter the daemon's namespace (row 8)"
         return
     fi
-    timeout 60 $DOCKER run -d --name wp9 -v "$B/merged:/data" \
+    if ! command -v fuse-overlayfs >/dev/null 2>&1; then emit 9 notrun "fuse-overlayfs is not installed"; return; fi
+    local B=$W/f9 out
+    local cmd="mkdir -p $B/lower $B/upper $B/work $B/merged && for p in openclose mtime touch; do echo before >$B/lower/poke-\$p.txt; done && fuse-overlayfs -o lowerdir=$B/lower,upperdir=$B/upper,workdir=$B/work $B/merged"
+    out=$(inns "$cmd" 2>&1)
+    if [ $? -ne 0 ]; then
+        emit 9 refused "fuse-overlayfs would not mount where the runtime sees it: $(firstline "$out")"
+        return
+    fi
+    timeout 60 $DOCKER run $RUN_NET -d --name wp9 -v "$B/merged:/data" \
         -v /usr/local/bin/watchprobe:/probe/watchprobe:ro \
-        alpine:3 /probe/watchprobe -timeout 40s /data >"$W/wp9.out" 2>&1 || {
+        $IMG /probe/watchprobe -timeout 40s /data >"$W/wp9.out" 2>&1 || {
         emit 9 refused "the watch container would not start: $(firstline "$(cat "$W/wp9.out")")"
         return
     }
@@ -467,11 +545,11 @@ row9() {
     done
     local p
     for p in openclose mtime touch; do
-        out=$(timeout 20 $NS_PRE nsenter -t "$NS_PID" $NS_ARGS /usr/local/bin/pokeprobe "$p" "$B/merged/poke-$p.txt" 2>&1)
+        out=$(inns "/usr/local/bin/pokeprobe $p $B/merged/poke-$p.txt" 2>&1)
         say "pokeprobe $p: $out"
     done
     timeout 90 $DOCKER wait wp9 >/dev/null 2>&1
-    local log summary=""
+    local log summary="" seen
     log=$($DOCKER logs wp9 2>&1)
     echo "$log" | sed 's/^/        /'
     $DOCKER rm -f wp9 >/dev/null 2>&1
@@ -479,7 +557,7 @@ row9() {
         seen=$(grep "^INOTIFY .* poke-$p\.txt$" <<<"$log" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
         summary="$summary $p=${seen:-<nothing>}"
     done
-    $NS_PRE nsenter -t "$NS_PID" $NS_ARGS sh -c "fusermount3 -u $B/merged 2>/dev/null || umount $B/merged" >/dev/null 2>&1
+    inns "fusermount3 -u $B/merged 2>/dev/null || umount $B/merged" >/dev/null 2>&1
     emit 9 ok "RECORDED inotify masks seen in the container:$summary"
 }
 
@@ -490,25 +568,25 @@ row4() {
         return
     fi
     need_engine 4 || return
-    attempt 4 60 $DOCKER run --rm -v "$PROBE_NFS_PRESET:/w" alpine:3 sh -c \
+    attempt 4 60 $DOCKER run $RUN_NET --rm -v "$PROBE_NFS_PRESET:/w" $IMG sh -c \
         'stat -c "%n uid=%u gid=%g" /w /w/hello /w/owned-by-1234; touch /w/written && echo write-ok'
 }
 
 row11() {
     echo "== 11. ports =="
     need_engine 11a 11b 11c || return
-    timeout 60 $DOCKER run -d --name web11 -p 18080:80 alpine:3 httpd -f -p 80 -h /etc >"$W/web11.out" 2>&1
+    timeout 60 $DOCKER run $RUN_NET -d --name web11 -p 18080:80 $IMG httpd -f -p 80 -h /etc >"$W/web11.out" 2>&1
     sleep 3
-    say "listeners: $(ss -ltnp 2>&1 | grep -E '18080|rootlesskit' | head -n3 | tr '\n' ';')"
+    say "listeners: $(ss -ltnp 2>&1 | grep -E '18080|rootlesskit|pasta|slirp|conmon' | head -n3 | tr '\n' ';')"
     attempt 11a 15 wget -qO- -T5 http://127.0.0.1:18080/hostname
     $DOCKER rm -f web11 >/dev/null 2>&1
     busybox httpd -f -p 18081 -h /etc >"$W/pod-httpd.log" 2>&1 &
     local hpid=$! ip
     sleep 1
     ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
-    attempt 11b 40 $DOCKER run --rm alpine:3 wget -qO- -T5 http://10.0.2.2:18081/hostname
+    attempt 11b 40 $DOCKER run $RUN_NET --rm $IMG wget -qO- -T5 http://10.0.2.2:18081/hostname
     if [ -n "$ip" ]; then
-        attempt 11c 40 $DOCKER run --rm alpine:3 wget -qO- -T5 "http://$ip:18081/hostname"
+        attempt 11c 40 $DOCKER run $RUN_NET --rm $IMG wget -qO- -T5 "http://$ip:18081/hostname"
     else
         emit 11c notrun "the pod has no global IPv4 address"
     fi
@@ -528,7 +606,7 @@ row12() {
         emit 12a refused "controllers: ${c:-empty}"
     fi
     need_engine 12b || return
-    attempt 12b 90 $DOCKER run --rm --memory 64m --cpus 0.5 alpine:3 true
+    attempt 12b 90 $DOCKER run $RUN_NET --rm --memory 64m --cpus 0.5 $IMG true
 }
 
 rows() {
@@ -607,7 +685,7 @@ run_tier() { # <tier> <who: root|user> [extra env...]
             bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1
     else
         w=$(sudo -u probe mktemp -d)
-        sudo -u probe env PROBE_TIER="$tier" PROBE_WORK="$w" "$@" \
+        sudo -H -u probe env PROBE_TIER="$tier" PROBE_WORK="$w" "$@" \
             bash /usr/local/bin/unprivileged-probe.sh rows >"$log" 2>&1
         sudo pkill -u probe 2>/dev/null
         sleep 2
@@ -618,9 +696,12 @@ run_tier() { # <tier> <who: root|user> [extra env...]
 
 runner_mode() {
     sudo apt-get update -qq
-    sudo apt-get install -y -qq uidmap fuse-overlayfs fuse3 nfs-common unfs3 slirp4netns \
-        docker-ce-rootless-extras podman util-linux attr psmisc iproute2 >/dev/null ||
-        echo "note: some runner packages did not install; the rows will say which tool is missing"
+    # One at a time: a package that does not exist must not take the rest down.
+    local pkg
+    for pkg in uidmap fuse-overlayfs fuse3 nfs-common unfs3 slirp4netns passt \
+        docker-ce-rootless-extras podman util-linux attr psmisc iproute2 busybox; do
+        sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1 || echo "note: runner package $pkg did not install"
+    done
     sudo modprobe nfs 2>/dev/null
     command -v unfsd >/dev/null || echo "note: unfsd is not on the runner"
     build_probes
@@ -737,6 +818,7 @@ kind_mode() {
                         ev=$(kubectl get events -n "$n" --field-selector "involvedObject.name=$pod" \
                             -o jsonpath='{range .items[*]}{.type}: {.reason}: {.message}{"\n"}{end}' 2>&1 | grep -v '^Normal' | tail -n1)
                         echo "$pod: never started: $ev"
+                        case "$pod:$ev" in *-uns:*sysfs*) ev="$ev [kind limitation (nested node container), needs a real cluster]" ;; esac
                         printf 'RESULT|%s|0|refused|admitted but never started: %s\n' "$pod" "$(clean <<<"$ev")" >>"$PROBE_OUT/results.txt"
                         kubectl describe pod "$pod" -n "$n" >"$PROBE_OUT/describe-$pod.txt" 2>&1
                     else
