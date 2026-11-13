@@ -112,14 +112,8 @@ func pruneSettings(after, above, containers, volumes, interval, floor string) (p
 	if cfg.Containers, err = envBool(envPruneContainers, containers, false); err != nil {
 		return cfg, err
 	}
-	switch strings.TrimSpace(volumes) {
-	case "on":
-		cfg.Volumes = true
-	case "off":
-	default:
-		if cfg.Volumes, err = envBool(envPruneVolumes, volumes, false); err != nil {
-			return cfg, err
-		}
+	if cfg.Volumes, err = envBool(envPruneVolumes, volumes, false); err != nil {
+		return cfg, err
 	}
 	if interval != "" {
 		d, err := parseDuration(interval)
@@ -485,70 +479,65 @@ func (p *pruner) pressure(ctx context.Context, ds []pruneDaemon) {
 		}
 	}
 
-	if !below {
-		type pick struct {
-			s *pruneState
-			c prune.Candidate
-		}
-		var picks []pick
-		now := p.now()
-		for _, d := range ds {
-			s, err := p.snapshot(ctx, d, false)
-			if err != nil {
-				continue
-			}
-			for _, c := range prune.PressureImages(s.rec, s.images, s.containers, s.protected, p.cfg.Floor, now) {
-				picks = append(picks, pick{s, c})
-			}
-		}
-		slices.SortStableFunc(picks, func(a, b pick) int { return a.c.Seen.Compare(b.c.Seen) })
-
+	// Images, then volumes, each oldest first across every daemon, until the
+	// disk is below the threshold.
+	type pick struct {
+		d      pruneDaemon
+		at     time.Time
+		remove func() bool
+	}
+	drain := func(picks []pick) {
+		slices.SortStableFunc(picks, func(a, b pick) int { return a.at.Compare(b.at) })
 		for _, pk := range picks {
-			if ctx.Err() != nil {
+			if below || ctx.Err() != nil {
 				return
 			}
-			if !p.removeImage(ctx, pk.s.d, pk.c.Image) {
-				continue
-			}
-			account(pk.s.d.name).images++
-			if now := credit(pk.s.d.name); now.Percent() <= p.cfg.Above {
+			if pk.remove() && credit(pk.d.name).Percent() <= p.cfg.Above {
 				below = true
-				break
+			}
+		}
+	}
+	var states []*pruneState
+	if !below {
+		for _, d := range ds {
+			if s, err := p.snapshot(ctx, d, false); err == nil {
+				states = append(states, s)
 			}
 		}
 	}
 
-	if !below && p.cfg.Volumes {
-		type pick struct {
-			s *pruneState
-			v prune.DanglingVolume
+	now := p.now()
+	var images []pick
+	for _, s := range states {
+		for _, c := range prune.PressureImages(s.rec, s.images, s.containers, s.protected, p.cfg.Floor, now) {
+			images = append(images, pick{s.d, c.Seen, func() bool {
+				if !p.removeImage(ctx, s.d, c.Image) {
+					return false
+				}
+				account(s.d.name).images++
+				return true
+			}})
 		}
-		var picks []pick
-		now := p.now()
-		for _, d := range ds {
-			s, err := p.snapshot(ctx, d, false)
-			if err != nil {
-				continue
-			}
-			for _, v := range prune.PressureVolumes(s.rec, s.volumes, p.cfg.Floor, now) {
-				picks = append(picks, pick{s, v})
-			}
-		}
-		slices.SortStableFunc(picks, func(a, b pick) int { return a.v.Since.Compare(b.v.Since) })
+	}
+	drain(images)
 
-		for _, pk := range picks {
-			if ctx.Err() != nil {
-				return
-			}
-			if !p.removeVolume(ctx, pk.s.d, pk.v.Name) {
-				continue
-			}
-			account(pk.s.d.name).volumes++
-			if now := credit(pk.s.d.name); now.Percent() <= p.cfg.Above {
-				below = true
-				break
+	if p.cfg.Volumes {
+		var volumes []pick
+		for _, s := range states {
+			for _, v := range prune.PressureVolumes(s.rec, s.volumes, p.cfg.Floor, now) {
+				volumes = append(volumes, pick{s.d, v.Since, func() bool {
+					if !p.removeVolume(ctx, s.d, v.Name) {
+						return false
+					}
+					account(s.d.name).volumes++
+					return true
+				}})
 			}
 		}
+		drain(volumes)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(done)) {
