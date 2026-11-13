@@ -18,6 +18,14 @@ software.
   removes the unused ones as `remote gc` would, for the same reasons. They are
   not listed under "Deleted Volumes". A stock docker in an ssh shell on the
   workspace, or an older client, is not guarded.
+- **The Helm chart's readiness probe no longer asks the workspace's Docker
+  daemon.** It checks only that SSH accepts, so a busy daemon (a large prune, an
+  I/O stall) no longer takes the workspace off the ingress. Liveness still asks
+  the daemon but restarts the pod only after ten failures in a row (about five
+  minutes, `probes.livenessFailureThreshold`) instead of three, because a
+  restart kills every account's daemon. Applies on `helm upgrade`. A replica
+  whose daemon is hung but whose SSH accepts now stays Ready until liveness
+  acts. See ADR 0035.
 
 ## 0.16.7 — 2026-11-12
 
