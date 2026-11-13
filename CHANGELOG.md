@@ -8,6 +8,17 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`docker volume prune -a` no longer deletes the cache volume of a running
+  `write=back` container.** The daemon calls it unused because the union is bound
+  by path. The client now excludes managed volumes from the prune and then
+  removes the unused ones as `remote gc` would, for the same reasons. They are
+  not listed under "Deleted Volumes". A stock docker in an ssh shell on the
+  workspace, or an older client, is not guarded.
+
 ## 0.16.7 — 2026-11-12
 
 ### New

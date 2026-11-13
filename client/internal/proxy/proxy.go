@@ -46,6 +46,11 @@ type Proxy struct {
 	// inspect responses.
 	PortView PortView
 
+	// AfterVolumePrune, when set, runs after the daemon answered a volume prune
+	// that may reach managed volumes and before the answer is relayed: this
+	// machine's collector, the one `remote gc` uses (ADR 0005).
+	AfterVolumePrune func(ctx context.Context)
+
 	// Control answers ControlPrefix. Nil unless this session is the daemon.
 	Control Control
 
@@ -209,6 +214,15 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 		}()
 	}
 
+	collectAfter := false
+	if isVolumePrune(req) {
+		collectAfter, err = guardVolumePrune(req)
+		if err != nil {
+			writeControl(client, http.StatusBadRequest, map[string]string{"message": err.Error()})
+			return false, nil
+		}
+	}
+
 	if isContainerCreate(req) && p.Rewriter != nil {
 		if err := p.rewriteBody(ctx, req); err != nil {
 			return false, err
@@ -247,6 +261,12 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 
 	if p.PortView != nil {
 		p.viewPorts(req, resp)
+	}
+
+	// A one-shot command's session ends when the CLI returns, so this finishes
+	// before the reply goes out.
+	if collectAfter && p.AfterVolumePrune != nil && resp.StatusCode == http.StatusOK {
+		p.AfterVolumePrune(ctx)
 	}
 
 	// resp.Write does not buffer, so /events, /build and logs -f stream.
