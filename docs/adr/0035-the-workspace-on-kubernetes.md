@@ -3,11 +3,13 @@
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md) and
   [ADR 0034](0034-ssh-inside-a-websocket.md)
 - Date: 2026-08-14, amended 2026-10-05 (ephemeral values, enrolment) and
-  2026-10-07 (several replicas)
+  2026-10-07 (several replicas) and 2026-11-13 (probes)
 - Current answer: a StatefulSet of `replicas` independent workspaces, one per
   node by default, behind the headless Service it names. Clients stay on a
   replica through `sessionAffinity: ClientIP` on the collective Service (and an
   ingress annotation for ingress-nginx); nothing in the client chooses one.
+  Readiness checks SSH only; liveness also asks the daemon, for about five
+  minutes before it restarts the pod.
 
 > The ingress is the way in, so the deployment needs no load balancer and no
 > node port. Everything else follows from each pod owning its storage.
@@ -137,3 +139,19 @@ than leaving an agent that will not start.
   `enrolled_keys.d` on the state volume; the `authorizedKeys` Secret stays the
   operator's and read-only. Still no Kubernetes API: the token is a file on that
   volume. CI redeems one through the ingress and checks the Secret is unchanged.
+- **Readiness no longer asks the daemon (2026-11-13).** Readiness runs
+  `remote-dockerd healthcheck --docker-socket=`: the empty path cannot be
+  stat'ed, so the agent skips the daemon check and prints `ok (ssh; no local
+  docker socket to check)`. A busy daemon (a large prune, an I/O stall) no
+  longer takes the workspace off the ingress. Liveness keeps the full check
+  with `probes.livenessFailureThreshold` (default 10, about five minutes at the
+  30s period) instead of 3, because a restart kills every account's daemon and
+  the agent's supervisor already restarts a dockerd that dies, so liveness only
+  has to catch a hung one. Startup is unchanged. Only flags every image
+  accepts are used, since `image.tag` can pin an older one.
+  - **Readiness dials SSH (2222); the ingress routes to the WebSocket port
+    (2280, Service `targetPort: ws`).** One agent process serves both, so SSH
+    accepting stands in for both. Readiness does not dial 2280 itself.
+  - **The cost with several replicas:** a replica whose daemon is hung but whose
+    SSH accepts stays Ready and keeps receiving clients until liveness acts,
+    about five minutes.

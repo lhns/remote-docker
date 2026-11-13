@@ -8,6 +8,19 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **The Helm chart's readiness probe no longer asks the workspace's Docker
+  daemon.** It checks only that SSH accepts, so a busy daemon (a large prune, an
+  I/O stall) no longer takes the workspace off the ingress. Liveness still asks
+  the daemon but restarts the pod only after ten failures in a row (about five
+  minutes, `probes.livenessFailureThreshold`) instead of three, because a
+  restart kills every account's daemon. Applies on `helm upgrade`. A replica
+  whose daemon is hung but whose SSH accepts now stays Ready until liveness
+  acts. See ADR 0035.
+
 ## 0.16.7 — 2026-11-12
 
 ### New

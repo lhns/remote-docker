@@ -280,12 +280,19 @@ tolerations: []
 affinity: {}
 priorityClassName: ""
 
-# All three probes run `remote-dockerd healthcheck`, which asks the agent and
-# the daemon behind it.
+# Startup and liveness run `remote-dockerd healthcheck`, which asks the agent
+# and the daemon behind it. Readiness checks that SSH accepts and leaves the
+# daemon alone: a slow parent daemon (a large prune, an I/O stall) must not take
+# every session off the ingress, and liveness must not restart the pod over it,
+# because a restart kills every account's daemon. The agent's supervisor already
+# restarts a dockerd that dies, so liveness only has to catch a hung one.
 probes:
   # Generous: the first start builds a graph directory and starts a daemon.
   startupSeconds: 300
   periodSeconds: 30
+  # Consecutive liveness failures before the pod is restarted: with the period
+  # above, about five minutes of a daemon that does not answer.
+  livenessFailureThreshold: 10
 
 commonLabels: {}
 commonAnnotations: {}

@@ -545,6 +545,25 @@ jobs:
           [ "$sub" = "$STS-headless" ] || fail "the pod was not replaced under the headless Service" "subdomain: [$sub]"
           echo "PASS  the same claims and host key, and the pod under $sub"
 
+      # Probes (ADR 0035): readiness leaves the daemon alone, liveness is
+      # patient, and the readiness command passes in the running pod.
+      - name: readiness skips the daemon, liveness is patient
+        run: |
+          set -eu
+          fail() { echo "FAIL  $1"; echo "$2"; exit 1; }
+          rendered=$(helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+            --set ingress.host=ws.example --show-only templates/statefulset.yaml)
+          ready=$(grep -A5 'readinessProbe:' <<<"$rendered")
+          live=$(grep -A5 'livenessProbe:' <<<"$rendered")
+          grep -qF -- '--docker-socket=' <<<"$ready" || fail "readiness does not pass --docker-socket=" "$ready"
+          grep -qF -- 'failureThreshold: 10' <<<"$live" || fail "liveness failureThreshold is not 10" "$live"
+          if grep -qF -- '--docker-socket' <<<"$live"; then fail "liveness skips the daemon check" "$live"; fi
+          out=$(kubectl exec -n rd "$POD" -- remote-dockerd healthcheck --docker-socket= 2>&1) ||
+            fail "the readiness command failed in the pod" "$out"
+          grep -qF 'ok (ssh; no local docker socket to check)' <<<"$out" ||
+            fail "the readiness command did not skip the daemon check" "$out"
+          echo "PASS  $out"
+
       - name: reach it through the ingress, over ws
         run: |
           set -eux
