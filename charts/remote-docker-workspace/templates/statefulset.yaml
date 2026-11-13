@@ -145,17 +145,23 @@ spec:
               command: ["remote-dockerd", "healthcheck"]
             periodSeconds: 10
             failureThreshold: {{ div .Values.probes.startupSeconds 10 }}
+          {{- /* Liveness asks the daemon too, but patiently: a busy daemon is
+                not a hung one, and a restart kills every account's daemon. */}}
           livenessProbe:
             exec:
               command: ["remote-dockerd", "healthcheck"]
             periodSeconds: {{ .Values.probes.periodSeconds }}
             timeoutSeconds: 10
-            failureThreshold: 3
+            failureThreshold: {{ .Values.probes.livenessFailureThreshold }}
+          {{- /* Readiness checks SSH only. An empty --docker-socket is a path
+                that cannot be stat'ed, so the agent skips the daemon check
+                (healthcheck.go), and every image accepts the flag. */}}
           readinessProbe:
             exec:
-              command: ["remote-dockerd", "healthcheck"]
+              command: ["remote-dockerd", "healthcheck", "--docker-socket="]
             periodSeconds: {{ .Values.probes.periodSeconds }}
             timeoutSeconds: 10
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
