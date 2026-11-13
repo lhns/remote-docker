@@ -234,6 +234,13 @@ bash test/integration.sh
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
 
+# whether the workspace could run without a privileged pod: user namespaces,
+# kernel NFS from them, FUSE, rootless engines, per Pod Security tier on a bare
+# runner and a kind cluster. RECORDS answers and never asserts, so no row turns
+# it red. Run it from the `probe-unprivileged` label on a pull request (the table
+# is in the job summary), or workflow_dispatch once it is on main.
+bash test/unprivileged-probe.sh
+
 # the Windows MSI. ON WINDOWS, and it is the one thing here that cannot be
 # built anywhere else (ADR 0048). The version must be major.minor.build, which
 # is what an MSI compares; build.ps1 refuses anything else rather than

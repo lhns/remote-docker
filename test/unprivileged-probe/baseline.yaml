@@ -1,0 +1,31 @@
+# Tier "baseline": the most this pod can ask for under the `baseline` Pod
+# Security level. Root with the default capability set and the runtime's
+# default seccomp profile; baseline forbids hostPath, so there is no /dev/fuse.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  namespace: __NS__
+  labels:
+    app: unprivileged-probe
+spec:
+  #__HOSTUSERS__
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: unprivileged-probe:kind
+      imagePullPolicy: Never
+      command: ["bash", "/usr/local/bin/unprivileged-probe.sh", "rows"]
+      env:
+        - {name: PROBE_TIER, value: __NAME__}
+        - {name: PROBE_WORK, value: /work}
+        - {name: HOME, value: /work/home}
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      volumeMounts:
+        - {name: work, mountPath: /work}
+  volumes:
+    - name: work
+      emptyDir: {}

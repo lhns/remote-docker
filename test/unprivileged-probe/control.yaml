@@ -1,0 +1,30 @@
+# The control: what the workspace is today, a privileged pod, running every row
+# on the same node. A row that fails here is a missing client or server, and a
+# row that fails elsewhere but not here is a refusal by the cluster.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  namespace: __NS__
+  labels:
+    app: unprivileged-probe
+spec:
+  #__HOSTUSERS__
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: unprivileged-probe:kind
+      imagePullPolicy: Never
+      command: ["bash", "/usr/local/bin/unprivileged-probe.sh", "rows"]
+      env:
+        - {name: PROBE_TIER, value: __NAME__}
+        - {name: PROBE_WORK, value: /work}
+        - {name: HOME, value: /work/home}
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      volumeMounts:
+        - {name: work, mountPath: /work}
+  volumes:
+    - name: work
+      emptyDir: {}

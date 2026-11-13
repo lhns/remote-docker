@@ -1,0 +1,19 @@
+# One control-plane node that also runs the probe pods (kind untaints it when
+# there are no workers), so the privileged control pod and every tier share a
+# node, a kernel and a containerd. The feature gates make the user namespace
+# rows ask the cluster, not an older default: hostUsers: false needs
+# UserNamespacesSupport and procMount: Unmasked needs ProcMountType.
+#
+# Used by .github/workflows/unprivileged-probe.yml.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  UserNamespacesSupport: true
+  ProcMountType: true
+nodes:
+  - role: control-plane
+    # The Localhost seccomp profile the *-localhost tiers name, in the directory
+    # the kubelet reads profiles from. The workflow copies it to /tmp first.
+    extraMounts:
+      - hostPath: /tmp/rd-seccomp
+        containerPath: /var/lib/kubelet/seccomp
