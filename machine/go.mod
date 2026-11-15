@@ -21,7 +21,7 @@ go 1.26.8
 require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/google/go-containerregistry v0.22.1
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (

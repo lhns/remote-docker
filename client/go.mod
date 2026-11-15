@@ -18,7 +18,7 @@ require (
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
