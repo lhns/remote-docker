@@ -1,0 +1,39 @@
+# Tier "perm-root": a namespace enforcing `privileged`, a pod that is not.
+# Root with CAP_SYS_ADMIN added, no seccomp or AppArmor filter and the host's
+# /dev/fuse: the usual ask of a workload that wants mounts without being
+# privileged. The driver fills the placeholders (test/unprivileged-probe.sh render).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  namespace: __NS__
+  labels:
+    app: unprivileged-probe
+spec:
+  #__HOSTUSERS__
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: unprivileged-probe:kind
+      imagePullPolicy: Never
+      command: ["bash", "/usr/local/bin/unprivileged-probe.sh", "rows"]
+      env:
+        - {name: PROBE_TIER, value: __NAME__}
+        - {name: PROBE_WORK, value: /work}
+        - {name: HOME, value: /work/home}
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        allowPrivilegeEscalation: true
+        capabilities: {add: ["SYS_ADMIN"]}
+        seccompProfile: {type: Unconfined}
+        appArmorProfile: {type: Unconfined}
+        #__PROCMOUNT__
+      volumeMounts:
+        - {name: work, mountPath: /work}
+        - {name: fuse, mountPath: /dev/fuse}
+  volumes:
+    - name: work
+      emptyDir: {}
+    - name: fuse
+      hostPath: {path: /dev/fuse, type: CharDevice}
