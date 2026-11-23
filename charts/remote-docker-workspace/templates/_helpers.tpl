@@ -133,6 +133,20 @@ podAntiAffinity:
 {{- end -}}
 
 {{/*
+An on/off value, passed through as written so the agent's one parser reads it,
+and refused here by name when that parser would refuse it. A missing key is
+false: an upgrade with --reuse-values from a chart without it renders nothing
+for it, which toString alone turns into "<nil>".
+*/}}
+{{- define "remote-docker-workspace.switch" -}}
+{{- $v := toString (default false (index . 1)) -}}
+{{- if not (has $v (list "on" "off" "true" "false" "1" "0" "t" "f" "T" "F" "TRUE" "FALSE" "True" "False")) -}}
+{{- fail (printf "%s: %q is not on, off, true or false" (index . 0) $v) -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}
+
+{{/*
 The ephemeral accounts' environment (ADR 0050), refused here rather than by an
 agent that will not start. Empty while no account is listed; a variable `env`
 names is left to it.
@@ -159,7 +173,7 @@ names is left to it.
       "WORKSPACE_EPHEMERAL_ACCOUNTS" (join "," $e.accounts)
       "WORKSPACE_EPHEMERAL_MAX_CLIENTS" $max
       "WORKSPACE_EPHEMERAL_GRACE" $grace
-      "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS" (toString $e.cleanupContainers) -}}
+      "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS" (include "remote-docker-workspace.switch" (list "ephemeral.cleanupContainers" $e.cleanupContainers)) -}}
 {{- range $name, $value := $vars }}
 {{- if not (hasKey $.Values.env $name) }}
 - name: {{ $name }}
@@ -187,8 +201,8 @@ will not start. A variable `env` names is left to it.
 {{- $vars := dict
       "WORKSPACE_PRUNE_AFTER" $after
       "WORKSPACE_PRUNE_ABOVE" $above
-      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers)
-      "WORKSPACE_PRUNE_VOLUMES" (ternary "on" "off" (eq (toString $p.volumes) "true")) -}}
+      "WORKSPACE_PRUNE_CONTAINERS" (include "remote-docker-workspace.switch" (list "prune.containers" $p.containers))
+      "WORKSPACE_PRUNE_VOLUMES" (include "remote-docker-workspace.switch" (list "prune.volumes" $p.volumes)) -}}
 {{- range $name, $value := $vars }}
 {{- if not (hasKey $.Values.env $name) }}
 - name: {{ $name }}

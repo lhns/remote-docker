@@ -8,6 +8,18 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixed
+
+- **The chart passes every on/off value through as written.** `prune.volumes`
+  turned anything but `true` into off, so a quoted `"on"` or `"1"` left volume
+  pruning off without a word. `prune.volumes`, `prune.containers` and
+  `ephemeral.cleanupContainers` now render the value given, refuse a word the
+  agent would refuse at render time, naming the key, and render a missing key
+  as `false` rather than `"<nil>"`, which stopped the agent starting after an
+  upgrade with `--reuse-values` from a chart without the key.
+
 ## 0.16.9 — 2026-11-13
 
 ### New

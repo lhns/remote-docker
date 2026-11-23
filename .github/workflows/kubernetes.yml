@@ -287,6 +287,40 @@ jobs:
           refused ephemeral.grace --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.grace=0s
           refused ephemeral.maxClients --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.maxClients=0
           refused '"bob" has no key' --set "$key" --set 'ephemeral.accounts={ci,bob}'
+          refused ephemeral.cleanupContainers --set "$key" --set 'ephemeral.accounts={ci}' --set-string ephemeral.cleanupContainers=maybe
+
+      # An on/off value is passed through as written, a missing key is false
+      # rather than "<nil>", and a word the agent would refuse is refused here.
+      - name: on/off values pass through, and bad words are refused
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          has() {
+            case "$1" in
+              *"name: $2
+                        value: \"$3\""*) ;;
+              *) echo "$2 is not \"$3\":"; echo "$1"; exit 1 ;;
+            esac
+          }
+          has "$(render)" WORKSPACE_PRUNE_VOLUMES false
+          has "$(render --set prune.volumes=true)" WORKSPACE_PRUNE_VOLUMES true
+          has "$(render --set-string prune.volumes=on)" WORKSPACE_PRUNE_VOLUMES on
+          has "$(render --set-string prune.containers=1)" WORKSPACE_PRUNE_CONTAINERS 1
+          unset=$(render --set-json prune.volumes=null --set-json prune.containers=null)
+          has "$unset" WORKSPACE_PRUNE_VOLUMES false
+          has "$unset" WORKSPACE_PRUNE_CONTAINERS false
+          for v in prune.volumes prune.containers; do
+            if out=$(render --set-string "$v=yes" 2>&1); then
+              echo "$v=yes rendered; wanted a refusal"; exit 1
+            fi
+            case "$out" in
+              *"$v: \"yes\" is not on, off, true or false"*) ;;
+              *) echo "refused, but not naming $v: $out"; exit 1 ;;
+            esac
+          done
 
       # A volume is EITHER a supplied claim or a template. Both directions fail
       # silently: a claim named nowhere is a pod with no storage, one named
