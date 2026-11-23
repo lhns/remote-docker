@@ -287,6 +287,7 @@ jobs:
           refused ephemeral.grace --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.grace=0s
           refused ephemeral.maxClients --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.maxClients=0
           refused '"bob" has no key' --set "$key" --set 'ephemeral.accounts={ci,bob}'
+          refused ephemeral.cleanupContainers --set "$key" --set 'ephemeral.accounts={ci}' --set-string ephemeral.cleanupContainers=maybe
 
       # An on/off value is passed through as written, a missing key is false
       # rather than "<nil>", and a word the agent would refuse is refused here.
@@ -320,14 +321,6 @@ jobs:
               *) echo "refused, but not naming $v: $out"; exit 1 ;;
             esac
           done
-          if out=$(render --set-string 'authorizedKeys.ci=ssh-ed25519 AAAAtest ci@runner' \
-                     --set 'ephemeral.accounts={ci}' --set-string ephemeral.cleanupContainers=maybe 2>&1); then
-            echo "ephemeral.cleanupContainers=maybe rendered; wanted a refusal"; exit 1
-          fi
-          case "$out" in
-            *'ephemeral.cleanupContainers: "maybe"'*) ;;
-            *) echo "refused, but not naming ephemeral.cleanupContainers: $out"; exit 1 ;;
-          esac
 
       # A volume is EITHER a supplied claim or a template. Both directions fail
       # silently: a claim named nowhere is a pod with no storage, one named

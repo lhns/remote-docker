@@ -133,11 +133,6 @@ podAntiAffinity:
 {{- end -}}
 
 {{/*
-The ephemeral accounts' environment (ADR 0050), refused here rather than by an
-agent that will not start. Empty while no account is listed; a variable `env`
-names is left to it.
-*/}}
-{{/*
 An on/off value, passed through as written so the agent's one parser reads it,
 and refused here by name when that parser would refuse it. A missing key is
 false: an upgrade with --reuse-values from a chart without it renders nothing
@@ -151,6 +146,11 @@ for it, which toString alone turns into "<nil>".
 {{- $v -}}
 {{- end -}}
 
+{{/*
+The ephemeral accounts' environment (ADR 0050), refused here rather than by an
+agent that will not start. Empty while no account is listed; a variable `env`
+names is left to it.
+*/}}
 {{- define "remote-docker-workspace.ephemeralEnv" -}}
 {{- $e := .Values.ephemeral -}}
 {{- if $e.accounts -}}
