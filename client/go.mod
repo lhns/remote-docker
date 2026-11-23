@@ -273,7 +273,7 @@ require (
 	github.com/lhns/remote-docker/dircache v0.0.0
 	github.com/lhns/remote-docker/machine v0.0.0
 	github.com/moby/buildkit v0.34.0
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
